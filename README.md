@@ -168,7 +168,8 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   brain on 127.0.0.1:8807 (`-hooks`).
 - Delta's face has eyebrows and mouth corners besides its eyes: neutral, joy, surprise, doubt, sorry, proud, wink,
   focus and sleepy. An expression lasts six seconds. Small talk that Delta answers itself makes it smile, « bonne
-  nuit » makes it sleepy, and it dozes off after four minutes of quiet.
+  nuit » makes it sleepy, and it dozes off after four minutes of quiet. "Delta, I love you" or « je t'aime » sends
+  red hearts rising from its chest while it smiles.
 - Delta speaks with IX's warm voice: the same Piper voice through an equaliser, a gentle compressor, a touch of
   saturation and a small room (`brain\fx.go`). `-fx none` gives Piper's own voice.
 - A camera process can post hand gestures to the same address, `POST /gesture` with the same header:

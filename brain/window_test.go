@@ -77,6 +77,34 @@ func TestOtherSentencesLeaveTheWindowAlone(t *testing.T) {
 	}
 }
 
+// « Je t'aime » or "love you", said to Delta, sends hearts to its window; the sentence then goes where it would anyway.
+func TestDeltaSendsHeartsWhenLoved(t *testing.T) {
+	for text, want := range map[string]bool{
+		"Delta, je t'aime !":         true,
+		"Delta, I love you.":         true,
+		"Love you, Delta.":           true,
+		"Delta, je t’adore.":         true,
+		"Delta, je ne t'aime pas.":   false,
+		"Delta, I don't love you.":   false,
+		"Delta, j'aime ce morceau.":  false,
+		"Delta, ouvre le fichier.":   false,
+		"Delta, I love your window.": false,
+	} {
+		var shown []map[string]any
+		m, _, _ := startServer(t, func(m *mcpServer) { m.show = func(line map[string]any) { shown = append(shown, line) } })
+		m.hear(utterance{text: text}, time.Now().Add(time.Hour))
+		hearts := len(shown) > 0 && shown[0]["hearts"] == true && shown[0]["mood"] == "joy"
+		if hearts != want {
+			t.Errorf("%q: hearts %v, shown %v", text, hearts, shown)
+		}
+	}
+	var shown []map[string]any
+	m, _, _ := startServer(t, func(m *mcpServer) { m.show = func(line map[string]any) { shown = append(shown, line) } })
+	if m.hear(utterance{text: "Je t'aime."}, time.Now().Add(time.Hour)) != "ignored" || len(shown) != 0 {
+		t.Fatalf("a « je t'aime » for someone else sent hearts: %v", shown)
+	}
+}
+
 func TestDeltaOpensAndWalksItsShelf(t *testing.T) {
 	for _, c := range []struct {
 		text string

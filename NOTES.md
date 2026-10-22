@@ -447,6 +447,14 @@ crashed, or when the user asked for it: a `window` or `shelf` request, spoken or
 stays closed until then, and one that crashed within 30 s of its start (no graphics card, say) is not restarted in a
 loop. The log of the window that ended is kept as `scene.prev.log`.
 
+## Hearts (2026-10-22, night)
+
+The author asked, through the wmux relay: « quand on dit au robot « love you » ou « je t'aime », il envoie des cœurs en
+3D ». A sentence the wake gate lets through that says « je t'aime », « je t'adore », "love you" or "love ya" (and not
+« je ne t'aime pas » or "I don't love you") sends `{"hearts":true,"mood":"joy"}` to the window, and is then routed as
+any other: the triage or Claude still answers it. Its `heard` line carries `hearts`. Seven hearts of red cubes rise
+from the chest one after another, on either side of the face, for four seconds, while Delta smiles.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
