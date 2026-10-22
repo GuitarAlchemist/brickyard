@@ -246,6 +246,43 @@
         "resolved": "10.0.0",
         "contentHash": "inRnbpCS0nwO/RuoZIAqxQUuyjaknOOnCEZB55KSMMjRhl0RQDttSmLSGsUJN3RQ3ocf5NDLFd2mOQViHqMK5w=="
       }
+    },
+    "net10.0/win-x64": {
+      "Ahwoo.BRUTAL.Glfw": {
+        "type": "Direct",
+        "requested": "[2026.10.4, 2026.10.4]",
+        "resolved": "2026.10.4",
+        "contentHash": "HCwPNL7spDmzxAb7/1BT9hv+ZC3BC1BFejDT2iTBDJaO+Fn61kSCO/ak+ibDGPks/Sh6CfH8J/Wy8YMZNlaelg==",
+        "dependencies": {
+          "Ahwoo.BRUTAL.Core": "2026.10.1",
+          "Ahwoo.BRUTAL.Logging": "2026.10.2",
+          "Ahwoo.BRUTAL.Numerics": "2026.10.1"
+        }
+      },
+      "Ahwoo.BRUTAL.ShaderC": {
+        "type": "Direct",
+        "requested": "[2026.10.2, 2026.10.2]",
+        "resolved": "2026.10.2",
+        "contentHash": "etG2mPPoPcXA8zjL6kdyLjBtSOe0q5UQ2+PtiJWwtSC6qxwgWoAQnip6qW64BOXDURMblXxLvQEKPRtTz7Ia8w==",
+        "dependencies": {
+          "Ahwoo.BRUTAL.Interop": "2026.10.1",
+          "Ahwoo.BRUTAL.Memory": "2026.10.1",
+          "Ahwoo.BRUTAL.Strings": "2026.10.1"
+        }
+      },
+      "Ahwoo.BRUTAL.Vulkan": {
+        "type": "Direct",
+        "requested": "[2026.10.2, 2026.10.2]",
+        "resolved": "2026.10.2",
+        "contentHash": "nM9/MfDLEFgcTBDbKXllD6HHzT5TzOuuWFrkgYJg6oyOiwV85nYKV73LtThMnO3r7EST/ecDIfHe4+DUoUYU+w==",
+        "dependencies": {
+          "Ahwoo.BRUTAL.Core": "2026.10.1",
+          "Ahwoo.BRUTAL.Logging": "2026.10.2",
+          "Ahwoo.BRUTAL.Memory": "2026.10.1",
+          "Ahwoo.BRUTAL.Numerics": "2026.10.1",
+          "Ahwoo.BRUTAL.Strings": "2026.10.1"
+        }
+      }
     }
   }
 }

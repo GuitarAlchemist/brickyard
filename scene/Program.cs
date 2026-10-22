@@ -8,6 +8,9 @@
 // --demo plays idle, thinking and speaking in a loop without the brain, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
+//
+// It opens on BRUTAL's logo and copyright notice for 2.6 s, as BRUTAL's licence asks (Splash.cs); --demo's states and
+// --shots' times start after it, and --shots also saves the splash.
 
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -42,6 +45,14 @@ internal struct Push(SN.Matrix4x4 world, SN.Matrix4x4 viewProj, SN.Vector4 glow)
     public SN.Vector4 Row1 = new(world.M12, world.M22, world.M32, world.M42);
     public SN.Vector4 Row2 = new(world.M13, world.M23, world.M33, world.M43);
     public SN.Vector4 Glow = glow;
+}
+
+// What each splash draw pushes: its rectangle in clip space (left, top, right, bottom) and a tint whose alpha fades it.
+[StructLayout(LayoutKind.Sequential)]
+internal struct SplashPush(SN.Vector4 rect, SN.Vector4 tint)
+{
+    public SN.Vector4 Rect = rect;
+    public SN.Vector4 Tint = tint;
 }
 
 internal static unsafe class Stage
@@ -94,6 +105,32 @@ internal static unsafe class Stage
         }
         """;
 
+    // The splash: a textured rectangle with no vertex buffer, its six corners picked by the vertex's index.
+    private const string SplashVertexShader = """
+        #version 450
+        layout(push_constant) uniform Push { vec4 rect; vec4 tint; } pc;
+        layout(location = 0) out vec2 vUv;
+        const vec2 corners[6] = vec2[](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
+        void main()
+        {
+            vUv = corners[gl_VertexIndex];
+            gl_Position = vec4(mix(pc.rect.xy, pc.rect.zw, vUv), 0.0, 1.0);
+        }
+        """;
+
+    private const string SplashFragmentShader = """
+        #version 450
+        layout(set = 0, binding = 0) uniform sampler2D image;
+        layout(push_constant) uniform Push { vec4 rect; vec4 tint; } pc;
+        layout(location = 0) in vec2 vUv;
+        layout(location = 0) out vec4 outColor;
+        void main()
+        {
+            vec4 texel = texture(image, vUv);
+            outColor = vec4(texel.rgb * pc.tint.rgb, texel.a * pc.tint.a);
+        }
+        """;
+
     public static int Run(string[] args)
     {
         if (args.Contains("--selftest"))
@@ -109,12 +146,22 @@ internal static unsafe class Stage
         var cap = int.TryParse(Option(args, "--cap"), out var capValue) ? capValue : hidden ? 60 : 0;
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
         var shotsDir = Option(args, "--shots");
-        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.0, "idle"), (2.6, "listening"), (4.2, "thinking"), (6.2, "speaking")];
+        const double S = Splash.Seconds;
+        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking")];
         if (shots.Length > 0 && !demo)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
             return 2;
         }
+
+        var logoPath = Path.Combine(AppContext.BaseDirectory, "brand", Splash.LogoFile);
+        if (!File.Exists(logoPath))
+        {
+            Console.Error.WriteLine($"SCENE FAIL: {logoPath} is missing; BRUTAL's licence asks for its logo at start-up");
+            return 1;
+        }
+
+        Console.WriteLine($"SCENE {Splash.Notice}");
 
         var link = new Link(() => clock.Elapsed.TotalSeconds);
         if (!demo)
@@ -393,6 +440,67 @@ internal static unsafe class Stage
             acquired[i] = device.CreateSemaphore(new VkSemaphoreCreateInfo(), null);
         }
 
+        // The splash: the logo at half the window's width, its notice beneath, both at one texel a pixel.
+        var splashVertex = Shader(device, SplashVertexShader, ShaderKind.VertexShader, "splash.vert");
+        var splashFragment = Shader(device, SplashFragmentShader, ShaderKind.FragmentShader, "splash.frag");
+        var sampler = device.CreateSampler(new VkSamplerCreateInfo
+        {
+            MagFilter = VkFilter.Nearest,
+            MinFilter = VkFilter.Nearest,
+            MipmapMode = VkSamplerMipmapMode.Nearest,
+            AddressModeU = VkSamplerAddressMode.ClampToEdge,
+            AddressModeV = VkSamplerAddressMode.ClampToEdge,
+            AddressModeW = VkSamplerAddressMode.ClampToEdge,
+            MaxAnisotropy = 1f,
+        }, null);
+        var setLayout = device.CreateDescriptorSetLayout(new DescriptorSetLayoutEx.CreateInfo
+        {
+            Bindings = [new VkDescriptorSetLayoutBinding { DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit }],
+        }, null);
+        var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
+        {
+            MaxSets = 2,
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 2 }],
+        }, null);
+        var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
+        var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
+        var splashPipeline = Pipeline(device, splashLayout, renderPass, splashVertex, splashFragment, overlay: true);
+
+        var logoPixels = Png.Load(logoPath, out var logoSourceWidth, out var logoSourceHeight);
+        var logoWidth = extent.Width / 2;
+        var logoHeight = (int)Math.Round(logoWidth * (double)logoSourceHeight / logoSourceWidth);
+        logoPixels = Splash.Shrink(logoPixels, logoSourceWidth, logoSourceHeight, logoWidth, logoHeight);
+        var noticePixels = Splash.Text(Splash.Notice, Math.Max(14, extent.Height / 40), out var noticeWidth, out var noticeHeight);
+        var upload = commands[0];
+        upload.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+        Texture[] splashTextures = noticePixels is null
+            ? [new Texture(device, physical, upload, logoPixels, logoWidth, logoHeight)]
+            : [new Texture(device, physical, upload, logoPixels, logoWidth, logoHeight), new Texture(device, physical, upload, noticePixels, noticeWidth, noticeHeight)];
+        upload.End();
+        var uploadHandle = upload.Handle;
+        queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploadHandle }], default);
+        device.WaitIdle();
+        var splashSets = new VkDescriptorSet[splashTextures.Length];
+        for (var i = 0; i < splashTextures.Length; i++)
+        {
+            splashTextures[i].FreeStaging();
+            splashSets[i] = device.AllocateDescriptorSet(descriptorPool, setLayout);
+            var imageInfo = new VkDescriptorImageInfo { Sampler = sampler, ImageView = splashTextures[i].View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = splashSets[i], DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &imageInfo }], []);
+        }
+
+        // Each rectangle in whole pixels, so that a texel lands on a pixel; the notice 36 px under the logo.
+        var logoTop = ((extent.Height - logoHeight) / 2) - 24;
+        SN.Vector4 Rect(int left, int top, int width, int height) => new(
+            (2f * left / extent.Width) - 1f, (2f * top / extent.Height) - 1f, (2f * (left + width) / extent.Width) - 1f, (2f * (top + height) / extent.Height) - 1f);
+        SN.Vector4[] splashRects =
+        [
+            Rect((extent.Width - logoWidth) / 2, logoTop, logoWidth, logoHeight),
+            Rect((extent.Width - noticeWidth) / 2, logoTop + logoHeight + 36, noticeWidth, noticeHeight),
+        ];
+        SN.Vector3[] splashTints = [SN.Vector3.One, new(0.62f)];
+        Console.WriteLine($"SCENE splash: BRUTAL logo {logoWidth}x{logoHeight} px from {logoSourceWidth}x{logoSourceHeight}, notice {(noticePixels is null ? "on the console only" : $"{noticeWidth}x{noticeHeight} px")}");
+
         var reason = "window closed";
         window.OnKey += (w, key, scancode, action, mods) =>
         {
@@ -435,12 +543,17 @@ internal static unsafe class Stage
 
             var dt = (float)(now - last);
             last = now;
+            // The splash is timed from the first frame on screen, not from start-up, which takes about a second; --demo's
+            // timeline and --shots start with it, while the brain's lines are timed by the link's own clock.
+            var shown = firstFrame < 0 ? 0.0 : now - firstFrame;
+            var splashing = shown < S;
+            var linkNow = demo ? Math.Max(0.0, shown - S) : now;
             if (demo)
             {
-                link.Demo(now);
+                link.Demo(linkNow);
             }
 
-            var (state, level) = link.Read(now);
+            var (state, level) = link.Read(linkNow);
             var time = (float)now;
             robot.Pose(time, dt, state, level, worlds, glows);
 
@@ -474,17 +587,32 @@ internal static unsafe class Stage
                 ClearValueCount = 2,
                 ClearValues = clears,
             }, VkSubpassContents.Inline);
-            cb.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
             cb.SetViewport(firstViewport: 0, [new VkViewport { Width = extent.Width, Height = extent.Height, MinDepth = 0f, MaxDepth = 1f }]);
             cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = extent }]);
-            Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
-            for (var i = 0; i < parts.Length; i++)
+            if (splashing)
             {
-                Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
+                cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                var opacity = Splash.Opacity(shown);
+                for (var i = 0; i < splashSets.Length; i++)
+                {
+                    var push = new SplashPush(splashRects[i], new SN.Vector4(splashTints[i], opacity));
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [splashSets[i]], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+            }
+            else
+            {
+                cb.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
+                Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                for (var i = 0; i < parts.Length; i++)
+                {
+                    Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
+                }
             }
 
             cb.EndRenderPass();
-            var capturing = shot < shots.Length && now >= shots[shot].At;
+            var capturing = shot < shots.Length && shown >= shots[shot].At;
             if (capturing)
             {
                 cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
@@ -611,6 +739,18 @@ internal static unsafe class Stage
         }
 
         hall.Dispose();
+        foreach (var texture in splashTextures)
+        {
+            texture.Dispose();
+        }
+
+        device.DestroyDescriptorPool(descriptorPool, null);
+        device.DestroyPipeline(splashPipeline, null);
+        device.DestroyPipelineLayout(splashLayout, null);
+        device.DestroyDescriptorSetLayout(setLayout, null);
+        device.DestroySampler(sampler, null);
+        device.DestroyShaderModule(splashVertex, null);
+        device.DestroyShaderModule(splashFragment, null);
         device.DestroyPipeline(pipeline, null);
         device.DestroyPipelineLayout(layout, null);
         device.DestroyShaderModule(vertexModule, null);
@@ -662,7 +802,7 @@ internal static unsafe class Stage
     }
 
     // A colour image's layout change, as HallSlice writes it.
-    private static VkImageMemoryBarrier Barrier(VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags src, VkAccessFlags dst) => new()
+    internal static VkImageMemoryBarrier Barrier(VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags src, VkAccessFlags dst) => new()
     {
         SrcAccessMask = src,
         DstAccessMask = dst,
@@ -693,7 +833,8 @@ internal static unsafe class Stage
         return module;
     }
 
-    private static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkShaderModule vertex, VkShaderModule fragment)
+    // The scene's pipeline, or with overlay the splash's: no vertex buffer, no depth, alpha blended.
+    private static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false)
     {
         var entry = "main"u8;
         fixed (byte* entryName = entry)
@@ -710,7 +851,7 @@ internal static unsafe class Stage
                 new() { Location = 1, Binding = 0, Format = VkFormat.R32G32B32SFloat, Offset = ByteSize.Of<float>(3) },
                 new() { Location = 2, Binding = 0, Format = VkFormat.R32G32B32SFloat, Offset = ByteSize.Of<float>(6) },
             };
-            var vertexInput = new VkPipelineVertexInputStateCreateInfo
+            var vertexInput = overlay ? new VkPipelineVertexInputStateCreateInfo() : new VkPipelineVertexInputStateCreateInfo
             {
                 VertexBindingDescriptionCount = 1,
                 VertexBindingDescriptions = &binding,
@@ -727,9 +868,16 @@ internal static unsafe class Stage
                 LineWidth = 1f,
             };
             var multisample = new VkPipelineMultisampleStateCreateInfo { RasterizationSamples = VkSampleCountFlags._1Bit };
-            var depth = new VkPipelineDepthStencilStateCreateInfo { DepthTestEnable = true, DepthWriteEnable = true, DepthCompareOp = VkCompareOp.Less };
+            var depth = new VkPipelineDepthStencilStateCreateInfo { DepthTestEnable = !overlay, DepthWriteEnable = !overlay, DepthCompareOp = VkCompareOp.Less };
             var blendAttachment = new VkPipelineColorBlendAttachmentState
             {
+                BlendEnable = overlay,
+                SrcColorBlendFactor = VkBlendFactor.SrcAlpha,
+                DstColorBlendFactor = VkBlendFactor.OneMinusSrcAlpha,
+                ColorBlendOp = VkBlendOp.Add,
+                SrcAlphaBlendFactor = VkBlendFactor.One,
+                DstAlphaBlendFactor = VkBlendFactor.OneMinusSrcAlpha,
+                AlphaBlendOp = VkBlendOp.Add,
                 ColorWriteMask = VkColorComponentFlags.RBit | VkColorComponentFlags.GBit | VkColorComponentFlags.BBit | VkColorComponentFlags.ABit,
             };
             var blend = new VkPipelineColorBlendStateCreateInfo { AttachmentCount = 1, Attachments = &blendAttachment };

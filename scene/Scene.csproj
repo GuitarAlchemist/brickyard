@@ -21,4 +21,9 @@
     <PackageReference Include="Ahwoo.Brutal.ShaderC" Version="[2026.10.2]" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- BRUTAL's logo and notice, unaltered, from github.com/ahwootech/brutal-branding at 5d38373 (Splash.cs). -->
+    <None Include="brand\LOGO_BRUTAL_WHT.png;brand\NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

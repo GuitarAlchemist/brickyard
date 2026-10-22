@@ -52,18 +52,62 @@ never outlives the brain, and keeps it warm.
   from the end of the sentence heard to Delta's first audio ready: 2.1–2.3 s (muted). With the microphone, the 700 ms
   of quiet that ends an utterance comes on top.
 
+## Live, with the author (2026-10-22, evening)
+
+The author talked to Delta through the microphone with the scene visible (« Ok, ça marche bien »). From the brain's log:
+
+- transcription mostly 1.7–3.9 s, one 13.5 s;
+- first audio 3.0–5.9 s after the end of speech;
+- the endpoint cut every utterance where the author stopped.
+
+Before `-nf`, a mumbled « Euh... Oui. » took 31.6 s: whisper.cpp's temperature fallback retried it. whisper-server once
+closed the connection mid-request (wsarecv); the cause is not established. Since then, the brain passes `-nf` and
+utterances are cut at 14 s, within the 768-frame audio context.
+
+The author asked Delta, aloud, to show token consumption in the scene. Delta answered that it had built the indicator
+and updated the scene, though it can do neither. That over-claim is why Delta is to be linked to Claude Code next,
+rather than answer from qwen alone.
+
+## Splash and release (2026-10-22, night)
+
+The author asked for a public GitHub release (« on va l'utiliser dans le public »), at GuitarAlchemist/brickyard, under
+MIT, with a logo screen at start-up. BRUTAL License v1.0 asks a distributed product for three things:
+
+- the Brutal logo before its primary function, unaltered except for scaling (2.2);
+- BRUTAL's copyright in its credits (2.1);
+- NOTICE.txt alongside (2.3).
+
+What Delta does:
+
+- `scene/brand/` holds `LOGO_BRUTAL_WHT.png` and `NOTICE.txt` from ahwootech/brutal-branding at 5d38373. Its NOTICE is
+  byte-identical to the packages' NOTICE.
+- The scene opens on the logo at half the window's width (640×140 from 4096×896, area-averaged, one texel a pixel).
+  BRUTAL's notice sits beneath it, drawn at start-up by GDI in Segoe UI, so that no font ships.
+- The splash lasts 2.6 s: 0.3 s fade-in, 2 s held, 0.3 s fade-out. It is timed from the first frame on screen: a first
+  run timed it from start-up and showed the logo for only 1.6 s, the first frame coming at 1.04 s.
+- The scene refuses to start without the logo file.
+- `--shots` saves `splash.png`.
+- Hidden demo, 60 fps cap: frame p50 16.66 ms, p99 17.2 ms.
+
+`release.ps1` builds the brain with `-trimpath` (no local path in the binary, checked) and the scene self-contained.
+The scene's build needed `Microsoft.NETCore.App.Runtime.win-x64` 10.0.13, Microsoft's signed package, from nuget.org.
+`nuget.config` now names nuget.org: exact versions already cached are not downloaded again, and the lock file pins
+hashes.
+
+The release also carries every licence and notice text of the packages, the runtime and Go, each once, indexed in
+`LICENSES\PACKAGES.txt`. Whisper, Piper, the voices and Ollama are not shipped: README says where to get each, with the
+tested hashes.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
-  the persona says it cannot yet. Model and persona belong to #261.
+  the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
 - The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice
   sooner.
 
 ## To verify
 
-- The microphone path with the author speaking: it has not run yet (nobody was there to speak, and nothing was
-  recorded without them), nor the endpoint's thresholds in a real room.
+- The release on another machine: unzip, the four prerequisites, `start-delta.ps1`, a conversation.
 - Transcription on the GPU: IX's CUDA 12.4 build predates the RTX 5080; a Vulkan or CUDA 12.8 build of whisper.cpp
   would need a download and a build.
-- A visible window with the voice playing, not muted, and the lip sync judged by eye.
 - A recording of a dozen exchanges, with latency p50 and worst case.
