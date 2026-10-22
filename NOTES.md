@@ -447,6 +447,11 @@ crashed, or when the user asked for it: a `window` or `shelf` request, spoken or
 stays closed until then, and one that crashed within 30 s of its start (no graphics card, say) is not restarted in a
 loop. The log of the window that ended is kept as `scene.prev.log`.
 
+The 0.4.0 review found that a window the brain had not started, found already listening, came back after the user
+closed it: the brain could not tell a close from a crash. The window now leaves
+`%LOCALAPPDATA%\delta\scene-<port>.closed` when the user closes it (its button or Esc), and removes it when it starts;
+the brain does not start a window again while that marker is there, and a request for the window removes it.
+
 ## Hearts (2026-10-22, night)
 
 The author asked, through the wmux relay: « quand on dit au robot « love you » ou « je t'aime », il envoie des cœurs en
