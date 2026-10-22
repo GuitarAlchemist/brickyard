@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// scene tells the window what Pinion is doing, one JSON line per change. Without a window it does nothing, and a lost
+// scene tells the window what Delta is doing, one JSON line per change. Without a window it does nothing, and a lost
 // window is dialled again at the next change.
 type scene struct {
 	mu   sync.Mutex

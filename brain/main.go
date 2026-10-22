@@ -1,5 +1,5 @@
-// Command brain is Pinion's voice loop. What it hears goes to a local language model, and each sentence of the answer
-// goes to a local voice as soon as the sentence ends, so that Pinion starts speaking before the model has finished.
+// Command brain is Delta's voice loop. What it hears goes to a local language model, and each sentence of the answer
+// goes to a local voice as soon as the sentence ends, so that Delta starts speaking before the model has finished.
 // Go's standard library only; nothing leaves the machine.
 //
 //	brain -piper <piper.exe> -voice <model.onnx> [-model qwen3:8b] [-scene 127.0.0.1:8805] [-mute]
@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const persona = "Tu es Pinion, le petit robot qui dirige Brickyard, une usine à logiciels qu'on pilote à la voix. " +
+const persona = "Tu es Delta, le petit robot qui dirige Brickyard, une usine à logiciels qu'on pilote à la voix. " +
 	"Tu parles français, à l'oral : une ou deux phrases courtes, chaleureuses et précises, sans liste, sans markdown, " +
 	"sans emoji. Pour l'instant tu sais seulement converser : tu ne peux encore rien construire, lancer ni modifier. " +
 	"Si on te le demande, dis-le simplement et propose d'en parler."
@@ -34,7 +34,7 @@ func main() {
 	model := flag.String("model", "qwen3:8b", "the language model")
 	piper := flag.String("piper", "", "Piper's executable (required)")
 	voiceModel := flag.String("voice", "", "a Piper voice, .onnx with its .onnx.json (required)")
-	sceneAddr := flag.String("scene", "", "the scene's address, to show Pinion's state")
+	sceneAddr := flag.String("scene", "", "the scene's address, to show Delta's state")
 	mute := flag.Bool("mute", false, "synthesise but do not play")
 	flag.Parse()
 	if *piper == "" || *voiceModel == "" {

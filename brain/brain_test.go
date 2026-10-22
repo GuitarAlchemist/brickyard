@@ -28,12 +28,12 @@ func TestThinkFilterAcrossChunks(t *testing.T) {
 func TestSentencesComeOutAsTheyEnd(t *testing.T) {
 	var s sentences
 	var got []string
-	for _, token := range []string{"Bonjour, je suis Pin", "ion. Je dirige l'usine ! O", "k. Que veux-tu construire", " aujourd'hui ?"} {
+	for _, token := range []string{"Bonjour, je suis Del", "ta. Je dirige l'usine ! O", "k. Que veux-tu construire", " aujourd'hui ?"} {
 		got = append(got, s.feed(token)...)
 	}
 	got = append(got, s.flush())
 	// "Ok." is too short to say on its own: it waits for the next sentence.
-	want := []string{"Bonjour, je suis Pinion.", "Je dirige l'usine !", "Ok. Que veux-tu construire aujourd'hui ?"}
+	want := []string{"Bonjour, je suis Delta.", "Je dirige l'usine !", "Ok. Que veux-tu construire aujourd'hui ?"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("got %q", got)
 	}
@@ -128,7 +128,7 @@ func TestVoiceKeepsOneProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer v.close()
-	for i, line := range []string{"Bonjour.", "Je suis   Pinion,\nle robot."} {
+	for i, line := range []string{"Bonjour.", "Je suis   Delta,\nle robot."} {
 		path, err := v.say(line)
 		if err != nil {
 			t.Fatal(err)

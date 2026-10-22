@@ -40,7 +40,6 @@ packages already on the machine.
   the persona says it cannot yet. Model and persona belong to #261.
 - The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice
   sooner.
-- The robot's name is not settled; the persona says Pinion for now.
 
 ## To verify
 
