@@ -8,12 +8,37 @@ import (
 )
 
 // scene tells the window what Delta is doing, one JSON line per change. Without a window it does nothing, and a lost
-// window is dialled again at the next change.
+// window is dialled again at the next change. A window that crashed, or that the user asks for (summon), is started
+// again at the next line nobody answers; one the user closed stays closed until then.
 type scene struct {
-	mu    sync.Mutex
-	addr  string
-	conn  net.Conn
-	hello []byte // the line each new connection starts with, if any: what a window must know whatever it missed
+	mu       sync.Mutex
+	addr     string
+	conn     net.Conn
+	hello    []byte    // the line each new connection starts with, if any: what a window must know whatever it missed
+	launch   func()    // starts the window, when the brain may (startScene)
+	wanted   bool      // the window should be on screen
+	launched time.Time // its last start, so that a window that cannot start is not started at every line
+}
+
+// relaunchEvery is the least time between two starts of the window.
+const relaunchEvery = 10 * time.Second
+
+// summon asks for the window, as a request to move it or to open its shelf does: closed, it comes back.
+func (s *scene) summon() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wanted = true
+}
+
+// exited records how a window the brain started ended: crashed, it comes back with the next line; closed, or crashed
+// within half a minute of its start, as without a graphics card, it waits until it is summoned.
+func (s *scene) exited(crashed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wanted = crashed && time.Since(s.launched) > 30*time.Second
 }
 
 func dialScene(addr string) *scene { return &scene{addr: addr} }
@@ -42,6 +67,10 @@ func (s *scene) send(event map[string]any) {
 		if fresh {
 			c, err := net.DialTimeout("tcp", s.addr, 200*time.Millisecond)
 			if err != nil {
+				if s.launch != nil && s.wanted && time.Since(s.launched) > relaunchEvery {
+					s.launched = time.Now()
+					go s.launch()
+				}
 				return
 			}
 			s.conn = c

@@ -439,6 +439,14 @@ were already there; a Conversations section now lists `~\.claude\projects`: 38 p
   in wmux first offers its pane. Opening a project reads at most its 60 newest transcripts.
 - "Show the conversations" and « montre-moi nos conversations » open it, and the `shelf` tool's `conversations` move.
 
+## The window comes back (2026-10-22, night)
+
+Twice tonight Delta's window was gone while its brain went on speaking: once crashed, once closed. Nothing brought it
+back but a new brain. The brain now starts it again at the next line nobody answers, at most every 10 s, when it
+crashed, or when the user asked for it: a `window` or `shelf` request, spoken or from Claude. A window the user closed
+stays closed until then, and one that crashed within 30 s of its start (no graphics card, say) is not restarted in a
+loop. The log of the window that ended is kept as `scene.prev.log`.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

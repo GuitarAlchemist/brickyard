@@ -153,7 +153,10 @@ func runMCP(c mcpConfig) {
 	}
 	m.speak = mo.speak
 	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
-		m.show = s.send
+		m.show = func(line map[string]any) { // a request for the window or its shelf brings back a window the user closed
+			s.summon()
+			s.send(line)
+		}
 	}
 
 	// The robot shows how full Claude's context is, from the session's transcript, and when Claude Code compacts it,
@@ -319,31 +322,47 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	if c.noScene || c.scene == "" {
 		return s
 	}
-	if conn, err := net.DialTimeout("tcp", c.scene, 200*time.Millisecond); err == nil {
-		conn.Close()
-		logf("a scene already listens on %s", c.scene)
-		return s
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return s
 	}
 	path := filepath.Join(filepath.Dir(exe), "scene", "scene.exe")
 	_, port, _ := net.SplitHostPort(c.scene)
-	cmd := exec.Command(path, "--listen", port)
-	hideConsole(cmd)
-	if c.home != "" {
-		if f, err := os.Create(filepath.Join(c.home, "scene.log")); err == nil {
-			cmd.Stdout, cmd.Stderr = f, f
+	s.launch = func() {
+		cmd := exec.Command(path, "--listen", port)
+		hideConsole(cmd)
+		var log *os.File
+		if c.home != "" {
+			name := filepath.Join(c.home, "scene.log")
+			os.Rename(name, filepath.Join(c.home, "scene.prev.log")) // the log of a window that crashed survives its restart
+			if f, err := os.Create(name); err == nil {
+				log = f
+				cmd.Stdout, cmd.Stderr = f, f
+			}
 		}
+		if err := cmd.Start(); err != nil {
+			logf("scene: %v", err)
+			return
+		}
+		killWithMe(cmd.Process)
+		logf("scene started on %s", c.scene)
+		go func() {
+			err := cmd.Wait()
+			if log != nil {
+				log.Close()
+			}
+			logf("scene exited: %v", err) // nil when the user closed it
+			s.exited(err != nil)
+		}()
 	}
-	if err := cmd.Start(); err != nil {
-		logf("scene: %v", err)
+	s.wanted = true
+	if conn, err := net.DialTimeout("tcp", c.scene, 200*time.Millisecond); err == nil {
+		conn.Close()
+		logf("a scene already listens on %s", c.scene)
 		return s
 	}
-	killWithMe(cmd.Process)
-	go cmd.Wait()
-	logf("scene started on %s", c.scene)
+	s.launched = time.Now()
+	s.launch()
 	return s
 }
 
