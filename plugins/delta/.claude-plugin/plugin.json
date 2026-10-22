@@ -1,7 +1,7 @@
 {
   "name": "delta",
   "displayName": "Delta",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Talk to Claude Code aloud, in English or French, on Windows: Delta, a small robot in its own window, hears your microphone and says Claude's answers.",
   "author": {
     "name": "GuitarAlchemist",
@@ -13,7 +13,7 @@
   "keywords": ["voice", "speech", "microphone", "channel", "english", "french", "windows"],
   "mcpServers": {
     "delta": {
-      "command": "${CLAUDE_PLUGIN_DATA}/delta-0.3.1/brain.exe",
+      "command": "${CLAUDE_PLUGIN_DATA}/delta-0.4.0/brain.exe",
       "args": ["-mcp", "-home", "${CLAUDE_PLUGIN_DATA}"]
     }
   },
