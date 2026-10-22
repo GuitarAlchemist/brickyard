@@ -202,7 +202,7 @@ func TestTheProjectFolderIsTheDirectoryWithDashes(t *testing.T) {
 	if got := projectFolder(`C:\tmp\delta-live`); got != "C--tmp-delta-live" {
 		t.Fatal(got)
 	}
-	if got := projectFolder(`C:\Users\spare\source\repos\learn`); got != "C--Users-spare-source-repos-learn" {
+	if got := projectFolder(`C:\Users\me\source\repos\app`); got != "C--Users-me-source-repos-app" {
 		t.Fatal(got)
 	}
 }
