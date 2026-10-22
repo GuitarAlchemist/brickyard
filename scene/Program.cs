@@ -589,7 +589,7 @@ internal static unsafe class Stage
                 case "open":
                     shelf.Show(at);
                     break;
-                case "sessions" or "plugins" or "marketplaces":
+                case "sessions" or "conversations" or "plugins" or "marketplaces":
                     shelf.Show(at, command);
                     break;
                 case "close":

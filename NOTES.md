@@ -425,6 +425,20 @@ keep_alive; loading it again took 7.4 s, longer than the 4 s a sentence waits, a
 that way before one found the model loaded. After a failure the brain now loads the model in the background, without a
 deadline, one load at a time, so that the next sentence finds it ready.
 
+## Past conversations on the shelf (2026-10-22, night)
+
+The author asked to see « toutes nos sessions Claude et toutes nos conversations » in the scene. The running sessions
+were already there; a Conversations section now lists `~\.claude\projects`: 38 projects and 238 transcripts here.
+
+- A project is named by the folder its newest conversation ran in, read from the transcript (`cwd`), since the
+  project's own folder name loses its separators. Two folders of the same name show the folder that holds each.
+- A transcript reaches 600 MB here, so only its last and first 256 KB are read. The title is the last `custom-title`
+  (the user's /rename), else the last `ai-title`, else the first request. The requests are the user's typed lines and
+  the sentences spoken to Delta, without tools' results, reminders, commands' output or compaction summaries.
+- A conversation opens onto its six last requests, its folder, its last activity, its size and its id; a running one
+  in wmux first offers its pane. Opening a project reads at most its 60 newest transcripts.
+- "Show the conversations" and « montre-moi nos conversations » open it, and the `shelf` tool's `conversations` move.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

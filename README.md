@@ -69,12 +69,13 @@ and in French whatever its language, and answers in its own:
   notification area, by the clock; "Delta, come back" or a click on its icon brings it back. In French: « mets-toi en
   haut à gauche », « maximise ta fenêtre », « cache-toi », « reviens ».
 - **Its shelf**, a small menu in its window. "Delta, show me the sessions" lists this computer's Claude Code
-  sessions, grouped by wmux workspace, those waiting for you first. "Show the plugins" and "show the marketplaces"
+  sessions, grouped by wmux workspace, those waiting for you first. "Show the conversations" lists the past ones by
+  project, the most recent first, each opening onto its last requests. "Show the plugins" and "show the marketplaces"
   list what is installed. While the shelf is open, "go down", "go up", "open" and "back" move through it, without
   "Delta" within 20 seconds of the last step, and "close the menu" closes it. In French: « montre-moi les sessions »,
-  « descends », « monte », « ouvre », « retour », « ferme le menu ». Tab or M opens it with the keyboard too, then the
-  arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session that runs in wmux, "Go to this
-  session" shows its pane. The shelf's labels follow Delta's language.
+  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». Tab or M opens it
+  with the keyboard too, then the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session
+  that runs in wmux, "Go to this session" shows its pane. The shelf's labels follow Delta's language.
 
 What you say is transcribed on your machine. The text then goes to Claude like anything you type.
 

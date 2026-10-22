@@ -40,12 +40,13 @@ var windowActions = map[string]map[string]string{
 // shelfAnswers are the moves through the shelf in Delta's window (Link.ShelfMoves), and what Delta says as it makes
 // them, by language code: nothing for a step, which the panel shows.
 var shelfAnswers = map[string]map[string]string{
-	"open":         {"en": "Here is my menu.", "fr": "Voici mon menu."},
-	"sessions":     {"en": "Here are the sessions.", "fr": "Voici les sessions."},
-	"plugins":      {"en": "Here are the plugins.", "fr": "Voici les plugins."},
-	"marketplaces": {"en": "Here are the marketplaces.", "fr": "Voici les marketplaces."},
-	"close":        {"en": "Putting my menu away.", "fr": "Je range le menu."},
-	"up":           {}, "down": {}, "enter": {}, "back": {},
+	"open":          {"en": "Here is my menu.", "fr": "Voici mon menu."},
+	"sessions":      {"en": "Here are the sessions.", "fr": "Voici les sessions."},
+	"conversations": {"en": "Here are the conversations.", "fr": "Voici les conversations."},
+	"plugins":       {"en": "Here are the plugins.", "fr": "Voici les plugins."},
+	"marketplaces":  {"en": "Here are the marketplaces.", "fr": "Voici les marketplaces."},
+	"close":         {"en": "Putting my menu away.", "fr": "Je range le menu."},
+	"up":            {}, "down": {}, "enter": {}, "back": {},
 }
 
 // inLanguage is what Delta says in the language with this code, the English when it has nothing in that one.
@@ -185,6 +186,8 @@ func alone(words []string) string {
 var shelfWords = []phrase{
 	{"ferme le menu", "close"}, {"cache le menu", "close"}, {"ferme l etagere", "close"},
 	{"les sessions", "sessions"}, {"des sessions", "sessions"},
+	{"les conversations", "conversations"}, {"des conversations", "conversations"}, {"mes conversations", "conversations"},
+	{"nos conversations", "conversations"}, {"anciennes conversations", "conversations"},
 	{"les plugins", "plugins"}, {"des plugins", "plugins"},
 	{"les marketplaces", "marketplaces"}, {"des marketplaces", "marketplaces"}, {"les catalogues", "marketplaces"},
 	{"ouvre le menu", "open"}, {"montre le menu", "open"}, {"affiche le menu", "open"}, {"ton menu", "open"},
@@ -193,6 +196,8 @@ var shelfWords = []phrase{
 	{"close the shelf", "close"},
 	{"the sessions", "sessions"}, {"my sessions", "sessions"}, {"your sessions", "sessions"}, {"code sessions", "sessions"},
 	{"claude sessions", "sessions"},
+	{"the conversations", "conversations"}, {"my conversations", "conversations"}, {"our conversations", "conversations"},
+	{"past conversations", "conversations"}, {"old conversations", "conversations"},
 	{"the plugins", "plugins"}, {"my plugins", "plugins"}, {"your plugins", "plugins"}, {"installed plugins", "plugins"},
 	{"the marketplaces", "marketplaces"}, {"the marketplace", "marketplaces"}, {"the catalogs", "marketplaces"},
 	{"the catalogues", "marketplaces"},

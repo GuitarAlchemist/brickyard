@@ -45,7 +45,7 @@ internal sealed class Link(Func<double> clock)
     // Takes the brain's moves through the shelf, on the link's threads.
     public Action<string>? Shelf { get; set; }
 
-    public static readonly string[] ShelfMoves = ["open", "sessions", "plugins", "marketplaces", "close", "up", "down", "enter", "back"];
+    public static readonly string[] ShelfMoves = ["open", "sessions", "conversations", "plugins", "marketplaces", "close", "up", "down", "enter", "back"];
 
     // The robot's moment: the state, the voice's loudness as a fraction of the sentence's loudest step (0 outside
     // speech), what the answer costs ("free", "paid", or "" when the line did not say), how full the context is as a
@@ -264,7 +264,7 @@ internal sealed class Link(Func<double> clock)
         }
     }
 
-    // --selftest: the parsing and the mouth's loudness, without a window.
+    // --selftest: the parsing, the mouth's loudness and the reading of transcripts, without a window.
     public static int SelfTest()
     {
         var failures = 0;
@@ -300,6 +300,8 @@ internal sealed class Link(Func<double> clock)
             "a sentence starts with an expression");
         Check(Parse("""{"shelf":"sessions"}""", out _) is { State: null, Shelf: "sessions" }, "the shelf opens on the sessions");
         Check(Parse("""{"shelf":"delete"}""", out _) is null, "an unknown move through the shelf is refused");
+        Check(Parse("""{"shelf":"conversations"}""", out _) is { Shelf: "conversations" }, "the shelf opens on the conversations");
+        Conversations.SelfTest(Check);
         Check(Parse("""{"language":"fr"}""", out _) is { State: null, Language: "fr" }, "the shelf speaks French");
         Check(Parse("""{"language":"de"}""", out _) is null, "an unknown language is refused");
         Words.Language = "fr";

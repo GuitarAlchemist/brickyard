@@ -80,8 +80,9 @@ func toolsFor(l language) []map[string]any {
 		{
 			"name": "shelf",
 			"description": "Walk the shelf in Delta's window: a small menu of this computer's Claude Code sessions, grouped by " +
-				"wmux workspace with those waiting for the user first, of the installed plugins, and of the marketplaces. open " +
-				"shows its root; sessions, plugins and marketplaces open a section; up, down, enter and back move through it; " +
+				"wmux workspace with those waiting for the user first, of the past conversations by project, of the installed " +
+				"plugins, and of the marketplaces. open shows its root; sessions, conversations, plugins and marketplaces open a " +
+				"section; up, down, enter and back move through it; " +
 				"close hides it. A session that runs in wmux has a first row that focuses its pane.",
 			"inputSchema": map[string]any{
 				"type":       "object",
