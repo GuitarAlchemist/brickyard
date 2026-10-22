@@ -4,6 +4,10 @@
 //
 //	brain -piper <piper.exe> -voice <model.onnx> [-model qwen3:8b] [-scene 127.0.0.1:8805] [-mute]
 //	      [-whisper <whisper-server.exe> [-whisper-model <ggml.bin>] [-mic | -hear a.wav,b.wav]]
+//	brain -mcp [-home <dir>] [-no-scene] [-no-wake]
+//
+// With -mcp, Claude is the brain instead of the local model: the brain is an MCP server for Claude Code (mcp.go,
+// voicemcp.go), which hears through the microphone and speaks through Delta's say tool.
 //
 // Each line on standard input is something heard. With -whisper, the brain also runs whisper.cpp's server on
 // 127.0.0.1 (-ears-port) to transcribe: -mic listens on the default microphone, cutting utterances at 700 ms of quiet
@@ -20,10 +24,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
 )
+
+// version is set by release.ps1 (-ldflags -X main.version=...).
+var version = "dev"
 
 const persona = "Tu es Delta, le petit robot qui dirige Brickyard, une usine à logiciels qu'on pilote à la voix. " +
 	"Tu parles français, à l'oral : une ou deux phrases courtes, chaleureuses et précises, sans liste, sans markdown, " +
@@ -45,7 +53,7 @@ func main() {
 	whisper := flag.String("whisper", "", "whisper.cpp's whisper-server executable, to listen")
 	whisperModel := flag.String("whisper-model", "", "a whisper.cpp model (default: ggml-large-v3-turbo-q5_0.bin beside -whisper)")
 	earsPort := flag.Int("ears-port", 8806, "the loopback port for whisper-server")
-	threads := flag.Int("threads", 16, "whisper-server's CPU threads")
+	threads := flag.Int("threads", min(16, runtime.NumCPU()), "whisper-server's CPU threads")
 	useMic := flag.Bool("mic", false, "listen on the default microphone (needs -whisper)")
 	micLevels := flag.Bool("mic-levels", false, "with -mic, print the microphone's level every 2 s")
 	hearFiles := flag.String("hear", "", "comma-separated WAV files to transcribe as if heard, then exit (needs -whisper)")
@@ -53,9 +61,27 @@ func main() {
 	// 768 is about 15 s, the longest utterance the endpoint lets through; on the CPU it took the transcription of 2 to
 	// 3 s of French from 4.9-7.0 s down to 1.6-2.4 s, with the same words.
 	audioCtx := flag.Int("audio-ctx", 768, "whisper's audio context, 0 for the model's 30 s window (1500)")
+	mcpMode := flag.Bool("mcp", false, "be an MCP server for Claude Code on stdin and stdout, Claude being the brain")
+	home := flag.String("home", "", "with -mcp, where setup.ps1 installed Piper, a voice and whisper.cpp")
+	noScene := flag.Bool("no-scene", false, "with -mcp, do not open Delta's window")
+	noWake := flag.Bool("no-wake", false, "with -mcp, send everything heard to Claude, not only what follows \"Delta\"")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	if *whisperModel == "" && *whisper != "" {
 		*whisperModel = filepath.Join(filepath.Dir(*whisper), "ggml-large-v3-turbo-q5_0.bin")
+	}
+	if *mcpMode {
+		addr := *sceneAddr
+		if addr == "" {
+			addr = "127.0.0.1:8805"
+		}
+		runMCP(mcpConfig{home: *home, piper: *piper, voice: *voiceModel, whisper: *whisper, whisperModel: *whisperModel,
+			scene: addr, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
+		return
 	}
 	if *transcribe {
 		e, err := startEars(*whisper, *whisperModel, *earsPort, *threads, "Delta, Brickyard.", *audioCtx)

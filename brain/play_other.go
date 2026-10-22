@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"os"
+	"os/exec"
 )
 
 // play is silent off Windows for now.
@@ -20,3 +21,5 @@ func openMic(frames chan<- []float32) (*mic, error) {
 func (m *mic) close() {}
 
 func killWithMe(p *os.Process) {}
+
+func hideConsole(cmd *exec.Cmd) {}

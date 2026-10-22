@@ -2,9 +2,16 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"syscall"
 	"unsafe"
 )
+
+// hideConsole keeps a console program from opening a console window of its own. Under Claude Code the brain has no
+// console to share, and Piper, whisper-server and the scene are all console programs.
+func hideConsole(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
+}
 
 var (
 	kernel32                 = syscall.NewLazyDLL("kernel32.dll")

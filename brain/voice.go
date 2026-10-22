@@ -23,6 +23,7 @@ type voice struct {
 
 func startVoice(piper, model, dir string, args ...string) (*voice, error) {
 	cmd := exec.Command(piper, append([]string{"--model", model, "--output_dir", dir}, args...)...)
+	hideConsole(cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

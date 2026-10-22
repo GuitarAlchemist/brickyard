@@ -48,6 +48,7 @@ func startEars(server, model string, port, threads int, prompt string, audioCtx 
 		args = append(args, "-ac", strconv.Itoa(audioCtx))
 	}
 	cmd := exec.Command(server, args...)
+	hideConsole(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
