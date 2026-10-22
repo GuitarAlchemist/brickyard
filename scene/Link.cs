@@ -10,8 +10,8 @@ using System.Text.Json;
 // "context", how full Claude's conversation is, as {"used": tokens, "limit": tokens}, where limit is where Claude Code
 // compacts it; "compacting", true while Claude Code compacts the conversation; and "window", what to do with the
 // window (Placement.Actions), which Window runs; "mood", an expression the face holds for MoodSeconds (Moods); and
-// "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs. Each changes only what it
-// names.
+// "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs; and "language", "en" or
+// "fr", the shelf's labels (Words), which the brain sends first on each connection. Each changes only what it names.
 internal sealed class Link(Func<double> clock)
 {
     private const int MaxLine = 256 * 1024;
@@ -37,7 +37,7 @@ internal sealed class Link(Func<double> clock)
     public const double MoodSeconds = 6.0;
 
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -175,6 +175,17 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
+            string? language = null;
+            if (root.TryGetProperty("language"u8, out var lg))
+            {
+                language = lg.ValueKind == JsonValueKind.String ? lg.GetString() : null;
+                if (language is null || !Words.Languages.Contains(language))
+                {
+                    error = $"the shelf speaks en or fr, not {lg}";
+                    return null;
+                }
+            }
+
             string? mood = null;
             if (root.TryGetProperty("mood"u8, out var md))
             {
@@ -188,13 +199,13 @@ internal sealed class Link(Func<double> clock)
 
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -244,7 +255,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language);
         }
         catch (JsonException ex)
         {
@@ -289,6 +300,14 @@ internal sealed class Link(Func<double> clock)
             "a sentence starts with an expression");
         Check(Parse("""{"shelf":"sessions"}""", out _) is { State: null, Shelf: "sessions" }, "the shelf opens on the sessions");
         Check(Parse("""{"shelf":"delete"}""", out _) is null, "an unknown move through the shelf is refused");
+        Check(Parse("""{"language":"fr"}""", out _) is { State: null, Language: "fr" }, "the shelf speaks French");
+        Check(Parse("""{"language":"de"}""", out _) is null, "an unknown language is refused");
+        Words.Language = "fr";
+        var french = Words.Say("Folder", "Dossier");
+        Words.Language = "de";
+        var fallback = Words.Say("Folder", "Dossier");
+        Words.Language = "en";
+        Check(french == "Dossier" && fallback == "Folder" && Words.Say("Folder", "Dossier") == "Folder", "the labels follow the language, English by default");
         var link = new Link(() => 0);
         link.Apply(new Change("speaking", [0f, 0.1f, 0.05f], "free", null, null), 10.0);
         Check(link.Read(10.03) is { State: "speaking", Level: 1f, Cost: "free", Context: -1f, Compacting: false, Mood: "neutral" }, "the loudest step opens the mouth fully");
@@ -339,6 +358,11 @@ internal sealed class Link(Func<double> clock)
         {
             var paying = change.Cost == "" ? "" : $" ({change.Cost})";
             Console.WriteLine(newState == "speaking" ? $"SCENE speaking{paying} {change.Envelope.Length * Step:F2} s at {at:F2} s" : $"SCENE {newState}{paying} at {at:F2} s");
+        }
+
+        if (change.Language is { } lang)
+        {
+            Words.Language = lang;
         }
 
         if (change.Window is { } action)

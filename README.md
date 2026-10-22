@@ -62,18 +62,19 @@ Which speech Delta passes on:
 
 Claude Code asks your permission the first time Claude uses Delta's `say` and `listen` tools.
 
-Delta does some things itself, without Claude, when a short sentence asks for them. These local commands are in French
-for now; in English, ask Claude, which does the same with Delta's `window` and `shelf` tools:
-- **Its window.** « Delta, mets-toi en haut à gauche », « va à droite », « au centre », « maximise ta fenêtre »,
-  « minimise-toi », « plein écran », « restaure ta fenêtre », « plus petit », « reste au premier plan ».
-  « Cache-toi » puts it in the notification area, by the clock; « Delta, reviens » or a click on its icon brings it
-  back.
-- **Its shelf**, a small menu in its window. « Delta, montre-moi les sessions » lists this computer's Claude Code
-  sessions, grouped by wmux workspace, those waiting for you first. « Montre les plugins » and « montre les
-  marketplaces » list what is installed. While the shelf is open, « descends », « monte », « ouvre » and « retour »
-  move through it, without « Delta » within 20 seconds of the last step, and « ferme le menu » closes it. Tab or M opens it with the keyboard too, then
-  the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session that runs in wmux,
-  « Aller à cette session » shows its pane.
+Delta does some things itself, without Claude, when a short sentence asks for them. It understands them in English
+and in French whatever its language, and answers in its own:
+- **Its window.** "Delta, move to the top left", "go to the right", "go to the center", "maximize your window",
+  "minimize", "full screen", "restore your window", "make yourself smaller", "stay on top". "Hide" puts it in the
+  notification area, by the clock; "Delta, come back" or a click on its icon brings it back. In French: « mets-toi en
+  haut à gauche », « maximise ta fenêtre », « cache-toi », « reviens ».
+- **Its shelf**, a small menu in its window. "Delta, show me the sessions" lists this computer's Claude Code
+  sessions, grouped by wmux workspace, those waiting for you first. "Show the plugins" and "show the marketplaces"
+  list what is installed. While the shelf is open, "go down", "go up", "open" and "back" move through it, without
+  "Delta" within 20 seconds of the last step, and "close the menu" closes it. In French: « montre-moi les sessions »,
+  « descends », « monte », « ouvre », « retour », « ferme le menu ». Tab or M opens it with the keyboard too, then the
+  arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session that runs in wmux, "Go to this
+  session" shows its pane. The shelf's labels follow Delta's language.
 
 What you say is transcribed on your machine. The text then goes to Claude like anything you type.
 

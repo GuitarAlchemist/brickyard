@@ -362,11 +362,18 @@ After the plugin's first release, the author asked: « il faut que ça marche po
     French voice from `delta.json` and kept `triage`.
 - **The v0.2.0 release works from an empty folder.** Its workflow published the zip. `setup.ps1` installed it into an
   empty folder, checked it against the asset's digest, and `brain.exe -version` printed 0.2.0.
-- **Still in French only**, in Delta Live's files. In English, these requests go to Claude, which has the window and
-  shelf tools.
-  - the local window and shelf commands (`window.go`);
-  - the triage's prompt and its local answers (`triage.go`);
-  - the sentence Delta says while Claude Code compacts (`hooks.go`).
+- **Delta Live's files in English too**, the same evening.
+  - Requests are read in both languages whatever the setting: the window and shelf phrases, the fillers, the
+    acknowledgements, the small talk and the promises a local answer must not make. A French word in an English
+    session is read as before.
+  - What Delta says follows the setting: the window and shelf answers, the triage's prompt and the language of its
+    local answers, the sentence said during a compaction, and « IX », read « ixe » by the French voice and "I X" by
+    the English one. The French prompt is word for word the one the corpus was measured with.
+  - English is riskier to match than French: "move", "go", "right" and "hide" are common words. A place needs its
+    preposition ("to the right"), and "hide", "open", "up" or "down" count only as the whole request. "Delta, hide
+    the terminal", "go ahead, all right" and "move the file to the left folder" go to Claude.
+  - The scene's shelf learns the language from a `{"language":"en"|"fr"}` line, which the brain sends first on every
+    connection, so that a window started later, or by another brain, knows it too. `--lang fr` sets it for shots.
 
 ## Known problems
 
@@ -374,6 +381,8 @@ After the plugin's first release, the author asked: « il faut que ça marche po
   the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
 - The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice
   sooner.
+- The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
+  second, and there is one per workspace.
 
 ## To verify
 

@@ -225,7 +225,7 @@ func TestOllamaTriageAsksForAVerdictInJSON(t *testing.T) {
 		w.Write([]byte(`{"message":{"role":"assistant","content":"{\"route\":\"local\",\"answer\":\"Cool !\"}"},"done":true}`))
 	}))
 	defer server.Close()
-	v, err := ollamaTriage(server.URL, "qwen3:8b")(context.Background(), []string{"Delta: Bonjour."}, "Cool.")
+	v, err := ollamaTriage(server.URL, "qwen3:8b", languages["fr"])(context.Background(), []string{"Delta: Bonjour."}, "Cool.")
 	if err != nil || v.Route != "local" || v.Answer != "Cool !" {
 		t.Fatalf("%+v %v", v, err)
 	}
@@ -376,8 +376,8 @@ func TestTriageCorpus(t *testing.T) {
 	if err := json.Unmarshal(data, &cases); err != nil {
 		t.Fatal(err)
 	}
-	tr := ollamaTriage(url, model)
-	if err := warmTriage(tr); err != nil {
+	tr := ollamaTriage(url, model, languages["fr"]) // the corpus is French
+	if err := warmTriage(tr, languages["fr"]); err != nil {
 		t.Fatal(err)
 	}
 	right := 0
@@ -477,13 +477,16 @@ func TestTheJournalNumbersItsLines(t *testing.T) {
 }
 
 func TestSpeakableSaysIXAsX(t *testing.T) {
-	for text, want := range map[string]string{
-		"La session IX a répondu.":            "La session ixe a répondu.",
-		"IX, puis GuitarAlchemist/IX et FIX.": "ixe, puis GuitarAlchemist/ixe et FIX.",
-		"Rien à changer.":                     "Rien à changer.",
+	for _, c := range []struct{ code, text, want string }{
+		{"fr", "La session IX a répondu.", "La session ixe a répondu."},
+		{"fr", "IX, puis GuitarAlchemist/IX et FIX.", "ixe, puis GuitarAlchemist/ixe et FIX."},
+		{"fr", "Rien à changer.", "Rien à changer."},
+		{"en", "The IX session answered.", "The I X session answered."},
+		{"en", "IX, then GuitarAlchemist/IX and FIX.", "I X, then GuitarAlchemist/I X and FIX."},
+		{"en", "Nothing to change.", "Nothing to change."},
 	} {
-		if got := speakable(text); got != want {
-			t.Errorf("speakable(%q) = %q", text, got)
+		if got := speakable(c.text, c.code); got != c.want {
+			t.Errorf("speakable(%q, %s) = %q", c.text, c.code, got)
 		}
 	}
 }
@@ -506,7 +509,67 @@ func TestOnlySmallTalkStaysWithTheSmallModel(t *testing.T) {
 }
 
 func TestSmallTalkSmiles(t *testing.T) {
-	if smile("Merci Delta, c'est cool.") != "joy" || smile("Bonne nuit, Delta !") != "sleepy" {
-		t.Fatal(smile("Merci Delta, c'est cool."), smile("Bonne nuit, Delta !"))
+	for text, want := range map[string]string{
+		"Merci Delta, c'est cool.": "joy", "Bonne nuit, Delta !": "sleepy",
+		"Thanks Delta, that's great.": "joy", "Good night, Delta!": "sleepy", "Goodnight.": "sleepy",
+	} {
+		if got := smile(text); got != want {
+			t.Errorf("%q: %s, want %s", text, got, want)
+		}
+	}
+}
+
+func TestTheTriageAsksInDeltasLanguage(t *testing.T) {
+	en, fr := triagePrompt(languages["en"]), triagePrompt(languages["fr"])
+	for _, want := range []string{"what an English speaker says", `"got it"`, "spoken English reply"} {
+		if !strings.Contains(en, want) {
+			t.Errorf("the English prompt lacks %s", want)
+		}
+	}
+	for _, want := range []string{"what a French speaker says", `"euh"`, `"d'accord"`, "spoken French reply"} {
+		if !strings.Contains(fr, want) {
+			t.Errorf("the French prompt lacks %s", want)
+		}
+	}
+	if strings.Contains(en+fr, "%!") {
+		t.Fatal("a prompt has a formatting error")
+	}
+}
+
+func TestTheLocalRulesReadEnglishToo(t *testing.T) {
+	for text, want := range map[string]bool{"Ok, got it.": true, "Alright, sounds good.": true, "Yeah.": true, "Ok, run the tests.": false} {
+		if acknowledges(text) != want {
+			t.Errorf("acknowledges(%q) is %v", text, !want)
+		}
+	}
+	if !carriesNothing("Um, uh.") || carriesNothing("Um, the tests.") {
+		t.Error("English fillers")
+	}
+	if !social("Thanks Delta, that's great.") || social("Delta, the build is broken.") {
+		t.Error("English small talk")
+	}
+	if !promises("Sure, I'll take care of it.") || !promises("I'm on it.") || promises("You're welcome!") {
+		t.Error("English promises")
+	}
+	if parrots("Hi there!", "Hi Delta!") || !parrots("Ok cool.", "Delta, ok cool.") {
+		t.Error("English parrots")
+	}
+}
+
+func TestTriageAnswersEnglishSmallTalkAtNoCost(t *testing.T) {
+	var s spoken
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.speak = s.speak
+		m.triage = fixed(verdict{Route: "local", Answer: "You're welcome!"}, nil)
+	})
+	if where := m.hear(utterance{text: "Thanks Delta, that's great."}, time.Now()); where != "local" {
+		t.Fatalf("went to %s", where)
+	}
+	if where := m.hear(utterance{text: "Ok, got it."}, time.Now()); where != "local" {
+		t.Fatalf("an acknowledgement went to %s", where)
+	}
+	silent(t, out)
+	if got := s.all(); got != "free: You're welcome!" || s.faces() != "joy" {
+		t.Fatalf("said %q with %q", got, s.faces())
 	}
 }

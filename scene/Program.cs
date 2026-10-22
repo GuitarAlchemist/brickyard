@@ -148,6 +148,7 @@ internal static unsafe class Stage
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
         var shotsDir = Option(args, "--shots");
         var shelfAtStart = Option(args, "--shelf");
+        Words.Language = Option(args, "--lang") ?? "en";
         const double S = Splash.Seconds;
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m))];
         if (shots.Length > 0 && !demo)

@@ -517,13 +517,13 @@ func (m *mcpServer) command(text string, fields map[string]any, now time.Time) s
 		fields["shelf"] = move
 		m.walkShelf(move, now)
 		m.gate.open(now) // the user walks the shelf without saying Delta at each step
-		m.answerLocally(text, shelfAnswers[move], "", fields)
+		m.answerLocally(text, inLanguage(shelfAnswers[move], m.language().code), "", fields)
 		return "shelf"
 	}
 	if action := windowCommand(text); action != "" {
 		fields["window"] = action
 		m.show(map[string]any{"window": action})
-		m.answerLocally(text, windowActions[action], "", fields)
+		m.answerLocally(text, inLanguage(windowActions[action], m.language().code), "", fields)
 		return "window"
 	}
 	return ""

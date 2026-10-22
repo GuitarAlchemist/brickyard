@@ -31,11 +31,11 @@ internal static class Panel
         var drawn = new List<(int, int, int)>();
         if (rows is null)
         {
-            Text(rgba, width, height, "Je regarde…", Px(15), false, Px(Pad), top + Px(12), (150, 160, 170));
+            Text(rgba, width, height, Words.Say("Looking…", "Je regarde…"), Px(15), false, Px(Pad), top + Px(12), (150, 160, 170));
         }
         else if (rows.Count == 0)
         {
-            Text(rgba, width, height, Fit(level.Error ?? "Rien ici.", Px(15), false, width - (2 * Px(Pad))), Px(15), false, Px(Pad), top + Px(12), (150, 160, 170));
+            Text(rgba, width, height, Fit(level.Error ?? Words.Say("Nothing here.", "Rien ici."), Px(15), false, width - (2 * Px(Pad))), Px(15), false, Px(Pad), top + Px(12), (150, 160, 170));
         }
         else
         {
@@ -67,7 +67,7 @@ internal static class Panel
             }
         }
 
-        Text(rgba, width, height, "↑↓ choisir   Entrée ouvrir   ← retour   Échap fermer", Px(12), false, Px(Pad), height - Px(24), (110, 122, 134));
+        Text(rgba, width, height, Words.Say("↑↓ choose   Enter open   ← back   Esc close", "↑↓ choisir   Entrée ouvrir   ← retour   Échap fermer"), Px(12), false, Px(Pad), height - Px(24), (110, 122, 134));
         return new Card(rgba, width, height, [.. drawn]);
     }
 

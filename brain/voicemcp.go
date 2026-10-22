@@ -75,11 +75,11 @@ func runMCP(c mcpConfig) {
 	m.gate.follow = 15 * time.Second
 	m.gate.off = c.wakeOff
 	if c.triage != "" {
-		m.triage = ollamaTriage(c.ollama, c.triage)
+		m.triage = ollamaTriage(c.ollama, c.triage, lang)
 		m.triageMax = 4 * time.Second
 		go func() {
 			start := time.Now()
-			if err := warmTriage(m.triage); err != nil {
+			if err := warmTriage(m.triage, lang); err != nil {
 				logf("triage: %v; what Delta hears goes to Claude", err)
 				return
 			}
@@ -126,7 +126,8 @@ func runMCP(c mcpConfig) {
 	}
 
 	s := startScene(c, logf)
-	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note}
+	s.greet(map[string]any{"language": lang.code}) // the shelf's labels (Words.cs)
+	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code}
 	if fx, err := effect(c.fx); err != nil {
 		logf("%v; Delta speaks without an effect", err)
 	} else {
@@ -139,7 +140,7 @@ func runMCP(c mcpConfig) {
 
 	// The robot shows how full Claude's context is, from the session's transcript, and when Claude Code compacts it,
 	// from its hooks.
-	h := &hooks{own: ownSession, logf: logf, maxCompact: 10 * time.Minute,
+	h := &hooks{own: ownSession, logf: logf, maxCompact: 10 * time.Minute, lang: lang.code,
 		compacting: func(trigger string) {
 			m.note("compacting", map[string]any{"trigger": trigger})
 			s.send(map[string]any{"compacting": true})
@@ -318,6 +319,7 @@ type mouth struct {
 	queue  chan said
 	record func(event string, fields map[string]any)
 	fx     func(rate int) *warm // a fresh effect for each say call, or nil for Piper's own voice
+	lang   string               // the code of the language Delta speaks, for speakable
 	busy   atomic.Bool          // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
@@ -380,7 +382,7 @@ func (mo *mouth) run(v *voice) {
 				clips <- clip{say: s.id, cost: s.cost, mood: s.mood, first: true, last: true}
 			}
 			for i, part := range parts {
-				path, err := v.say(speakable(part))
+				path, err := v.say(speakable(part, mo.lang))
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "delta: voice:", err)
 					path = ""
