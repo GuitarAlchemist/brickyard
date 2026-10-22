@@ -388,6 +388,10 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 		route = "ignored"
 		return id, route
 	}
+	if loving(u.text) && m.show != nil { // hearts rise from Delta's chest, and it smiles; the sentence goes on as any other
+		m.show(map[string]any{"hearts": true, "mood": "joy"})
+		fields["hearts"] = true
+	}
 	if r := m.command(u.text, fields, now); r != "" {
 		route = r
 		return id, route

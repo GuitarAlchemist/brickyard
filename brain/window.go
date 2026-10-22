@@ -167,6 +167,23 @@ func plainWords(text string) []string {
 	return strings.Fields(clean)
 }
 
+// loving says whether a sentence tells Delta the user loves it, in French or English: « je t'aime », "love you", and
+// not « je ne t'aime pas » or "I don't love you".
+func loving(text string) bool {
+	line := " " + strings.Join(plainWords(text), " ") + " "
+	for _, no := range []string{" ne t aime ", " t aime pas ", " ne t adore ", " t adore pas ", " don t love you ", " do not love you "} {
+		if strings.Contains(line, no) {
+			return false
+		}
+	}
+	for _, yes := range []string{" je t aime ", " je t adore ", " love you ", " love ya ", " luv you "} {
+		if strings.Contains(line, yes) {
+			return true
+		}
+	}
+	return false
+}
+
 // alone is what a sentence asks once Delta's name and "please" are left out: the request itself when it is one word.
 func alone(words []string) string {
 	var kept []string
