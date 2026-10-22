@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,9 @@ const mcpInstructions = `Delta is a small robot in a window on the user's screen
 	`Never say that something is done unless you did it. For a question of fact, check it with your tools before answering, and say in a few words ` +
 	`where the answer comes from; if you could not check it, say so. ` +
 	`In a session without Delta's channel events, call Delta's listen tool to hear the user; the delta:talk skill runs that conversation. ` +
+	`Give say a mood when your words carry one, such as joy, proud or sorry: Delta's face shows it as it speaks. ` +
+	`The window tool moves, sizes or hides Delta's window, and the shelf tool opens its menu of Claude Code sessions, plugins and ` +
+	`marketplaces; Delta also does both by itself when the user asks it aloud, and you read those requests as handled_locally. ` +
 	`Delta's code is github.com/GuitarAlchemist/brickyard.`
 
 var mcpTools = []map[string]any{
@@ -35,6 +40,8 @@ var mcpTools = []map[string]any{
 			"properties": map[string]any{
 				"text":         map[string]any{"type": "string", "description": "What Delta says, in French"},
 				"utterance_id": map[string]any{"type": "string", "description": "The utterance_id this answers, if it answers one"},
+				"mood": map[string]any{"type": "string", "enum": moods,
+					"description": "The expression Delta's face takes as it starts saying it, for a few seconds"},
 			},
 			"required": []string{"text"},
 		},
@@ -49,6 +56,29 @@ var mcpTools = []map[string]any{
 				"type": "number", "description": "How long to wait, 5 to 300 seconds; 60 by default"}},
 		},
 	},
+	{
+		"name": "window",
+		"description": "Move, size or hide Delta's own window. maximize, fullscreen, minimize and restore; tray hides it " +
+			"near the clock and show brings it back; on-top and not-on-top; smaller and larger; center, a corner such as " +
+			"top-left, or a side such as left, of the screen it is on.",
+		"inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"action": map[string]any{"type": "string", "enum": slices.Sorted(maps.Keys(windowActions))}},
+			"required":   []string{"action"},
+		},
+	},
+	{
+		"name": "shelf",
+		"description": "Walk the shelf in Delta's window: a small menu of this computer's Claude Code sessions, grouped by " +
+			"wmux workspace with those waiting for the user first, of the installed plugins, and of the marketplaces. open " +
+			"shows its root; sessions, plugins and marketplaces open a section; up, down, enter and back move through it; " +
+			"close hides it. A session that runs in wmux has a first row that focuses its pane.",
+		"inputSchema": map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"move": map[string]any{"type": "string", "enum": slices.Sorted(maps.Keys(shelfAnswers))}},
+			"required":   []string{"move"},
+		},
+	},
 }
 
 // mcpServer is Delta as an MCP server: JSON-RPC 2.0, one message a line on stdin and stdout. Claude calls say and
@@ -56,11 +86,12 @@ var mcpTools = []map[string]any{
 // channel event.
 type mcpServer struct {
 	version   string
-	speak     func(text string, sayID int, cost string) (string, error) // queues the text and says how long it will take
-	ready     func() error                                              // why Delta cannot hear yet, or nil
-	pushed    func()                                                    // after a transcript went to the session as an event
-	busy      func() string                                             // what Delta says when Claude cannot answer soon, if anything
-	record    func(event string, fields map[string]any)                 // the journal, if any
+	speak     func(text string, sayID int, cost, mood string) (string, error) // queues the text and says how long it will take
+	ready     func() error                                                    // why Delta cannot hear yet, or nil
+	pushed    func()                                                          // after a transcript went to the session as an event
+	busy      func() string                                                   // what Delta says when Claude cannot answer soon, if anything
+	record    func(event string, fields map[string]any)                       // the journal, if any
+	show      func(line map[string]any)                                       // sends Delta's window a line, if it has one (window.go)
 	listenMin time.Duration
 	listenMax time.Duration
 	gate      wakeGate
@@ -76,9 +107,10 @@ type mcpServer struct {
 	cancels map[string]chan struct{} // by request id
 	heard   int
 	said    int
-	recent  []string // the conversation's last lines, for the triage
-	local   []string // the lines the triage handled since the last channel event, for Claude to know
-	asked   bool     // Claude's last words asked the user something: the answer goes to Claude untriaged
+	recent  []string  // the conversation's last lines, for the triage
+	local   []string  // the lines the triage handled since the last channel event, for Claude to know
+	asked   bool      // Claude's last words asked the user something: the answer goes to Claude untriaged
+	shelfAt time.Time // when the shelf last moved, by voice or by Claude; zero once closed
 }
 
 // What Delta's words cost, which its window shows: "free" from the model on this computer, "paid" from Claude.
@@ -185,10 +217,15 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 		var a struct {
 			Text        string          `json:"text"`
 			UtteranceID json.RawMessage `json:"utterance_id"` // a string, as in the channel's meta, or a number
+			Mood        string          `json:"mood"`
 		}
 		json.Unmarshal(p.Arguments, &a)
 		if strings.TrimSpace(a.Text) == "" {
 			m.toolResult(id, "Nothing to say: text is empty.", true)
+			return
+		}
+		if a.Mood != "" && !slices.Contains(moods, a.Mood) {
+			m.toolResult(id, "Delta has no "+strconv.Quote(a.Mood)+" face: give one of "+strings.Join(moods, ", ")+".", true)
 			return
 		}
 		answers := strings.Trim(string(a.UtteranceID), `"`)
@@ -199,7 +236,7 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 		m.asked = strings.HasSuffix(strings.TrimSpace(a.Text), "?")
 		m.mu.Unlock()
 		m.note("say", map[string]any{"say_id": sayID, "utterance_id": answers, "request": string(id), "text": a.Text, "by": "claude"})
-		status, err := m.speak(a.Text, sayID, paid)
+		status, err := m.speak(a.Text, sayID, paid, a.Mood)
 		if err != nil {
 			m.toolResult(id, err.Error(), true)
 			return
@@ -209,6 +246,32 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 			which += ", answering utterance " + answers
 		}
 		m.toolResult(id, "Delta is saying it ("+which+"): "+status+".", false)
+	case "window", "shelf":
+		var a struct {
+			Action string `json:"action"`
+			Move   string `json:"move"`
+		}
+		json.Unmarshal(p.Arguments, &a)
+		what, known := a.Action, windowActions
+		if p.Name == "shelf" {
+			what, known = a.Move, shelfAnswers
+		}
+		if _, ok := known[what]; !ok {
+			m.toolResult(id, "Delta's "+p.Name+" cannot "+strconv.Quote(what)+": give one of "+
+				strings.Join(slices.Sorted(maps.Keys(known)), ", ")+".", true)
+			return
+		}
+		if m.show == nil {
+			m.toolResult(id, "Delta has no window: this brain runs without its scene.", true)
+			return
+		}
+		if p.Name == "shelf" {
+			m.walkShelf(what, time.Now())
+		} else {
+			m.show(map[string]any{"window": what})
+		}
+		m.note(p.Name, map[string]any{"move": what, "by": "claude"})
+		m.toolResult(id, "Delta's "+p.Name+": "+what+".", false)
 	case "listen":
 		var a struct {
 			Timeout float64 `json:"timeout_seconds"`
@@ -294,6 +357,10 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 		route = "ignored"
 		return route
 	}
+	if r := m.command(u.text, fields, now); r != "" {
+		route = r
+		return route
+	}
 	if m.triage != nil {
 		if r := m.sort(u.text, fields); r != "" {
 			route = r
@@ -321,7 +388,7 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 			m.remember("Delta: " + notice)
 			m.mu.Unlock()
 			m.note("say", map[string]any{"say_id": sayID, "utterance_id": fields["utterance_id"], "text": notice, "by": "local"})
-			if _, err := m.speak(notice, sayID, free); err != nil {
+			if _, err := m.speak(notice, sayID, free, ""); err != nil {
 				fields["say_error"] = err.Error()
 			}
 		}
@@ -398,27 +465,69 @@ func (m *mcpServer) sort(text string, fields map[string]any) string {
 			fields["parrot"] = v.Answer
 			v.Answer = ""
 		}
-		m.mu.Lock()
-		m.remember("User: " + text)
-		m.local = append(m.local, "User: "+text)
-		sayID := 0
-		if v.Answer != "" {
-			m.said++
-			sayID = m.said
-			m.remember("Delta: " + v.Answer)
-			m.local = append(m.local, "Delta: "+v.Answer)
-		}
-		m.local = m.local[max(0, len(m.local)-8):]
-		m.mu.Unlock()
-		if v.Answer != "" {
-			m.note("say", map[string]any{"say_id": sayID, "utterance_id": fields["utterance_id"], "text": v.Answer, "by": "local"})
-			if _, err := m.speak(v.Answer, sayID, free); err != nil {
-				fields["say_error"] = err.Error()
-			}
-		}
+		m.answerLocally(text, v.Answer, smile(text), fields)
 		return "local"
 	}
 	return ""
+}
+
+// answerLocally is what Delta does without Claude: it keeps the exchange, which Claude reads with the next channel
+// event, and says the answer, if any, at no cost and with the given expression.
+func (m *mcpServer) answerLocally(text, answer, mood string, fields map[string]any) {
+	m.mu.Lock()
+	m.remember("User: " + text)
+	m.local = append(m.local, "User: "+text)
+	sayID := 0
+	if answer != "" {
+		m.said++
+		sayID = m.said
+		m.remember("Delta: " + answer)
+		m.local = append(m.local, "Delta: "+answer)
+	}
+	m.local = m.local[max(0, len(m.local)-8):]
+	m.mu.Unlock()
+	if answer != "" {
+		m.note("say", map[string]any{"say_id": sayID, "utterance_id": fields["utterance_id"], "text": answer, "by": "local"})
+		if _, err := m.speak(answer, sayID, free, mood); err != nil {
+			fields["say_error"] = err.Error()
+		}
+	}
+}
+
+// command does what the user asked aloud of Delta's own window, without Claude: a move through the shelf, or opening
+// it, then a move of the window. It returns "shelf" or "window", or "" when the sentence asks neither.
+func (m *mcpServer) command(text string, fields map[string]any, now time.Time) string {
+	if m.show == nil {
+		return ""
+	}
+	m.mu.Lock()
+	open := !m.shelfAt.IsZero() && now.Sub(m.shelfAt) < shelfIdle
+	m.mu.Unlock()
+	if move := shelfCommand(text, open); move != "" {
+		fields["shelf"] = move
+		m.walkShelf(move, now)
+		m.gate.open(now) // the user walks the shelf without saying Delta at each step
+		m.answerLocally(text, shelfAnswers[move], "", fields)
+		return "shelf"
+	}
+	if action := windowCommand(text); action != "" {
+		fields["window"] = action
+		m.show(map[string]any{"window": action})
+		m.answerLocally(text, windowActions[action], "", fields)
+		return "window"
+	}
+	return ""
+}
+
+// walkShelf sends the shelf a move, and keeps when it last moved: the scene closes it after shelfIdle without one.
+func (m *mcpServer) walkShelf(move string, now time.Time) {
+	m.mu.Lock()
+	m.shelfAt = now
+	if move == "close" {
+		m.shelfAt = time.Time{}
+	}
+	m.mu.Unlock()
+	m.show(map[string]any{"shelf": move})
 }
 
 // remember keeps the conversation's last six lines, for the triage. The caller holds m.mu.

@@ -15,17 +15,27 @@ import (
 	"time"
 )
 
-// spoken collects what the triage made Delta say, with its cost.
+// spoken collects what the triage made Delta say, with its cost, and the expressions Delta said it with.
 type spoken struct {
 	mu    sync.Mutex
 	lines []string
+	moods []string
 }
 
-func (s *spoken) speak(text string, _ int, cost string) (string, error) {
+func (s *spoken) speak(text string, _ int, cost, mood string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lines = append(s.lines, cost+": "+text)
+	if mood != "" {
+		s.moods = append(s.moods, mood)
+	}
 	return "1 word, about 1 s", nil
+}
+
+func (s *spoken) faces() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.moods, " ")
 }
 
 func (s *spoken) all() string {
@@ -50,8 +60,8 @@ func TestTriageAnswersSmallTalkAtNoCostAndClaudeSeesNothing(t *testing.T) {
 		t.Fatalf("went to %s", where)
 	}
 	silent(t, out)
-	if got := s.all(); got != "free: Avec plaisir !" {
-		t.Fatalf("said %q", got)
+	if got := s.all(); got != "free: Avec plaisir !" || s.faces() != "joy" {
+		t.Fatalf("said %q with %q", got, s.faces())
 	}
 	if len(records) != 2 || records[0]["event"] != "say" || records[0]["by"] != "local" ||
 		records[1]["event"] != "heard" || records[1]["route"] != "local" || records[1]["triage"] != "local" {
@@ -123,7 +133,7 @@ func TestClaudeGetsWhatTheTriageCannotSort(t *testing.T) {
 func TestAnAnswerToClaudesQuestionSkipsTheTriage(t *testing.T) {
 	asked := 0
 	m, in, out := startServer(t, func(m *mcpServer) {
-		m.speak = func(string, int, string) (string, error) { return "4 words, about 2 s", nil }
+		m.speak = func(string, int, string, string) (string, error) { return "4 words, about 2 s", nil }
 		m.triage = func(context.Context, []string, string) (verdict, error) {
 			asked++
 			return verdict{Route: "local", Answer: "D'accord."}, nil
@@ -487,4 +497,10 @@ func TestOnlySmallTalkStaysWithTheSmallModel(t *testing.T) {
 		t.Fatalf("thanks went to %s", where)
 	}
 	silent(t, out)
+}
+
+func TestSmallTalkSmiles(t *testing.T) {
+	if smile("Merci Delta, c'est cool.") != "joy" || smile("Bonne nuit, Delta !") != "sleepy" {
+		t.Fatal(smile("Merci Delta, c'est cool."), smile("Bonne nuit, Delta !"))
+	}
 }

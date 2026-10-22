@@ -235,6 +235,14 @@ func social(text string) bool {
 	return false
 }
 
+// smile is the expression Delta answers small talk with: sleepy for good night, joy for the rest.
+func smile(text string) string {
+	if strings.Contains(" "+strings.Join(plainWords(text), " ")+" ", " bonne nuit ") {
+		return "sleepy"
+	}
+	return "joy"
+}
+
 var smallTalk = map[string]bool{"merci": true, "salut": true, "bonjour": true, "bonsoir": true, "coucou": true,
 	"hello": true, "bravo": true, "génial": true, "super": true, "cool": true, "top": true, "parfait": true,
 	"nickel": true, "excellent": true, "chapeau": true, "attends": true, "attendez": true, "reviens": true,

@@ -22,6 +22,7 @@ type mcpConfig struct {
 	journal                                   string // where to record what Delta heard and said, if anywhere
 	ollama, triage                            string // Ollama's address, and the model that sorts what Delta hears, if any
 	hooks                                     string // where Claude Code's hooks post, if anywhere (hooks.go)
+	fx                                        string // the effect on Delta's voice: "warm" or "none" (fx.go)
 	noScene, mute, wakeOff                    bool
 	threads, audioCtx                         int
 }
@@ -120,7 +121,15 @@ func runMCP(c mcpConfig) {
 
 	s := startScene(c, logf)
 	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note}
+	if fx, err := effect(c.fx); err != nil {
+		logf("%v; Delta speaks without an effect", err)
+	} else {
+		mo.fx = fx
+	}
 	m.speak = mo.speak
+	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
+		m.show = s.send
+	}
 
 	// The robot shows how full Claude's context is, from the session's transcript, and when Claude Code compacts it,
 	// from its hooks.
@@ -296,7 +305,8 @@ type mouth struct {
 	mute   bool
 	queue  chan said
 	record func(event string, fields map[string]any)
-	busy   atomic.Bool // the microphone's: deaf while Delta speaks or while a transcript is routed
+	fx     func(rate int) *warm // a fresh effect for each say call, or nil for Piper's own voice
+	busy   atomic.Bool          // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
 	pending int // say calls not yet spoken to the end
@@ -304,15 +314,16 @@ type mouth struct {
 	spoke   time.Time
 }
 
-// said is one say call: its text, its number, which the journal's say, speaking and spoken events share, and what it
-// cost, which Delta's window shows.
+// said is one say call: its text, its number, which the journal's say, speaking and spoken events share, what it
+// cost, which Delta's window shows, and the expression Delta's face takes as it starts, if any.
 type said struct {
 	text string
 	id   int
 	cost string
+	mood string
 }
 
-func (mo *mouth) speak(text string, id int, cost string) (string, error) {
+func (mo *mouth) speak(text string, id int, cost, mood string) (string, error) {
 	mo.mu.Lock()
 	failed := mo.failed
 	mo.mu.Unlock()
@@ -320,7 +331,7 @@ func (mo *mouth) speak(text string, id int, cost string) (string, error) {
 		return "", failed
 	}
 	select {
-	case mo.queue <- said{text, id, cost}:
+	case mo.queue <- said{text, id, cost, mood}:
 	default:
 		return "", errors.New("Delta already has 32 things to say: wait until it has said them")
 	}
@@ -338,7 +349,7 @@ func (mo *mouth) run(v *voice) {
 	type clip struct {
 		path        string
 		say         int
-		cost        string
+		cost, mood  string
 		first, last bool // of its say call
 	}
 	clips := make(chan clip, 8)
@@ -354,7 +365,7 @@ func (mo *mouth) run(v *voice) {
 			mo.busy.Store(true)
 			mo.mu.Unlock()
 			if len(parts) == 0 {
-				clips <- clip{say: s.id, cost: s.cost, first: true, last: true}
+				clips <- clip{say: s.id, cost: s.cost, mood: s.mood, first: true, last: true}
 			}
 			for i, part := range parts {
 				path, err := v.say(speakable(part))
@@ -362,17 +373,33 @@ func (mo *mouth) run(v *voice) {
 					fmt.Fprintln(os.Stderr, "delta: voice:", err)
 					path = ""
 				}
-				clips <- clip{path: path, say: s.id, cost: s.cost, first: i == 0, last: i == len(parts)-1}
+				clips <- clip{path: path, say: s.id, cost: s.cost, mood: s.mood, first: i == 0, last: i == len(parts)-1}
 			}
 		}
 	}()
+	var fx *warm    // the say call's effect, which runs through all its sentences
+	var mood string // the say call's expression, until a sentence carries it to the window
 	for c := range clips {
 		if c.first {
 			mo.record("speaking", map[string]any{"say_id": c.say, "muted": mo.mute, "cost": c.cost})
+			fx, mood = nil, c.mood
 		}
 		if c.path != "" {
-			if w, err := readWav(c.path); err == nil {
-				mo.s.send(map[string]any{"state": "speaking", "seconds": w.seconds, "envelope": w.envelope, "cost": c.cost})
+			w, err := readWav(c.path)
+			if err == nil && mo.fx != nil {
+				if fx == nil {
+					fx = mo.fx(w.rate)
+				}
+				if w, err = warmed(c.path, w, fx, c.last); err != nil {
+					fmt.Fprintln(os.Stderr, "delta: voice effect:", err)
+				}
+			}
+			if err == nil {
+				line := map[string]any{"state": "speaking", "seconds": w.seconds, "envelope": w.envelope, "cost": c.cost}
+				if mood != "" {
+					line["mood"], mood = mood, ""
+				}
+				mo.s.send(line)
 			}
 			if !mo.mute {
 				play(c.path)
@@ -380,10 +407,28 @@ func (mo *mouth) run(v *voice) {
 			os.Remove(c.path)
 		}
 		if c.last {
+			if mood != "" {
+				mo.s.send(map[string]any{"mood": mood})
+			}
 			mo.record("spoken", map[string]any{"say_id": c.say})
 			mo.finished()
 		}
 	}
+}
+
+// warmed runs one sentence through its say call's effect, with the effect's tail after the call's last sentence, and
+// rewrites the sentence's file for the speaker.
+func warmed(path string, w wav, fx *warm, last bool) (wav, error) {
+	fx.process(w.samples)
+	if last {
+		w.samples = append(w.samples, fx.tail()...)
+	}
+	if err := writeWav(path, w.rate, w.samples); err != nil {
+		return wav{}, err
+	}
+	w.seconds = float64(len(w.samples)) / float64(w.rate)
+	w.envelope = envelope(w.samples, w.rate/50)
+	return w, nil
 }
 
 // finished is the end of one say call. When nothing else waits, Delta goes idle, and after the room's echo the

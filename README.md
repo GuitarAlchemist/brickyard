@@ -51,6 +51,18 @@ Which speech Delta passes on:
 
 Claude Code asks your permission the first time Claude uses Delta's `say` and `listen` tools.
 
+Delta does some things itself, without Claude, when a short sentence asks for them:
+- **Its window.** « Delta, mets-toi en haut à gauche », « va à droite », « au centre », « maximise ta fenêtre »,
+  « minimise-toi », « plein écran », « restaure ta fenêtre », « plus petit », « reste au premier plan ».
+  « Cache-toi » puts it in the notification area, by the clock; « Delta, reviens » or a click on its icon brings it
+  back.
+- **Its shelf**, a small menu in its window. « Delta, montre-moi les sessions » lists this computer's Claude Code
+  sessions, grouped by wmux workspace, those waiting for you first. « Montre les plugins » and « montre les
+  marketplaces » list what is installed. While the shelf is open, « descends », « monte », « ouvre » and « retour »
+  move through it without « Delta », and « ferme le menu » closes it. Tab or M opens it with the keyboard too, then
+  the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session that runs in wmux,
+  « Aller à cette session » shows its pane.
+
 What you say is transcribed on your machine. The text then goes to Claude like anything you type.
 
 ## On its own
@@ -112,13 +124,16 @@ while it hears you, amber while it thinks, and its mouth follows its voice. Pres
 - `scene\` is in C# and draws with Vulkan through [BRUTAL](https://github.com/ahwootech/BRUTAL). The brain tells it what Delta
   is doing with one JSON line per change on 127.0.0.1:8805. The line can be `{"state":"idle"}`, `"listening"` or
   `"thinking"`, or `{"state":"speaking","seconds":S,"envelope":[...]}` with the voice's loudness every 20 ms. A line
-  can also carry `"context":{"used":tokens,"limit":tokens}` and `"compacting":true` or `false`.
+  can also carry `"context":{"used":tokens,"limit":tokens}`, `"compacting":true` or `false`, `"mood"` (an
+  expression), `"window"` (a move of the window) and `"shelf"` (a move through the shelf).
 
 The brain starts whisper.cpp's server itself and stops it when it exits.
 
 With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's manifest starts
 ([plugins/delta](plugins/delta)).
-- It gives Claude two tools: `say` speaks a text and returns at once; `listen` waits for the next sentence.
+- It gives Claude four tools. `say` speaks a text and returns at once; its `mood`, such as `joy`, `proud` or
+  `sorry`, is the expression Delta's face takes as it starts. `listen` waits for the next sentence. `window` moves,
+  sizes or hides Delta's window, and `shelf` walks its menu.
 - It declares a Claude Code channel. A sentence that no `listen` is waiting for is pushed into the session as a
   channel event, if it starts with "Delta" or "Claude" or comes soon after Delta spoke.
 - With `-triage <model>`, or `"triage"` in `delta.json`, a small Ollama model sorts those sentences first. It answers
@@ -135,6 +150,11 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   down it, and Delta tells whoever speaks to Claude meanwhile that the answer will be late. The plugin's hooks
   ([plugins/delta/hooks/hooks.json](plugins/delta/hooks/hooks.json)) post the start and the end of a compaction to the
   brain on 127.0.0.1:8807 (`-hooks`).
+- Delta's face has eyebrows and mouth corners besides its eyes: neutral, joy, surprise, doubt, sorry, proud, wink,
+  focus and sleepy. An expression lasts six seconds. Small talk that Delta answers itself makes it smile, « bonne
+  nuit » makes it sleepy, and it dozes off after four minutes of quiet.
+- Delta speaks with IX's warm voice: the same Piper voice through an equaliser, a gentle compressor, a touch of
+  saturation and a small room (`brain\fx.go`). `-fx none` gives Piper's own voice.
 - whisper.cpp's server then runs on a free port.
 
 The marketplace is [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json). A tag `v<version>` builds the

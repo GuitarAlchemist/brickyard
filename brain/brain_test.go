@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,37 +59,16 @@ func TestChatStreamsTokens(t *testing.T) {
 	}
 }
 
-func writeWav(t *testing.T, path string, rate int, samples []int16) {
-	t.Helper()
-	data := make([]byte, 44+2*len(samples))
-	copy(data, "RIFF")
-	binary.LittleEndian.PutUint32(data[4:], uint32(36+2*len(samples)))
-	copy(data[8:], "WAVEfmt ")
-	binary.LittleEndian.PutUint32(data[16:], 16)
-	binary.LittleEndian.PutUint16(data[20:], 1)
-	binary.LittleEndian.PutUint16(data[22:], 1)
-	binary.LittleEndian.PutUint32(data[24:], uint32(rate))
-	binary.LittleEndian.PutUint32(data[28:], uint32(rate*2))
-	binary.LittleEndian.PutUint16(data[32:], 2)
-	binary.LittleEndian.PutUint16(data[34:], 16)
-	copy(data[36:], "data")
-	binary.LittleEndian.PutUint32(data[40:], uint32(2*len(samples)))
-	for i, s := range samples {
-		binary.LittleEndian.PutUint16(data[44+2*i:], uint16(s))
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestWavEnvelope(t *testing.T) {
 	// 0.1 s at 1000 Hz: 50 ms of silence, then 50 ms at half scale.
-	samples := make([]int16, 100)
+	samples := make([]float32, 100)
 	for i := 50; i < 100; i++ {
-		samples[i] = 16384
+		samples[i] = 0.5
 	}
 	path := filepath.Join(t.TempDir(), "a.wav")
-	writeWav(t, path, 1000, samples)
+	if err := writeWav(path, 1000, samples); err != nil {
+		t.Fatal(err)
+	}
 	w, err := readWav(path)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +93,7 @@ func TestMain(m *testing.M) {
 	in := bufio.NewScanner(os.Stdin)
 	for n := 0; in.Scan(); n++ {
 		path := filepath.Join(dir, fmt.Sprintf("%d.wav", n))
-		writeWav(&testing.T{}, path, 1000, make([]int16, 20*len(in.Text())))
+		writeWav(path, 1000, make([]float32, 20*len(in.Text())))
 		fmt.Println(path)
 	}
 	os.Exit(0)

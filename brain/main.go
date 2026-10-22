@@ -4,7 +4,7 @@
 //
 //	brain -piper <piper.exe> -voice <model.onnx> [-model qwen3:8b] [-scene 127.0.0.1:8805] [-mute]
 //	      [-whisper <whisper-server.exe> [-whisper-model <ggml.bin>] [-mic | -hear a.wav,b.wav]]
-//	brain -mcp [-home <dir>] [-no-scene] [-no-wake] [-hooks 127.0.0.1:8807]
+//	brain -mcp [-home <dir>] [-no-scene] [-no-wake] [-hooks 127.0.0.1:8807] [-fx warm|none]
 //
 // With -mcp, Claude is the brain instead of the local model: the brain is an MCP server for Claude Code (mcp.go,
 // voicemcp.go), which hears through the microphone and speaks through Delta's say tool.
@@ -69,6 +69,7 @@ func main() {
 	triageModel := flag.String("triage", "", "with -mcp, an Ollama model that sorts what Delta hears before Claude: it answers small talk itself, "+
 		"drops what is not for Delta and passes the rest to Claude")
 	hooksAddr := flag.String("hooks", "127.0.0.1:8807", "with -mcp, where Claude Code's hooks post what the session does, such as a compaction (hooks.go); empty for nowhere")
+	fx := flag.String("fx", "warm", "with -mcp, the effect on Delta's voice: warm, IX's closer and warmer voice (fx.go), or none")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -84,7 +85,7 @@ func main() {
 			addr = "127.0.0.1:8805"
 		}
 		runMCP(mcpConfig{home: *home, piper: *piper, voice: *voiceModel, whisper: *whisper, whisperModel: *whisperModel,
-			scene: addr, journal: *journalFile, ollama: *ollama, triage: *triageModel, hooks: *hooksAddr, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
+			scene: addr, journal: *journalFile, ollama: *ollama, triage: *triageModel, hooks: *hooksAddr, fx: *fx, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
 		return
 	}
 	if *transcribe {

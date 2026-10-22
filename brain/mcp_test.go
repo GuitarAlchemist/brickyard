@@ -92,7 +92,7 @@ func pending(m *mcpServer) int {
 	return len(m.waiting)
 }
 
-func TestMCPHandshakeDeclaresAChannelAndTwoTools(t *testing.T) {
+func TestMCPHandshakeDeclaresAChannelAndItsTools(t *testing.T) {
 	_, in, out := startServer(t, nil)
 	io.WriteString(in, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`+"\n")
 	result := next(t, out)["result"].(map[string]any)
@@ -118,7 +118,7 @@ func TestMCPHandshakeDeclaresAChannelAndTwoTools(t *testing.T) {
 	for _, tool := range list["result"].(map[string]any)["tools"].([]any) {
 		names = append(names, tool.(map[string]any)["name"].(string))
 	}
-	if strings.Join(names, ",") != "say,listen" {
+	if strings.Join(names, ",") != "say,listen,window,shelf" {
 		t.Fatalf("tools %v", names)
 	}
 
@@ -139,7 +139,7 @@ func TestMCPHandshakeDeclaresAChannelAndTwoTools(t *testing.T) {
 func TestMCPSayQueuesTheText(t *testing.T) {
 	said := make(chan string, 1)
 	_, in, out := startServer(t, func(m *mcpServer) {
-		m.speak = func(text string, _ int, _ string) (string, error) { said <- text; return "3 words, about 2 s", nil }
+		m.speak = func(text string, _ int, _, _ string) (string, error) { said <- text; return "3 words, about 2 s", nil }
 	})
 	call(in, 1, "say", `{"text":"Bonjour, je t'écoute."}`)
 	if r := next(t, out); toolText(t, r) != "Delta is saying it (say 1): 3 words, about 2 s." || isError(r) {
@@ -159,7 +159,7 @@ func TestMCPSayTiesTheAnswerToTheUtterance(t *testing.T) {
 	ids := make(chan int, 2)
 	records := make(chan map[string]any, 2)
 	_, in, out := startServer(t, func(m *mcpServer) {
-		m.speak = func(_ string, id int, _ string) (string, error) { ids <- id; return "5 words, about 3 s", nil }
+		m.speak = func(_ string, id int, _, _ string) (string, error) { ids <- id; return "5 words, about 3 s", nil }
 		m.record = func(event string, fields map[string]any) { fields["event"] = event; records <- fields }
 	})
 	call(in, 1, "say", `{"text":"Le dépôt IX est GuitarAlchemist ix.","utterance_id":"4"}`)
@@ -300,5 +300,52 @@ func TestHomePathsPreferDeltaJSONThenTheHomeLayout(t *testing.T) {
 		c.voice != filepath.Join(home, "voices", "fr_FR-siwis-medium.onnx") ||
 		c.whisperModel != filepath.Join(home, "whisper", "ggml-large-v3-turbo-q5_0.bin") {
 		t.Fatalf("%+v", c)
+	}
+}
+
+func TestMCPSayShowsAnExpression(t *testing.T) {
+	var s spoken
+	_, in, out := startServer(t, func(m *mcpServer) { m.speak = s.speak })
+	call(in, 1, "say", `{"text":"Les tests passent.","mood":"proud"}`)
+	if r := next(t, out); isError(r) {
+		t.Fatalf("%v", r)
+	}
+	call(in, 2, "say", `{"text":"Hmm.","mood":"rage"}`)
+	if r := next(t, out); !isError(r) || !strings.Contains(toolText(t, r), "joy") {
+		t.Fatalf("an unknown expression: %v", r)
+	}
+	if got := s.faces(); got != "proud" {
+		t.Fatalf("faces %q", got)
+	}
+}
+
+func TestClaudeMovesDeltasWindowAndWalksItsShelf(t *testing.T) {
+	var shown scenery
+	m, in, out := startServer(t, func(m *mcpServer) { m.show = shown.show })
+	for i, c := range []struct {
+		tool, args string
+		fails      bool
+	}{
+		{"window", `{"action":"maximize"}`, false},
+		{"window", `{"action":"dance"}`, true},
+		{"shelf", `{"move":"plugins"}`, false},
+		{"shelf", `{"move":"delete"}`, true},
+	} {
+		call(in, i+1, c.tool, c.args)
+		if r := next(t, out); isError(r) != c.fails {
+			t.Fatalf("%s %s: %v", c.tool, c.args, r)
+		}
+	}
+	if got := shown.all(); got != `{"window":"maximize"} {"shelf":"plugins"}` {
+		t.Fatalf("showed %s", got)
+	}
+	if where := m.hear(utterance{text: "Delta, descends."}, time.Now()); where != "shelf" {
+		t.Fatalf("the shelf Claude opened does not take the next move: %s", where)
+	}
+
+	_, in, out = startServer(t, nil)
+	call(in, 1, "window", `{"action":"maximize"}`)
+	if r := next(t, out); !isError(r) {
+		t.Fatalf("no window, yet %v", r)
 	}
 }

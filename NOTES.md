@@ -245,6 +245,43 @@ The author asked to see Claude's compactions and how full the context is on the 
   Claude is compacting and will answer in about a minute.
 - --demo now ends with 2.5 s of compaction, while the gauge fills; --shots saves `full` and `compacting`.
 
+## Face, window, shelf and warm voice (2026-10-22, night)
+
+The author asked, by voice and while busy, for expressions on the robot, for Delta to move its own window
+(« maximise ta fenêtre », « en haut à gauche »), for a tray icon, for a 3D replica of Claude Code's plugin and
+marketplace menu with the list of Claude Code sessions, « quelque chose qui n'encombre pas trop l'écran, quelque
+chose de hiérarchique », and for IX's warm voice. Camera gestures went to IX: the brain would take
+`POST /gesture` on 8807 with `{"gesture","hand","confidence","t_ms"}`; no answer yet.
+
+- **Face.** Brows and mouth corners join the eyes and the mouth; nine expressions are presets of the same few parts.
+  A `mood` line holds one for six seconds. Claude gives `say` a mood; the brain sends it with the first sentence's
+  `speaking` line, so that the face changes as the voice starts, not when the call is queued.
+- **Window.** The window became resizable: the swapchain is rebuilt when the framebuffer changes, and frames are
+  skipped while it is iconified or in the tray. Placement runs on the render thread, where GLFW must be called, from a
+  queue the link fills. Corners and sides are computed on the work area of the monitor the window is on, with a
+  12-pixel margin. Probed live: top-left, smaller, bottom-right, maximize (the swapchain rebuilt at 3840x2054),
+  restore, center, tray, show and minimize.
+- **Tray.** Shell_NotifyIconW with a message-only window, whose messages GLFW's PollEvents dispatches; the icon is
+  drawn in code, a 32x32 face. A click brings the window back.
+- **Shelf.** A card in the window's corner rather than a 3D object: text stays legible at any window size, and the
+  robot turns its head and points at it. Three levels at most are shown as a breadcrumb, eight rows at a time.
+  Sessions come from `~\.claude\sessions\*.json`, grouped by `wmux list-workspaces` and `list-surfaces`, those
+  `agent-state` says are waiting first; each call costs about 0.45 s, so the list loads in the background. Plugins
+  come from `installed_plugins.json` and `settings.json`, marketplaces from `known_marketplaces.json` and each
+  catalogue. The shelf closes after 45 s without a move, and the brain forgets it then too.
+- **Spoken commands.** A sentence of ten words or fewer that asks for the window or the shelf never reaches the
+  triage or Claude: the brain sends the line, says a short answer at no cost, and Claude reads the exchange as
+  `handled_locally` with the next event. A place needs a verb that moves Delta (« mets le fichier à gauche » is for
+  Claude), a section needs a verb that shows it (« ferme toutes les sessions » is for Claude), and steps through the
+  shelf count only while it is open. The shelf is checked first, so that « reviens en arrière » steps back while
+  « reviens » alone brings the window back.
+- **Warm voice.** IX's chain (GuitarAlchemist/claude-plugins `plugins/voice/service/fx.go` at fb2b2f5), ported to
+  float samples. One effect runs through all the sentences of one `say` call, so that they flow as one signal, and
+  its 0.3 s tail rings after the last; each sentence's WAV is rewritten before it plays and its envelope recomputed.
+- **End to end**, a muted, deaf brain with its own LOCALAPPDATA, so that the live Delta kept the lock, drove the new
+  scene through JSON-RPC: `say` with `joy`, `window` top-left (8,8), maximize (zoomed), restore, bottom-right
+  (1684,867), and `shelf` sessions, down and close, without an error from Piper, the effect or the scene.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -253,6 +290,9 @@ The author asked to see Claude's compactions and how full the context is on the 
   sooner.
 
 ## To verify
+
+- The warm voice by ear, live, against Piper's own (`-fx none`).
+- The spoken window and shelf commands with Whisper's real transcripts: misheard verbs fall through to Claude.
 
 - The release on another machine: unzip, the four prerequisites, `start-delta.ps1`, a conversation.
 - Transcription on the GPU: IX's CUDA 12.4 build predates the RTX 5080; a Vulkan or CUDA 12.8 build of whisper.cpp
