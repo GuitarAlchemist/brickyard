@@ -34,6 +34,15 @@ jobs:
           go vet ./...
           go test ./...
 
+      - name: Remote
+        working-directory: remote
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt: $unformatted"; exit 1; fi
+          go vet ./...
+          go test ./...
+
       - name: Scene
         working-directory: scene
         shell: pwsh
