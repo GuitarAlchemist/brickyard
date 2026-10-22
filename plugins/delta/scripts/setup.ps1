@@ -26,6 +26,21 @@ if (-not $Data) { throw 'Name the plugin data folder with -Data.' }
 $Data = [IO.Path]::GetFullPath($Data)
 $version = (Get-Content (Join-Path $PSScriptRoot '..\.claude-plugin\plugin.json') -Raw | ConvertFrom-Json).version
 $deltaDir = Join-Path $Data "delta-$version"
+
+# The user's own copies, recorded by an earlier setup, count as named again while they exist. A recorded copy that is
+# gone is forgotten and downloaded.
+$saved = @{}
+$config = Join-Path $Data 'delta.json'
+if (Test-Path $config) {
+    (Get-Content $config -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $saved[$_.Name] = $_.Value }
+}
+foreach ($key in 'piper', 'voice', 'whisper', 'whisper_model') {
+    if ($saved.ContainsKey($key) -and -not ($saved[$key] -and (Test-Path ([string]$saved[$key])))) { $saved.Remove($key) }
+}
+if (-not $Piper) { $Piper = [string]$saved['piper'] }
+if (-not $Voice) { $Voice = [string]$saved['voice'] }
+if (-not $Whisper) { $Whisper = [string]$saved['whisper'] }
+if (-not $WhisperModel) { $WhisperModel = [string]$saved['whisper_model'] }
 $voiceConfig = ''
 if ($Voice) { $voiceConfig = "$Voice.json" }
 
@@ -103,11 +118,6 @@ if ($Check) { exit 0 }
 New-Item -ItemType Directory -Force $Data | Out-Null
 
 # The user's own copies, recorded where the brain looks for them.
-$saved = @{}
-$config = Join-Path $Data 'delta.json'
-if (Test-Path $config) {
-    (Get-Content $config -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $saved[$_.Name] = $_.Value }
-}
 foreach ($part in $parts) {
     if ($part.Own -and $part.Key) { $saved[$part.Key] = [IO.Path]::GetFullPath($part.Own) }
 }
