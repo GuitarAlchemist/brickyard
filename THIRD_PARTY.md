@@ -37,3 +37,9 @@ Ollama and qwen3:8b are not used.
 | A Piper voice | See its model card. en_US-ljspeech-medium's dataset, LJ Speech, is public domain. fr_FR-siwis-medium's dataset is CC BY 4.0, and the voice was fine-tuned from lessac |
 | whisper.cpp | MIT |
 | Whisper large-v3-turbo, ggml conversion | MIT |
+| MediaPipe, for `hands\` | Apache-2.0 |
+| OpenCV (`opencv-contrib-python`, which MediaPipe requires) | Apache-2.0. Its wheel includes FFmpeg, under the LGPL |
+| MediaPipe's gesture recognizer model | Google's. Its model card names no licence; MediaPipe's code is Apache-2.0 |
+
+`/delta:setup` does not install the camera process: uv fetches MediaPipe and OpenCV when you first start it, and the
+process downloads its model.

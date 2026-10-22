@@ -176,7 +176,14 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   `{"gesture":"thumbs_up","hand":"right","confidence":0.92,"t_ms":...}`. A thumb up makes Delta smile and a thumb
   down look sorry; a wave opens the conversation, so that the next sentence needs no « Delta »; pointing up or down
   and swiping left or right walk the shelf while it is open. `open_palm` and `fist` are only recorded. Each gesture
-  is a `gesture` line in the journal. No camera process ships yet.
+  is a `gesture` line in the journal. The « je t'aime » sign, thumb, index and little finger up, sends hearts as the
+  words do.
+- `hands\delta_hands.py` is that camera process, and only you start it: `uv run hands\delta_hands.py` turns the camera
+  on until Ctrl+C. MediaPipe's gesture recognizer finds a pose held still for a third of a second, a swipe or a wave,
+  and the process posts it. Frames stay in memory: only the gesture's name, the hand, how sure it is and when are
+  posted. `--preview` shows what the camera sees, `--camera N` picks another camera. uv fetches its two pinned
+  packages, MediaPipe and OpenCV, at the first start, and the 8 MB model is downloaded once to
+  `%LOCALAPPDATA%\delta\models`, checked by SHA-256.
 - Another device can talk to Delta through a gateway on this computer, such as IX's over WebRTC. The gateway posts
   each sentence the device heard, a 16 kHz mono WAV of at most 30 s, to `POST /hear` on the same address, and plays
   what Delta says from `GET /said`, one server-sent event per sentence with its WAV. Both need the hooks' header and

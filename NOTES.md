@@ -460,6 +460,26 @@ The author asked, through the wmux relay: « quand on dit au robot « love you �
 any other: the triage or Claude still answers it. Its `heard` line carries `hearts`. Seven hearts of red cubes rise
 from the chest one after another, on either side of the face, for four seconds, while Delta smiles.
 
+## Hands, through the camera (2026-10-22, night)
+
+The author asked to bring GA's camera experiments with the hand into Delta. GA's IxHandVoicingLab runs MediaPipe Hands
+in the browser, and its hand-pose service is a stub. `hands\delta_hands.py` runs MediaPipe 1.1.1's gesture recognizer
+in Python through uv, which the author accepted, asking to keep the dependencies few: two pinned packages, MediaPipe
+and the OpenCV it requires anyway. Asked whether Go, Rust or Zig could replace it, I offered a C# port on ONNX Runtime
+if Python gets in the way.
+
+- The model's canned poses take the brain's names. Pointing down, which the model does not know, comes from the
+  landmarks: the index stretched toward the floor, the three other fingers curled. Swipes and waves come from the
+  wrist's path over the last second.
+- A pose counts once held still for 0.3 s. The same gesture is not sent again within 1.5 s, nor before the pose is
+  dropped. A hand moving shows no pose, so that a wave does not first send an open palm.
+- The brain learnt `i_love_you`: hearts and a smile, as the words.
+- A test reads `brain/gesture.go` and fails if the process can send a gesture the brain would refuse.
+- Measured without a camera: 20 blank frames in 183 ms on the CPU, about 9 ms each, under Python 3.12 and 3.14. The
+  model's download matched its SHA-256. A post of `thumbs_up` to the live brain was answered 204; that brain, older,
+  answered 400 to `i_love_you`.
+- Not yet seen with a real hand: I did not turn the camera on.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -484,3 +504,4 @@ from the chest one after another, on either side of the face, for four seconds, 
 - A live English session with a human voice: the wake word, "Delter", and the latency.
 - English for the local window and shelf commands, the triage and the compaction sentence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
+- The hands with a real camera: each pose, a swipe each way, a wave and pointing down, and the thresholds by hand.

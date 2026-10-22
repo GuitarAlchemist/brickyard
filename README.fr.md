@@ -60,6 +60,11 @@ En français, Delta obéit aussi seul à quelques phrases courtes : il déplace 
 haut à gauche », « cache-toi ») et ouvre son étagère (« Delta, montre-moi les sessions »). Le [README anglais](README.md)
 les liste toutes, et décrit le mode autonome, sans Claude Code, et le fonctionnement interne.
 
+Delta voit aussi quelques gestes de la main, quand vous le décidez : `uv run hands\delta_hands.py` allume la caméra
+jusqu'à Ctrl+C. Un pouce levé le fait sourire, le signe « je t'aime » envoie des cœurs, et un salut de la main ouvre la
+conversation. Les images restent en mémoire sur votre ordinateur : seul le nom du geste part vers le cerveau de Delta,
+sur le même ordinateur.
+
 ## Licences
 
 Le code de Delta est sous [licence MIT](LICENSE). La scène est construite avec BRUTAL, d'Ahwoo Limited, sous la
