@@ -24,6 +24,16 @@ if (@($plugin.channels | Where-Object { $_.server -eq 'delta' }).Count -ne 1) {
 if ($Version -and $plugin.version -ne $Version) {
     $failures += "plugin.json is at version $($plugin.version), not $Version"
 }
+# A tag fails in the release workflow without its notes, and only once it is public: check them with the version.
+if (-not (Test-Path (Join-Path $root "docs\releases\$($plugin.version).md"))) {
+    $failures += "docs\releases\$($plugin.version).md is missing: the release workflow publishes it as v$($plugin.version)'s notes"
+}
+$release = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'release.ps1'), [ref]$null, [ref]$null)
+$default = $release.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Version' } |
+    ForEach-Object { $_.DefaultValue.Value }
+if ($default -ne $plugin.version) {
+    $failures += "release.ps1 builds version $default by default, not the plugin's $($plugin.version)"
+}
 
 foreach ($skill in Get-ChildItem (Join-Path $root 'plugins\delta\skills') -Directory) {
     $text = Get-Content (Join-Path $skill.FullName 'SKILL.md') -Raw

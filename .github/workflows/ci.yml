@@ -21,25 +21,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Plugin, marketplace and PowerShell scripts
+      # The same script a contributor runs before pushing: the plugin, the brain, the scene.
+      - name: check.ps1
         shell: powershell
-        run: .\check-plugin.ps1
-
-      - name: Brain
-        working-directory: brain
-        shell: bash
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then echo "gofmt: $unformatted"; exit 1; fi
-          go vet ./...
-          go test ./...
-
-      - name: Scene
-        working-directory: scene
-        shell: pwsh
-        run: |
-          dotnet restore --locked-mode -r win-x64
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          dotnet build -c Release --no-restore -nologo
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          dotnet run -c Release --no-build -- --selftest
+        run: .\check.ps1
