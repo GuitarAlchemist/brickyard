@@ -1,0 +1,2 @@
+# gofmt compares bytes: Go files stay LF on Windows checkouts too, or CI's gofmt -l lists them all.
+*.go text eol=lf
