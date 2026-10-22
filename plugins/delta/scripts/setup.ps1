@@ -3,17 +3,21 @@
 #   delta-<version>\  Delta's window and brain: this repository's release for the plugin's version
 #   piper\            Piper, the voice engine (rhasspy/piper 2023.11.14-2, MIT; its Windows build includes
 #                     espeak-ng, GPL-3.0)
-#   voices\           fr_FR-siwis-medium (rhasspy/piper-voices; dataset CC BY 4.0, fine-tuned from the lessac voice)
+#   voices\           the voice of Delta's language (rhasspy/piper-voices): en_US-ljspeech-medium (LJ Speech, public
+#                     domain) for English, the default, or fr_FR-siwis-medium (dataset CC BY 4.0, fine-tuned from the
+#                     lessac voice) for French
 #   whisper\          whisper.cpp's server (b5454, MIT) and the ggml-large-v3-turbo-q5_0 model (MIT)
 #
 # Each download is checked against its SHA-256: pinned below for the third-party files, read from GitHub's release
 # metadata for Delta's own zip. -Check reports what is there and what would be downloaded, and changes nothing.
 #
+# -Language en or fr sets what Delta hears and speaks; it is recorded in delta.json, and English is the default.
 # Copies the user already has can be named instead (-Piper, -Voice, -Whisper, -WhisperModel): they are recorded in
 # delta.json and not downloaded. -Zip installs a local release zip, to test a build.
 param(
     [string]$Data = $env:CLAUDE_PLUGIN_DATA,
     [switch]$Check,
+    [ValidateSet('', 'en', 'fr')][string]$Language = '',
     [string]$Piper = '',
     [string]$Voice = '',
     [string]$Whisper = '',
@@ -41,19 +45,36 @@ if (-not $Piper) { $Piper = [string]$saved['piper'] }
 if (-not $Voice) { $Voice = [string]$saved['voice'] }
 if (-not $Whisper) { $Whisper = [string]$saved['whisper'] }
 if (-not $WhisperModel) { $WhisperModel = [string]$saved['whisper_model'] }
+
+# Delta's language: named, recorded, or for an install from before the setting, its voice's (fr_FR-… is French).
+$voices = @{
+    en = @{ Name = 'English'; File = 'en_US-ljspeech-medium'; Dir = 'en/en_US/ljspeech/medium'
+        Size = 63531379; Sha256 = '6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22'
+        JsonSize = 4972; JsonSha256 = '141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860' }
+    fr = @{ Name = 'French'; File = 'fr_FR-siwis-medium'; Dir = 'fr/fr_FR/siwis/medium'
+        Size = 63201294; Sha256 = '641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99'
+        JsonSize = 4875; JsonSha256 = '39479916c2db192b5ac9764daddd0c744d83e023ad890c6976c0633ae4df8959' }
+}
+if (-not $Language) { $Language = [string]$saved['language'] }
+if (-not $Language -and $Voice) { $Language = (Split-Path $Voice -Leaf).Substring(0, 2) }
+if (-not $Language -and (Test-Path (Join-Path $Data 'voices\fr_FR-siwis-medium.onnx')) -and
+    -not (Test-Path (Join-Path $Data 'voices\en_US-ljspeech-medium.onnx'))) { $Language = 'fr' } # 0.2.0 installed French
+if (-not $voices.ContainsKey($Language)) { $Language = 'en' }
+$lang = $voices[$Language]
+# A recorded voice of another language is not reused: Delta speaks the language it hears.
+if ($Voice -and -not $PSBoundParameters.ContainsKey('Voice') -and -not (Split-Path $Voice -Leaf).StartsWith("${Language}_")) { $Voice = '' }
 $voiceConfig = ''
 if ($Voice) { $voiceConfig = "$Voice.json" }
+$voiceUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/5041a7a49ae5b3a0f30e6837769eb03fdbb231bd/$($lang.Dir)/$($lang.File)"
 
 $parts = @(
     @{ Key = 'piper'; What = 'Piper, the voice engine'; Own = $Piper; Path = 'piper\piper.exe'; Size = 22477236
         Url = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip'
         Sha256 = 'f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea'; Folder = 'piper' },
-    @{ Key = 'voice'; What = 'the French voice fr_FR-siwis-medium'; Own = $Voice; Path = 'voices\fr_FR-siwis-medium.onnx'; Size = 63201294
-        Url = 'https://huggingface.co/rhasspy/piper-voices/resolve/5041a7a49ae5b3a0f30e6837769eb03fdbb231bd/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx'
-        Sha256 = '641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99'; Folder = '' },
-    @{ Key = ''; What = "the voice's settings"; Own = $voiceConfig; Path = 'voices\fr_FR-siwis-medium.onnx.json'; Size = 4875
-        Url = 'https://huggingface.co/rhasspy/piper-voices/resolve/5041a7a49ae5b3a0f30e6837769eb03fdbb231bd/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json'
-        Sha256 = '39479916c2db192b5ac9764daddd0c744d83e023ad890c6976c0633ae4df8959'; Folder = '' },
+    @{ Key = 'voice'; What = "the $($lang.Name) voice $($lang.File)"; Own = $Voice; Path = "voices\$($lang.File).onnx"; Size = $lang.Size
+        Url = "$voiceUrl.onnx"; Sha256 = $lang.Sha256; Folder = '' },
+    @{ Key = ''; What = "the voice's settings"; Own = $voiceConfig; Path = "voices\$($lang.File).onnx.json"; Size = $lang.JsonSize
+        Url = "$voiceUrl.onnx.json"; Sha256 = $lang.JsonSha256; Folder = '' },
     @{ Key = 'whisper'; What = "whisper.cpp's server"; Own = $Whisper; Path = 'whisper\whisper-server.exe'; Size = 21715607
         Url = 'https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-blas-bin-x64.zip'
         Sha256 = 'b1158bd10edf92c9799149a6fc5d3e58da3f495241d6fb3423088130e88ffbf3'; Folder = 'Release' },
@@ -85,6 +106,8 @@ function Test-Delta {
 }
 
 # What is there, and what is missing.
+$other = @{ en = 'fr, French'; fr = 'en, English' }[$Language]
+"Language: $($lang.Name) (-Language $other)"
 $missing = @()
 $bytes = 0
 $deltaAsset = $null
@@ -117,9 +140,11 @@ if ($Check) { exit 0 }
 
 New-Item -ItemType Directory -Force $Data | Out-Null
 
-# The user's own copies, recorded where the brain looks for them.
+# Delta's language and the user's own copies, recorded where the brain looks for them.
+$saved['language'] = $Language
 foreach ($part in $parts) {
-    if ($part.Own -and $part.Key) { $saved[$part.Key] = [IO.Path]::GetFullPath($part.Own) }
+    if (-not $part.Key) { continue }
+    if ($part.Own) { $saved[$part.Key] = [IO.Path]::GetFullPath($part.Own) } else { $saved.Remove($part.Key) }
 }
 [IO.File]::WriteAllText($config, ($saved | ConvertTo-Json)) # UTF-8 without the BOM that Go's JSON parser refuses
 

@@ -34,6 +34,6 @@ Ollama and qwen3:8b are not used.
 | Ollama | MIT |
 | qwen3:8b | Apache-2.0 |
 | Piper (rhasspy/piper, archived) | MIT. Its Windows build includes espeak-ng, which is under GPL-3.0 |
-| A Piper voice | See its model card. fr_FR-siwis-medium's dataset is CC BY 4.0, and the voice was fine-tuned from lessac |
+| A Piper voice | See its model card. en_US-ljspeech-medium's dataset, LJ Speech, is public domain. fr_FR-siwis-medium's dataset is CC BY 4.0, and the voice was fine-tuned from lessac |
 | whisper.cpp | MIT |
 | Whisper large-v3-turbo, ggml conversion | MIT |

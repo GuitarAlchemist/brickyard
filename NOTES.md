@@ -323,6 +323,51 @@ decides, and that the receiving end is Delta's.
   scene through JSON-RPC: `say` with `joy`, `window` top-left (8,8), maximize (zoomed), restore, bottom-right
   (1684,867), and `shelf` sessions, down and close, without an error from Piper, the effect or the scene.
 
+## English, and French as before (2026-10-22, evening)
+
+After the plugin's first release, the author asked: « il faut que ça marche pour les anglophones aussi », then
+« Anglais par défaut, avec support/instructions français également. Bilingue. »
+
+- **The setting.** `-lang en|fr` on the brain, `"language"` in `delta.json`, `-Language` on `setup.ps1` and `-Lang` on
+  `start-delta.ps1`. English applies when nothing says otherwise (`brain/lang.go`). The setting chooses:
+  - Whisper's `-l`;
+  - the voice;
+  - the language Claude is told to answer in, in the instructions and in the descriptions of `say` and `listen`;
+  - the standalone persona.
+- **The English voice** is en_US-ljspeech-medium, from piper-voices at the revision the French voice is pinned to
+  (5041a7a). Its model card gives its dataset, LJ Speech, as public domain. lessac's card points to the Blizzard 2013
+  licence, and amy was fine-tuned from lessac, so neither was taken.
+- **Measured with Piper's English voice into the new brain** (`-lang en -transcribe`, large-v3-turbo q5_0, CPU):
+
+  | Spoken by Piper | Heard, from sample 0 | Heard, after 0.5 s of silence |
+  |---|---|---|
+  | "Delta, what is the repository of I X?" | "What is the repository by x?" | "Delta, what is the repository by X?" |
+  | "Hey Delta, can you hear me?" | "Hey Delter, can you hear me?" | "Hey Delter, can you hear me?" |
+  | "Claude, run the tests please." | "Claude, run the tests please." | "Claude, run the tests please." |
+
+  - The clip that starts on its first word lost "Delta". The microphone's endpoint keeps audio from before the
+    speech, as the French sessions show, so this comes from the test clip.
+  - "Delter" is Whisper's spelling of a non-rhotic "Delta": `addressee` now counts it as Delta.
+  - Whisper heard one second of silence as "Thank you.". It is not dropped, because a person says it too.
+- **Addressing in English.**
+  - "I'm not talking to you", "not speaking to you" and "not for you" end the conversation.
+  - "talking to", "speaking to" or "with" before another session's name gives the sentence to that session.
+
+  The tests are in `mcp_test.go`.
+- **Setup, under PowerShell 5.1.**
+  - An install without a language, but with a recorded French voice, is read as French.
+  - A 0.2.0 install whose French voice setup downloaded is read as French too.
+  - An empty folder starts in English (693 MB).
+  - `-Language en` on a French install downloaded and verified the English voice (61 MB). It dropped the recorded
+    French voice from `delta.json` and kept `triage`.
+- **The v0.2.0 release works from an empty folder.** Its workflow published the zip. `setup.ps1` installed it into an
+  empty folder, checked it against the asset's digest, and `brain.exe -version` printed 0.2.0.
+- **Still in French only**, in Delta Live's files. In English, these requests go to Claude, which has the window and
+  shelf tools.
+  - the local window and shelf commands (`window.go`);
+  - the triage's prompt and its local answers (`triage.go`);
+  - the sentence Delta says while Claude Code compacts (`hooks.go`).
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -342,5 +387,5 @@ decides, and that the receiving end is Delta's.
 - The plugin from the published marketplace, on a machine without IX's tools:
   - `/plugin install`, then `/delta:setup` downloading everything;
   - a session with `--dangerously-load-development-channels plugin:delta@brickyard`.
-- That the release workflow publishes v0.2.0, and that `setup.ps1` installs its zip, checked against the asset's
-  digest.
+- A live English session with a human voice: the wake word, "Delter", and the latency.
+- English for the local window and shelf commands, the triage and the compaction sentence.

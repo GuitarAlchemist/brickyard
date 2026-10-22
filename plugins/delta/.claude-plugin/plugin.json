@@ -1,8 +1,8 @@
 {
   "name": "delta",
   "displayName": "Delta",
-  "version": "0.2.0",
-  "description": "Talk to Claude Code aloud, in French, on Windows: Delta, a small robot in its own window, hears your microphone and says Claude's answers.",
+  "version": "0.3.0",
+  "description": "Talk to Claude Code aloud, in English or French, on Windows: Delta, a small robot in its own window, hears your microphone and says Claude's answers.",
   "author": {
     "name": "GuitarAlchemist",
     "url": "https://github.com/GuitarAlchemist"
@@ -10,10 +10,10 @@
   "homepage": "https://github.com/GuitarAlchemist/brickyard",
   "repository": "https://github.com/GuitarAlchemist/brickyard",
   "license": "MIT",
-  "keywords": ["voice", "speech", "microphone", "channel", "french", "windows"],
+  "keywords": ["voice", "speech", "microphone", "channel", "english", "french", "windows"],
   "mcpServers": {
     "delta": {
-      "command": "${CLAUDE_PLUGIN_DATA}/delta-0.2.0/brain.exe",
+      "command": "${CLAUDE_PLUGIN_DATA}/delta-0.3.0/brain.exe",
       "args": ["-mcp", "-home", "${CLAUDE_PLUGIN_DATA}"]
     }
   },

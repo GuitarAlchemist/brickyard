@@ -75,10 +75,14 @@ func TestEarsHear(t *testing.T) {
 func TestCleanHeardDropsWhatWhisperInvents(t *testing.T) {
 	for in, want := range map[string]string{
 		" Sous-titres réalisés par la communauté d'Amara.org": "",
-		"[Musique]":                        "",
-		"(rires)":                          "",
-		" ... ":                            "",
-		" Bonjour  Delta, tu m'entends ? ": "Bonjour Delta, tu m'entends ?",
+		" Thanks for watching!":                               "",
+		"Thank you for watching.":                             "",
+		"[Musique]":                                           "",
+		"[Music]":                                             "",
+		" Hello Delta, can you hear me? ":                     "Hello Delta, can you hear me?",
+		"(rires)":                                             "",
+		" ... ":                                               "",
+		" Bonjour  Delta, tu m'entends ? ":                    "Bonjour Delta, tu m'entends ?",
 	} {
 		if got := cleanHeard(in); got != want {
 			t.Errorf("%q: got %q", in, got)

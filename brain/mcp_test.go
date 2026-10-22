@@ -317,6 +317,14 @@ func TestAddressee(t *testing.T) {
 		"Ok, c'est fait, Delta est lancé.":         "", // fifth word: not a call
 		"Il faut que tu dises à Delta de chercher": "",
 		"Les deltas du Rhône":                      "",
+		"Delta, what is IX's repository?":          "Delta",
+		"Hey Claude, run the tests.":               "Claude",
+		"Hey Delter, can you hear me?":             "Delta", // as Whisper heard it in English, 2026-10-22
+		"Gaia, start the watcher.":                 "Gaïa",
+		"I'm not talking to you, Delta.":           "someone else",
+		"That's not for you.":                      "someone else",
+		"No, I was talking to Codex.":              "Codex",
+		"The weather is nice today.":               "",
 		"":                                         "",
 	} {
 		if got := addressee(text); got != want {
@@ -344,7 +352,7 @@ func TestHomePathsPreferDeltaJSONThenTheHomeLayout(t *testing.T) {
 	c := mcpConfig{home: home, whisper: "E:\\w\\whisper-server.exe"}
 	homePaths(&c)
 	if c.piper != `D:\voices\piper.exe` || c.whisper != `E:\w\whisper-server.exe` || !c.wakeOff ||
-		c.voice != filepath.Join(home, "voices", "fr_FR-siwis-medium.onnx") ||
+		c.voice != filepath.Join(home, "voices", "en_US-ljspeech-medium.onnx") ||
 		c.whisperModel != filepath.Join(home, "whisper", "ggml-large-v3-turbo-q5_0.bin") {
 		t.Fatalf("%+v", c)
 	}

@@ -33,11 +33,6 @@ import (
 // version is set by release.ps1 (-ldflags -X main.version=...).
 var version = "dev"
 
-const persona = "Tu es Delta, le petit robot qui dirige Brickyard, une usine à logiciels qu'on pilote à la voix. " +
-	"Tu parles français, à l'oral : une ou deux phrases courtes, chaleureuses et précises, sans liste, sans markdown, " +
-	"sans emoji. Pour l'instant tu sais seulement converser : tu ne peux encore rien construire, lancer ni modifier. " +
-	"Si on te le demande, dis-le simplement et propose d'en parler."
-
 type turn struct {
 	firstToken, firstSentence, firstAudio, done time.Duration
 	answer                                      string
@@ -70,6 +65,7 @@ func main() {
 		"drops what is not for Delta and passes the rest to Claude")
 	hooksAddr := flag.String("hooks", "127.0.0.1:8807", "with -mcp, where Claude Code's hooks post what the session does, such as a compaction (hooks.go); empty for nowhere")
 	fx := flag.String("fx", "warm", "with -mcp, the effect on Delta's voice: warm, IX's closer and warmer voice (fx.go), or none")
+	lang := flag.String("lang", "", "the language Delta hears and speaks: en, the default, or fr (with -mcp, \"language\" in delta.json)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -84,12 +80,16 @@ func main() {
 		if addr == "" {
 			addr = "127.0.0.1:8805"
 		}
-		runMCP(mcpConfig{home: *home, piper: *piper, voice: *voiceModel, whisper: *whisper, whisperModel: *whisperModel,
+		runMCP(mcpConfig{home: *home, lang: *lang, piper: *piper, voice: *voiceModel, whisper: *whisper, whisperModel: *whisperModel,
 			scene: addr, journal: *journalFile, ollama: *ollama, triage: *triageModel, hooks: *hooksAddr, fx: *fx, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
 		return
 	}
+	l, err := languageOf(*lang)
+	if err != nil {
+		fail(err)
+	}
 	if *transcribe {
-		e, err := startEars(*whisper, *whisperModel, *earsPort, *threads, "Delta, Brickyard.", *audioCtx)
+		e, err := startEars(*whisper, *whisperModel, l.code, *earsPort, *threads, "Delta, Brickyard.", *audioCtx)
 		if err != nil {
 			fail(err)
 		}
@@ -134,7 +134,7 @@ func main() {
 		fail(err)
 	}
 	defer v.close()
-	if _, err := v.say("Bonjour."); err != nil {
+	if _, err := v.say(l.hello); err != nil {
 		fail(err)
 	}
 	voiceReady := time.Since(start)
@@ -147,7 +147,7 @@ func main() {
 	var e *ears
 	if *whisper != "" {
 		start = time.Now()
-		if e, err = startEars(*whisper, *whisperModel, *earsPort, *threads, "Delta, Brickyard.", *audioCtx); err != nil {
+		if e, err = startEars(*whisper, *whisperModel, l.code, *earsPort, *threads, "Delta, Brickyard.", *audioCtx); err != nil {
 			fail(err)
 		}
 		defer e.close()
@@ -159,7 +159,7 @@ func main() {
 
 	s := dialScene(*sceneAddr)
 	s.send(map[string]any{"state": "idle"})
-	history := []message{{"system", persona}}
+	history := []message{{"system", l.persona}}
 	respond := func(u utterance) {
 		if u.text == "" {
 			s.send(map[string]any{"state": "idle"})

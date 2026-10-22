@@ -1,7 +1,7 @@
 # Builds Delta for Windows x64 and packs dist\delta-<version>-win-x64.zip: the brain, the scene (self-contained, so
 # that no .NET install is needed), the launcher, and the licence and notice texts the binaries come with
 # (THIRD_PARTY.md). Needs the .NET 10 SDK and Go.
-param([string]$Version = '0.2.0')
+param([string]$Version = '0.3.0')
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $name = "delta-$Version-win-x64"

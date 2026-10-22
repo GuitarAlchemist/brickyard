@@ -1,13 +1,15 @@
 # Starts Delta: the robot's scene, then its brain, listening on the default microphone. Nothing is downloaded: each
 # program Delta needs is looked for where README.md says to put it, or given as a parameter.
 #
-#   .\start-delta.ps1 [-Type] [-Voice <voice.onnx>] [-Model qwen3:8b] [-Piper <piper.exe>]
+#   .\start-delta.ps1 [-Type] [-Lang en|fr] [-Voice <voice.onnx>] [-Model qwen3:8b] [-Piper <piper.exe>]
 #                     [-Whisper <whisper-server.exe>] [-WhisperModel <ggml.bin>] [-Ollama http://127.0.0.1:11434]
 #
-# -Type reads typed sentences instead of listening. Ctrl+C stops Delta.
+# -Type reads typed sentences instead of listening. -Lang fr makes Delta hear and speak French; English is the default,
+# and each language has its own voice in voices\. Ctrl+C stops Delta.
 param(
     [switch]$Type,
-    [string]$Voice = (Join-Path $PSScriptRoot 'voices\fr_FR-siwis-medium.onnx'),
+    [ValidateSet('en', 'fr')][string]$Lang = 'en',
+    [string]$Voice = '',
     [string]$Model = 'qwen3:8b',
     [string]$Piper = (Join-Path $PSScriptRoot 'piper\piper.exe'),
     [string]$Whisper = (Join-Path $PSScriptRoot 'whisper\whisper-server.exe'),
@@ -16,6 +18,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $scenePort = 8805
+if (-not $Voice) { $Voice = Join-Path $PSScriptRoot ('voices\' + @{ en = 'en_US-ljspeech-medium.onnx'; fr = 'fr_FR-siwis-medium.onnx' }[$Lang]) }
 
 function Test-Port([int]$port) {
     $client = New-Object Net.Sockets.TcpClient
@@ -59,7 +62,7 @@ while (-not (Test-Port $scenePort)) {
     Start-Sleep -Milliseconds 200
 }
 
-$brainArgs = @('-piper', $Piper, '-voice', $Voice, '-model', $Model, '-ollama', $Ollama, '-scene', "127.0.0.1:$scenePort")
+$brainArgs = @('-lang', $Lang, '-piper', $Piper, '-voice', $Voice, '-model', $Model, '-ollama', $Ollama, '-scene', "127.0.0.1:$scenePort")
 if ($Type) {
     Write-Host 'Type a sentence and press Enter; Ctrl+C stops Delta.'
 } else {

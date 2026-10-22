@@ -1,6 +1,8 @@
 # Delta
 
-Delta is a small robot you talk to, in French, with your voice. It stands in a brick hall drawn with Vulkan, listens on
+[Français](README.fr.md)
+
+Delta is a small robot you talk to with your voice, in English or in French. It stands in a brick hall drawn with Vulkan, listens on
 your microphone, and speaks with a local voice. It works two ways:
 
 - **As Claude Code's voice.** Delta hears you and passes what you say to your Claude Code session. Claude does the work
@@ -26,8 +28,11 @@ You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a m
    ```
 
    Since Claude Code 2.1.275, `/plugin install delta --marketplace GuitarAlchemist/brickyard` does both in one step.
-2. Run `/delta:setup`. Claude checks what is already there, tells you what it would download, and asks first.
-   - The first time, that is about 700 MB: Delta, Piper and a French voice, whisper.cpp, and a Whisper model.
+2. Run `/delta:setup`. Claude asks which language Delta should hear and speak, English (the default) or French, checks
+   what is already there, tells you what it would download, and asks first.
+   - The first time, that is about 700 MB: Delta, Piper and a voice for that language, whisper.cpp, and a Whisper
+     model.
+   - To change the language later, run `/delta:setup` again and ask for the other one.
    - If you already have Piper, whisper.cpp or the model, give Claude their paths instead.
    - Each download is checked against its SHA-256.
 3. Talk to Delta, in either of two ways:
@@ -41,7 +46,7 @@ You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a m
      Channels are a research preview, so Claude Code asks you to confirm the flag. On Team and Enterprise plans, an
      admin must allow channels first.
    - **Any session, without the flag.** Run `/delta:talk`. Claude then listens and answers in turns until you say
-     « au revoir ».
+     "goodbye" (« au revoir » in French).
 
 Delta's window opens when Claude Code starts the plugin's MCP server.
 
@@ -51,13 +56,14 @@ Which speech Delta passes on:
   - the next sentences within 15 seconds;
   - your answer within 20 seconds of its last words.
 
-  It drops a sentence that says « je ne te parle pas », or that calls one of the author's other sessions first: Brutal,
-  Gaïa, Indigo, Amber, Codex or IX. That also ends the conversation.
+  It drops a sentence that says "I'm not talking to you" or « je ne te parle pas », or that calls one of the author's
+  other sessions first: Brutal, Gaïa, Indigo, Amber, Codex or IX. That also ends the conversation.
 - **With `/delta:talk`**, everything Delta hears while Claude listens.
 
 Claude Code asks your permission the first time Claude uses Delta's `say` and `listen` tools.
 
-Delta does some things itself, without Claude, when a short sentence asks for them:
+Delta does some things itself, without Claude, when a short sentence asks for them. These local commands are in French
+for now; in English, ask Claude, which does the same with Delta's `window` and `shelf` tools:
 - **Its window.** « Delta, mets-toi en haut à gauche », « va à droite », « au centre », « maximise ta fenêtre »,
   « minimise-toi », « plein écran », « restaure ta fenêtre », « plus petit », « reste au premier plan ».
   « Cache-toi » puts it in the notification area, by the clock; « Delta, reviens » or a click on its icon brings it
@@ -87,7 +93,7 @@ or give their paths to it.
 |---|---|---|
 | Ollama and the model | [ollama.com](https://ollama.com), then `ollama pull qwen3:8b` | Ollama's own install |
 | Piper, the voice engine | `piper_windows_amd64.zip` from [rhasspy/piper 2023.11.14-2](https://github.com/rhasspy/piper/releases/tag/2023.11.14-2) | unzipped here, so that `piper\piper.exe` exists |
-| A French Piper voice | `fr_FR-siwis-medium.onnx` and `fr_FR-siwis-medium.onnx.json` from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main/fr/fr_FR/siwis/medium) | `voices\` |
+| A Piper voice | English: `en_US-ljspeech-medium.onnx` and its `.onnx.json` from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/ljspeech/medium). French: `fr_FR-siwis-medium.onnx` and its `.onnx.json` from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main/fr/fr_FR/siwis/medium) | `voices\` |
 | whisper.cpp's server, which transcribes | `whisper-blas-bin-x64.zip` from [whisper.cpp b5454](https://github.com/ggml-org/whisper.cpp/releases/tag/b5454) | `whisper\`, so that `whisper\whisper-server.exe` exists (the zip puts it in a `Release` folder: move its files up) |
 | A Whisper model | `ggml-large-v3-turbo-q5_0.bin` from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-large-v3-turbo-q5_0.bin) | `whisper\` |
 
@@ -95,8 +101,9 @@ The versions Delta was tested with have these SHA-256 hashes: `whisper-blas-bin-
 `b1158bd10edf92c9799149a6fc5d3e58da3f495241d6fb3423088130e88ffbf3`, `ggml-large-v3-turbo-q5_0.bin`
 `394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2`.
 
-Any French Piper voice works. Read its model card before using it in public: siwis's gives its dataset's licence as
-CC BY 4.0, and says the voice was fine-tuned from the English lessac voice.
+Any Piper voice in Delta's language works. Read its model card before using it in public. ljspeech's gives its
+dataset, LJ Speech, as public domain. siwis's gives its dataset's licence as CC BY 4.0, and says the voice was
+fine-tuned from the English lessac voice.
 
 ### Start
 
@@ -116,7 +123,8 @@ while it hears you, amber while it thinks, and its mouth follows its voice. Pres
 | Option | What it does |
 |---|---|
 | `-Type` | Type your sentences instead of speaking; whisper.cpp is not needed then |
-| `-Voice <file.onnx>` | Another Piper voice |
+| `-Lang fr` | Hear and speak French, with the French voice; English is the default |
+| `-Voice <file.onnx>` | Another Piper voice, in Delta's language |
 | `-Model <name>` | Another Ollama model (default `qwen3:8b`) |
 | `-Piper`, `-Whisper`, `-WhisperModel` | Paths, if the programs are elsewhere |
 | `-Ollama <url>` | Ollama's address (default `http://127.0.0.1:11434`) |

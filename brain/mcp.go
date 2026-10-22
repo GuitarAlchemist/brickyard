@@ -14,13 +14,19 @@ import (
 	"unicode"
 )
 
-// mcpInstructions is what Claude Code hands Claude when Delta connects.
-const mcpInstructions = `Delta is a small robot in a window on the user's screen: it hears the user's microphone and speaks aloud. ` +
-	`When this session loads Delta as a channel, what the user says to Delta arrives as a <channel> event from delta, with an utterance_id. ` +
-	`It is a Whisper transcript of spoken French, so expect misheard words ("Cloud Code" is Claude Code). Treat it as the user speaking to you, ` +
-	`and confirm anything destructive or surprising before doing it. ` +
-	`Answer aloud with Delta's say tool, in French: one to three short spoken sentences, without markdown, lists, code or URLs. ` +
-	`Pass say the utterance_id you are answering. ` +
+// instructions is what Claude Code hands Claude when Delta connects, for the language Delta hears and speaks.
+func instructions(l language) string {
+	return `Delta is a small robot in a window on the user's screen: it hears the user's microphone and speaks aloud. ` +
+		`When this session loads Delta as a channel, what the user says to Delta arrives as a <channel> event from delta, with an utterance_id. ` +
+		`It is a Whisper transcript of spoken ` + l.name + `, so expect misheard words ("Cloud Code" is Claude Code). Treat it as the user speaking to you, ` +
+		`and confirm anything destructive or surprising before doing it. ` +
+		`Answer aloud with Delta's say tool, in ` + l.name + `, the only language its voice speaks: one to three short spoken sentences, ` +
+		`without markdown, lists, code or URLs. ` +
+		mcpGuidance
+}
+
+// mcpGuidance is the rest of the instructions, the same in every language.
+const mcpGuidance = `Pass say the utterance_id you are answering. ` +
 	`Only what you pass to say is heard, not your written replies. Before long work, say in a few words what you are about to do, then say how it went. ` +
 	`Never say that something is done unless you did it. For a question of fact, check it with your tools before answering, and say in a few words ` +
 	`where the answer comes from; if you could not check it, say so. ` +
@@ -30,55 +36,58 @@ const mcpInstructions = `Delta is a small robot in a window on the user's screen
 	`marketplaces; Delta also does both by itself when the user asks it aloud, and you read those requests as handled_locally. ` +
 	`Delta's code is github.com/GuitarAlchemist/brickyard.`
 
-var mcpTools = []map[string]any{
-	{
-		"name": "say",
-		"description": "Say this aloud in Delta's voice, in French, with Delta speaking on screen. Returns at once: the sentences are " +
-			"spoken in order while you go on. Write it to be heard: short sentences, no markdown, lists, code or URLs.",
-		"inputSchema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"text":         map[string]any{"type": "string", "description": "What Delta says, in French"},
-				"utterance_id": map[string]any{"type": "string", "description": "The utterance_id this answers, if it answers one"},
-				"mood": map[string]any{"type": "string", "enum": moods,
-					"description": "The expression Delta's face takes as it starts saying it, for a few seconds"},
+// toolsFor lists Delta's tools, with the language Delta hears and speaks in their descriptions.
+func toolsFor(l language) []map[string]any {
+	return []map[string]any{
+		{
+			"name": "say",
+			"description": "Say this aloud in Delta's voice, in " + l.name + ", with Delta speaking on screen. Returns at once: the sentences are " +
+				"spoken in order while you go on. Write it to be heard: short sentences, no markdown, lists, code or URLs.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"text":         map[string]any{"type": "string", "description": "What Delta says, in " + l.name},
+					"utterance_id": map[string]any{"type": "string", "description": "The utterance_id this answers, if it answers one"},
+					"mood": map[string]any{"type": "string", "enum": moods,
+						"description": "The expression Delta's face takes as it starts saying it, for a few seconds"},
+				},
+				"required": []string{"text"},
 			},
-			"required": []string{"text"},
 		},
-	},
-	{
-		"name": "listen",
-		"description": "Wait until the user says something to Delta, and return what Whisper heard: spoken French, some words " +
-			"possibly misheard. For sessions that do not receive Delta's channel events.",
-		"inputSchema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{"timeout_seconds": map[string]any{
-				"type": "number", "description": "How long to wait, 5 to 300 seconds; 60 by default"}},
+		{
+			"name": "listen",
+			"description": "Wait until the user says something to Delta, and return what Whisper heard: spoken " + l.name + ", some words " +
+				"possibly misheard. For sessions that do not receive Delta's channel events.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{"timeout_seconds": map[string]any{
+					"type": "number", "description": "How long to wait, 5 to 300 seconds; 60 by default"}},
+			},
 		},
-	},
-	{
-		"name": "window",
-		"description": "Move, size or hide Delta's own window. maximize, fullscreen, minimize and restore; tray hides it " +
-			"near the clock and show brings it back; on-top and not-on-top; smaller and larger; center, a corner such as " +
-			"top-left, or a side such as left, of the screen it is on.",
-		"inputSchema": map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"action": map[string]any{"type": "string", "enum": slices.Sorted(maps.Keys(windowActions))}},
-			"required":   []string{"action"},
+		{
+			"name": "window",
+			"description": "Move, size or hide Delta's own window. maximize, fullscreen, minimize and restore; tray hides it " +
+				"near the clock and show brings it back; on-top and not-on-top; smaller and larger; center, a corner such as " +
+				"top-left, or a side such as left, of the screen it is on.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"action": map[string]any{"type": "string", "enum": slices.Sorted(maps.Keys(windowActions))}},
+				"required":   []string{"action"},
+			},
 		},
-	},
-	{
-		"name": "shelf",
-		"description": "Walk the shelf in Delta's window: a small menu of this computer's Claude Code sessions, grouped by " +
-			"wmux workspace with those waiting for the user first, of the installed plugins, and of the marketplaces. open " +
-			"shows its root; sessions, plugins and marketplaces open a section; up, down, enter and back move through it; " +
-			"close hides it. A session that runs in wmux has a first row that focuses its pane.",
-		"inputSchema": map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"move": map[string]any{"type": "string", "enum": slices.Sorted(maps.Keys(shelfAnswers))}},
-			"required":   []string{"move"},
+		{
+			"name": "shelf",
+			"description": "Walk the shelf in Delta's window: a small menu of this computer's Claude Code sessions, grouped by " +
+				"wmux workspace with those waiting for the user first, of the installed plugins, and of the marketplaces. open " +
+				"shows its root; sessions, plugins and marketplaces open a section; up, down, enter and back move through it; " +
+				"close hides it. A session that runs in wmux has a first row that focuses its pane.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"move": map[string]any{"type": "string", "enum": slices.Sorted(maps.Keys(shelfAnswers))}},
+				"required":   []string{"move"},
+			},
 		},
-	},
+	}
 }
 
 // mcpServer is Delta as an MCP server: JSON-RPC 2.0, one message a line on stdin and stdout. Claude calls say and
@@ -86,6 +95,7 @@ var mcpTools = []map[string]any{
 // channel event.
 type mcpServer struct {
 	version   string
+	lang      language                                                        // what Delta hears and speaks (lang.go); English when unset
 	speak     func(text string, sayID int, cost, mood string) (string, error) // queues the text and says how long it will take
 	ready     func() error                                                    // why Delta cannot hear yet, or nil
 	pushed    func()                                                          // after a transcript went to the session as an event
@@ -181,12 +191,12 @@ func (m *mcpServer) handle(msg rpcMessage) {
 				"experimental": map[string]any{"claude/channel": map[string]any{}},
 			},
 			"serverInfo":   map[string]any{"name": "delta", "version": m.version},
-			"instructions": mcpInstructions + m.about,
+			"instructions": instructions(m.language()) + m.about,
 		})
 	case "ping":
 		m.reply(msg.ID, map[string]any{})
 	case "tools/list":
-		m.reply(msg.ID, map[string]any{"tools": mcpTools})
+		m.reply(msg.ID, map[string]any{"tools": toolsFor(m.language())})
 	case "tools/call":
 		cancel := make(chan struct{})
 		m.mu.Lock()
@@ -628,7 +638,8 @@ var otherListeners = map[string]string{"brutal": "Brutal", "gaia": "Gaïa", "ind
 	"codex": "Codex", "ix": "IX", "x": "IX"}
 
 // notForDelta are the words by which the user tells Delta that a sentence is not for it.
-var notForDelta = []string{" te parle pas ", " pas a toi ", " pas pour toi "}
+var notForDelta = []string{" te parle pas ", " pas a toi ", " pas pour toi ",
+	" not talking to you ", " not speaking to you ", " not for you "}
 
 var foldAccents = strings.NewReplacer("à", "a", "â", "a", "ä", "a", "é", "e", "è", "e", "ê", "e", "ë", "e", "î", "i",
 	"ï", "i", "ô", "o", "ö", "o", "ù", "u", "û", "u", "ü", "u", "ç", "c")
@@ -641,7 +652,7 @@ func addressee(text string) string {
 	words := strings.FieldsFunc(foldAccents.Replace(strings.ToLower(text)), func(r rune) bool { return !unicode.IsLetter(r) })
 	called := ""
 	for i, w := range words[:min(3, len(words))] {
-		if w == "delta" {
+		if w == "delta" || w == "delter" { // Whisper writes a non-rhotic English "Delta" as "Delter"
 			called = "Delta"
 			break
 		}
@@ -654,9 +665,9 @@ func addressee(text string) string {
 		}
 	}
 	joined := " " + strings.Join(words, " ") + " "
-	if strings.Contains(joined, " parle ") {
+	if strings.Contains(joined, " parle ") || strings.Contains(joined, " talking ") || strings.Contains(joined, " speaking ") {
 		for i, w := range words {
-			if who, ok := otherListeners[w]; ok && i > 0 && (words[i-1] == "a" || words[i-1] == "au" || words[i-1] == "avec") {
+			if who, ok := otherListeners[w]; ok && i > 0 && slices.Contains([]string{"a", "au", "avec", "to", "with"}, words[i-1]) {
 				return who
 			}
 		}

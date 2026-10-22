@@ -35,7 +35,8 @@ type utterance struct {
 	asr   time.Duration
 }
 
-func startEars(server, model string, port, threads int, prompt string, audioCtx int) (*ears, error) {
+// startEars runs whisper-server on the loopback port, transcribing lang ("en" or "fr").
+func startEars(server, model, lang string, port, threads int, prompt string, audioCtx int) (*ears, error) {
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 	if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
 		c.Close()
@@ -43,7 +44,7 @@ func startEars(server, model string, port, threads int, prompt string, audioCtx 
 	}
 	// -nf: no temperature fallback. With it, a mumbled reply took 31.6 s to come back as "Euh... Oui."; a voice loop
 	// would rather have a rough transcript at once.
-	args := []string{"-m", model, "-l", "fr", "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt, "-nf"}
+	args := []string{"-m", model, "-l", lang, "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt, "-nf"}
 	if audioCtx > 0 {
 		args = append(args, "-ac", strconv.Itoa(audioCtx))
 	}
@@ -97,12 +98,14 @@ func (e *ears) close() {
 }
 
 // cleanHeard folds the transcript's spaces and drops what Whisper writes over silence or noise: a sound in brackets
-// ("[Musique]") and the subtitle credits its French training data was full of.
+// ("[Musique]", "[Music]") and the subtitle credits and sign-offs its training data was full of.
 func cleanHeard(text string) string {
 	text = strings.Join(strings.Fields(text), " ")
 	lower := strings.ToLower(text)
-	if strings.Contains(lower, "sous-titr") || strings.Contains(lower, "amara.org") {
-		return ""
+	for _, credit := range []string{"sous-titr", "amara.org", "subtitles by", "thanks for watching", "thank you for watching"} {
+		if strings.Contains(lower, credit) {
+			return ""
+		}
 	}
 	for _, pair := range []string{"[]", "()", "**"} {
 		if strings.HasPrefix(text, pair[:1]) && strings.HasSuffix(text, pair[1:]) {

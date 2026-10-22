@@ -8,7 +8,7 @@
     {
       "name": "delta",
       "source": "./plugins/delta",
-      "description": "Talk to Claude Code aloud, in French, on Windows: Delta, a small robot in its own window, hears your microphone and says Claude's answers."
+      "description": "Talk to Claude Code aloud, in English or French, on Windows: Delta, a small robot in its own window, hears your microphone and says Claude's answers."
     }
   ]
 }

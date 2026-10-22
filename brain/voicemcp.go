@@ -18,6 +18,7 @@ import (
 // mcpConfig is what -mcp runs with. -home is where setup.ps1 installed Delta's ears and voice; flags override it.
 type mcpConfig struct {
 	home, piper, voice, whisper, whisperModel string
+	lang                                      string // what Delta hears and speaks: "en" or "fr" (lang.go)
 	scene                                     string // the scene's address
 	journal                                   string // where to record what Delta heard and said, if anywhere
 	ollama, triage                            string // Ollama's address, and the model that sorts what Delta hears, if any
@@ -62,10 +63,14 @@ func runMCP(c mcpConfig) {
 	os.Stdout = os.Stderr // stdout carries JSON-RPC and nothing else
 	logf := func(format string, args ...any) { fmt.Fprintf(os.Stderr, "delta: "+format+"\n", args...) }
 	homePaths(&c)
+	lang, err := languageOf(c.lang)
+	if err != nil {
+		logf("%v", err)
+	}
 
 	var hearing sync.Mutex
 	notHearing := errors.New("Delta is still starting: its ears (whisper.cpp) are loading. Try again in a few seconds.")
-	m := &mcpServer{version: version, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
+	m := &mcpServer{version: version, lang: lang, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
 	m.gate.window = 20 * time.Second
 	m.gate.follow = 15 * time.Second
 	m.gate.off = c.wakeOff
@@ -168,7 +173,7 @@ func runMCP(c mcpConfig) {
 		if err == nil {
 			var v *voice
 			if v, err = startVoice(c.piper, c.voice, dir, "--sentence_silence", "0.1"); err == nil {
-				if _, err = v.say("Bonjour."); err == nil { // loads the voice model
+				if _, err = v.say(lang.hello); err == nil { // loads the voice model
 					logf("voice ready")
 					mo.run(v)
 					return
@@ -180,7 +185,7 @@ func runMCP(c mcpConfig) {
 	}()
 
 	go func() {
-		e, err := startEars(c.whisper, c.whisperModel, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
+		e, err := startEars(c.whisper, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
 		if err == nil {
 			_, err = e.hear(make([]float32, earsRate)) // loads the model's weights and kernels
 		}
@@ -227,6 +232,7 @@ func homePaths(c *mcpConfig) {
 		WhisperModel string `json:"whisper_model"`
 		WakeWord     *bool  `json:"wake_word"`
 		Triage       string `json:"triage"`
+		Language     string `json:"language"`
 	}
 	if data, err := os.ReadFile(filepath.Join(c.home, "delta.json")); err == nil {
 		if err := json.Unmarshal(data, &saved); err != nil {
@@ -241,8 +247,12 @@ func homePaths(c *mcpConfig) {
 			*flag = filepath.Join(append([]string{c.home}, under...)...)
 		}
 	}
+	if c.lang == "" {
+		c.lang = saved.Language
+	}
+	lang, _ := languageOf(c.lang) // runMCP reports an unknown language
 	pick(&c.piper, saved.Piper, "piper", "piper.exe")
-	pick(&c.voice, saved.Voice, "voices", "fr_FR-siwis-medium.onnx")
+	pick(&c.voice, saved.Voice, "voices", lang.voice)
 	pick(&c.whisper, saved.Whisper, "whisper", "whisper-server.exe")
 	pick(&c.whisperModel, saved.WhisperModel, "whisper", "ggml-large-v3-turbo-q5_0.bin")
 	if c.triage == "" {
