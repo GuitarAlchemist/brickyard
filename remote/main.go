@@ -36,6 +36,7 @@ type options struct {
 	ip, certFile, keyFile, name string
 	port, udpPort               int
 	title, exe, ffmpeg          string
+	brain, brainSecret          string
 	forget                      bool
 }
 
@@ -50,6 +51,9 @@ func main() {
 	flag.StringVar(&o.title, "title", "Brickyard", "the title of the window shown")
 	flag.StringVar(&o.exe, "exe", "scene.exe", "the executable that owns that window")
 	flag.StringVar(&o.ffmpeg, "ffmpeg", "ffmpeg", "ffmpeg 8 or later, with gfxcapture and libx264")
+	flag.StringVar(&o.brain, "brain", "http://127.0.0.1:8807", "Delta's brain, for voice and the QR")
+	flag.StringVar(&o.brainSecret, "brain-secret", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta", "remote.secret"),
+		"the secret the brain writes at each start")
 	flag.BoolVar(&o.forget, "forget-devices", false, "unpair every device first")
 	flag.Parse()
 
@@ -100,6 +104,7 @@ func run(o options) error {
 		return err
 	}
 	s.host = net.JoinHostPort(name, strconv.Itoa(o.port))
+	s.brain = newBrain(o.brain, o.brainSecret)
 	c, err := newCapture(o.ffmpeg, o.title, o.exe, s.video)
 	if err != nil {
 		return err

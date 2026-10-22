@@ -2,5 +2,12 @@
 body { margin: 0; background: #0b0d10; color: #e6e9ee; font: 16px system-ui, sans-serif; }
 main { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; }
 video { width: 100%; max-width: 960px; background: #000; border-radius: 8px; }
-#state { min-height: 1.4em; }
+#state { min-height: 1.4em; margin: 0; }
 button { font: inherit; padding: 12px 20px; border-radius: 8px; border: 0; background: #2b6cb0; color: #fff; }
+#talk {
+  width: 100%; max-width: 420px; padding: 20px; font-size: 18px;
+  touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+}
+#talk.on { background: #c53030; }
+#log { width: 100%; max-width: 960px; }
+#log p { margin: 6px 0; }

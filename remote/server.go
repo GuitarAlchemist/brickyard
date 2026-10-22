@@ -3,8 +3,10 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -18,6 +20,8 @@ var (
 	pageJS []byte
 	//go:embed page.css
 	pageCSS []byte
+	//go:embed recorder.js
+	recorderJS []byte
 )
 
 // The page runs its own script only, talks to its own origin only, and can be framed by nobody.
@@ -34,6 +38,11 @@ type server struct {
 	api   *webrtc.API
 	video *webrtc.TrackLocalStaticRTP
 	now   func() time.Time
+
+	brain *brain // nil: no voice and no QR
+
+	linkMu   sync.Mutex
+	linkCode string // the code Delta's window shows, until it is used or expires
 
 	mu     sync.Mutex
 	peer   *webrtc.PeerConnection
@@ -69,8 +78,42 @@ func newServerWith(home string, se webrtc.SettingEngine) (*server, error) {
 	}, nil
 }
 
-// issueCode opens pairing for one device, for two minutes.
-func (s *server) issueCode() string { return s.pair.issue(s.now()) }
+// issueCode opens pairing for one device, for two minutes, and has Delta's window show the link as a QR until the
+// code is used or expires.
+func (s *server) issueCode() string {
+	code := s.pair.issue(s.now())
+	s.showLink(code)
+	time.AfterFunc(codeLife, func() { s.hideLink(code) })
+	return code
+}
+
+func (s *server) showLink(code string) {
+	if s.brain == nil {
+		return
+	}
+	s.linkMu.Lock()
+	defer s.linkMu.Unlock()
+	s.linkCode = code
+	if err := s.brain.link("https://" + s.host + "/#code=" + code); err != nil {
+		logf("the QR: %v", err)
+	}
+}
+
+// hideLink takes the QR away if it still shows code; "" hides whatever it shows.
+func (s *server) hideLink(code string) {
+	if s.brain == nil {
+		return
+	}
+	s.linkMu.Lock()
+	defer s.linkMu.Unlock()
+	if s.linkCode == "" || (code != "" && code != s.linkCode) {
+		return
+	}
+	s.linkCode = ""
+	if err := s.brain.link(""); err != nil {
+		logf("the QR: %v", err)
+	}
+}
 
 func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
@@ -87,8 +130,11 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /{$}", static("text/html; charset=utf-8", pageHTML))
 	mux.HandleFunc("GET /page.js", static("text/javascript; charset=utf-8", pageJS))
 	mux.HandleFunc("GET /page.css", static("text/css; charset=utf-8", pageCSS))
+	mux.HandleFunc("GET /recorder.js", static("text/javascript; charset=utf-8", recorderJS))
 	mux.HandleFunc("POST /pair", s.pairDevice)
-	mux.HandleFunc("POST /offer", s.offer)
+	mux.HandleFunc("POST /offer", s.paired(s.offer))
+	mux.HandleFunc("POST /hear", s.paired(s.hear))
+	mux.HandleFunc("GET /said", s.paired(s.said))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != s.host {
 			http.Error(w, "unknown host", http.StatusForbidden)
@@ -113,6 +159,7 @@ func (s *server) pairDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	s.hideLink("")
 	http.SetCookie(w, &http.Cookie{
 		Name: deviceCookie, Value: cookie, Path: "/", MaxAge: int(deviceLife / time.Second),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
@@ -120,11 +167,81 @@ func (s *server) pairDevice(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *server) offer(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(deviceCookie); err != nil || !s.pair.known(c.Value) {
-		http.Error(w, "this device is not paired", http.StatusUnauthorized)
+// paired lets only a paired device through to h.
+func (s *server) paired(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(deviceCookie); err != nil || !s.pair.known(c.Value) {
+			http.Error(w, "this device is not paired", http.StatusUnauthorized)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// hear passes what the device said, a 16 kHz WAV, to Delta's brain, and its answer back.
+func (s *server) hear(w http.ResponseWriter, r *http.Request) {
+	wav, err := io.ReadAll(io.LimitReader(r.Body, maxHear+1))
+	if err != nil {
+		http.Error(w, "the recording did not arrive", http.StatusBadRequest)
 		return
 	}
+	if len(wav) > maxHear {
+		http.Error(w, "30 seconds at most", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if s.brain == nil {
+		http.Error(w, errNoBrain.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	resp, err := s.brain.hear(r.Context(), wav)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, io.LimitReader(resp.Body, 64<<10))
+}
+
+// said relays what Delta says, one SSE event per sentence with its WAV, for as long as the device listens.
+func (s *server) said(w http.ResponseWriter, r *http.Request) {
+	if s.brain == nil {
+		http.Error(w, errNoBrain.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	resp, err := s.brain.said(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Delta's brain answered "+resp.Status, http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (s *server) offer(w http.ResponseWriter, r *http.Request) {
 	var offer webrtc.SessionDescription
 	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&offer); err != nil || offer.Type != webrtc.SDPTypeOffer {
 		http.Error(w, "an SDP offer is needed", http.StatusBadRequest)
@@ -216,7 +333,12 @@ func (s *server) drop(pc *webrtc.PeerConnection) {
 	go pc.Close()
 }
 
+func logf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "delta-remote: "+format+"\n", args...)
+}
+
 func (s *server) close() {
+	s.hideLink("")
 	s.mu.Lock()
 	pc := s.peer
 	s.mu.Unlock()

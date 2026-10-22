@@ -2,15 +2,22 @@
 
 [English](README.md)
 
-Montre la fenêtre de Delta sur un téléphone ou un autre ordinateur, en direct, par WebRTC. Un appareil à la fois.
+Montre la fenêtre de Delta sur un téléphone ou un autre ordinateur, en direct, par WebRTC, et permet de parler avec
+Delta depuis cet appareil. Un appareil à la fois.
 
 ```powershell
 cd remote; go build; .\delta-remote.exe
 ```
 
-Il affiche un lien, `https://<adresse>:8810/#code=<code>`. Ouvre-le sur l'appareil dans les deux minutes : l'appareil
-est alors appairé et n'a plus besoin de code. Chaque démarrage affiche un nouveau code ; `-forget-devices` désappaire
-tous les appareils.
+Il affiche un lien, `https://<adresse>:8810/#code=<code>`, et la fenêtre de Delta le montre en QR code. Ouvre-le sur
+l'appareil dans les deux minutes : l'appareil est alors appairé et n'a plus besoin de code, et le QR disparaît. Chaque
+démarrage affiche un nouveau code ; `-forget-devices` désappaire tous les appareils.
+
+- **Parler :** maintiens le bouton et parle ; au relâchement, ce que le micro a entendu part vers le cerveau de Delta
+  en WAV 16 kHz (30 s au plus), qui le transcrit et le prend comme dit à Delta. Un carillon sonne dans la pièce. Les
+  réponses de Delta s'affichent et se jouent sur l'appareil au moment où Delta les dit à l'ordinateur. Les `/hear`,
+  `/said` et `/link` du cerveau exigent le secret qu'il écrit à chaque démarrage dans
+  `%LOCALAPPDATA%\delta\remote.secret` ; la passerelle le relit à chaque requête.
 
 - **Ce qu'il montre :** l'unique fenêtre visible intitulée `Brickyard` de `scene.exe`, par le `gfxcapture` de ffmpeg 8
   (la capture graphique de Windows, donc la fenêtre se voit même recouverte). Aucune fenêtre de ce genre, ou plusieurs :
@@ -24,5 +31,5 @@ tous les appareils.
 - **Ce qu'il refuse :** une requête qui nomme un autre hôte (rebinding DNS), un POST d'une autre origine, une offre d'un
   appareil non appairé, un second appareil. La page n'exécute que son propre script.
 
-Il faut ffmpeg 8 ou plus récent, avec `gfxcapture` et `libx264`, dans le PATH (ou `-ffmpeg <chemin>`). La voix vers
-Delta et depuis Delta vient ensuite, par les `/hear` et `/said` du cerveau.
+Il faut ffmpeg 8 ou plus récent, avec `gfxcapture` et `libx264`, dans le PATH (ou `-ffmpeg <chemin>`), et un cerveau
+qui a `/hear`, `/said` et `/link` pour la voix et le QR.

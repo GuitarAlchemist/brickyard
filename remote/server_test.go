@@ -218,6 +218,11 @@ func TestEveryFileThePageNamesIsServed(t *testing.T) {
 	if len(names) < 2 {
 		t.Fatalf("the page names %d files, want its script and its style", len(names))
 	}
+	modules := regexp.MustCompile(`addModule\('([^']+)'\)`).FindAllSubmatch(pageJS, -1)
+	if len(modules) != 1 {
+		t.Fatalf("page.js loads %d audio worklets, want the recorder", len(modules))
+	}
+	names = append(names, modules...)
 	for _, m := range names {
 		resp, err := http.Get(g.ts.URL + "/" + string(m[1]))
 		if err != nil {
