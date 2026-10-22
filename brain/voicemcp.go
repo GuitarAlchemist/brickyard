@@ -18,8 +18,30 @@ import (
 type mcpConfig struct {
 	home, piper, voice, whisper, whisperModel string
 	scene                                     string // the scene's address
+	journal                                   string // where to record what Delta heard and said, if anywhere
 	noScene, mute, wakeOff                    bool
 	threads, audioCtx                         int
+}
+
+// journal appends one JSON line per event, timestamped: what Delta heard and where it went, what Claude asked it to say
+// and in answer to which utterance, and when Delta said it. It ties a spoken question to its spoken answer.
+type journal struct {
+	mu sync.Mutex
+	f  *os.File
+}
+
+func (j *journal) record(event string, fields map[string]any) {
+	line := map[string]any{"t": time.Now().Format(time.RFC3339Nano), "event": event}
+	for k, v := range fields {
+		line[k] = v
+	}
+	data, err := json.Marshal(line)
+	if err != nil {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.f.Write(append(data, '\n'))
 }
 
 // runMCP is -mcp: Delta as Claude Code's voice, with Claude as its brain. It answers initialize at once and gets its
@@ -34,7 +56,8 @@ func runMCP(c mcpConfig) {
 	var hearing sync.Mutex
 	notHearing := errors.New("Delta is still starting: its ears (whisper.cpp) are loading. Try again in a few seconds.")
 	m := &mcpServer{version: version, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
-	m.gate.window = 45 * time.Second
+	m.gate.window = 20 * time.Second
+	m.gate.follow = 15 * time.Second
 	m.gate.off = c.wakeOff
 	m.ready = func() error {
 		hearing.Lock()
@@ -42,8 +65,19 @@ func runMCP(c mcpConfig) {
 		return notHearing
 	}
 
+	if c.journal != "" {
+		f, err := os.OpenFile(c.journal, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			logf("journal: %v", err)
+		} else {
+			j := &journal{f: f}
+			m.record = j.record
+			j.record("start", map[string]any{"version": version})
+		}
+	}
+
 	s := startScene(c, logf)
-	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan string, 32)}
+	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note}
 	m.speak = mo.speak
 	m.pushed = func() { // Delta looks thoughtful while Claude works, and idle again if no answer comes
 		s.send(map[string]any{"state": "thinking"})
@@ -190,11 +224,12 @@ func freePort() int {
 // the one before plays. The microphone is deaf while Delta speaks and for 300 ms after, so that Delta never hears
 // itself.
 type mouth struct {
-	s     *scene
-	gate  *wakeGate
-	mute  bool
-	queue chan string
-	busy  atomic.Bool // the microphone's: deaf while Delta speaks or while a transcript is routed
+	s      *scene
+	gate   *wakeGate
+	mute   bool
+	queue  chan said
+	record func(event string, fields map[string]any)
+	busy   atomic.Bool // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
 	pending int // say calls not yet spoken to the end
@@ -202,7 +237,13 @@ type mouth struct {
 	spoke   time.Time
 }
 
-func (mo *mouth) speak(text string) (string, error) {
+// said is one say call: its text and its number, which the journal's say, speaking and spoken events share.
+type said struct {
+	text string
+	id   int
+}
+
+func (mo *mouth) speak(text string, id int) (string, error) {
 	mo.mu.Lock()
 	failed := mo.failed
 	mo.mu.Unlock()
@@ -210,12 +251,12 @@ func (mo *mouth) speak(text string) (string, error) {
 		return "", failed
 	}
 	select {
-	case mo.queue <- text:
+	case mo.queue <- said{text, id}:
 	default:
 		return "", errors.New("Delta already has 32 things to say: wait until it has said them")
 	}
 	words := len(strings.Fields(text))
-	return fmt.Sprintf("Delta is saying it: %d words, about %.0f s.", words, 0.5+float64(words)/2.5), nil
+	return fmt.Sprintf("%d words, about %.0f s", words, 0.5+float64(words)/2.5), nil
 }
 
 func (mo *mouth) fail(err error) {
@@ -226,14 +267,15 @@ func (mo *mouth) fail(err error) {
 
 func (mo *mouth) run(v *voice) {
 	type clip struct {
-		path string
-		last bool // of its say call
+		path        string
+		say         int
+		first, last bool // of its say call
 	}
 	clips := make(chan clip, 8)
 	go func() {
-		for text := range mo.queue {
+		for s := range mo.queue {
 			var cut sentences
-			parts := cut.feed(text)
+			parts := cut.feed(s.text)
 			if rest := cut.flush(); rest != "" {
 				parts = append(parts, rest)
 			}
@@ -242,7 +284,7 @@ func (mo *mouth) run(v *voice) {
 			mo.busy.Store(true)
 			mo.mu.Unlock()
 			if len(parts) == 0 {
-				clips <- clip{last: true}
+				clips <- clip{say: s.id, first: true, last: true}
 			}
 			for i, part := range parts {
 				path, err := v.say(part)
@@ -250,11 +292,14 @@ func (mo *mouth) run(v *voice) {
 					fmt.Fprintln(os.Stderr, "delta: voice:", err)
 					path = ""
 				}
-				clips <- clip{path: path, last: i == len(parts)-1}
+				clips <- clip{path: path, say: s.id, first: i == 0, last: i == len(parts)-1}
 			}
 		}
 	}()
 	for c := range clips {
+		if c.first {
+			mo.record("speaking", map[string]any{"say_id": c.say, "muted": mo.mute})
+		}
 		if c.path != "" {
 			if w, err := readWav(c.path); err == nil {
 				mo.s.send(map[string]any{"state": "speaking", "seconds": w.seconds, "envelope": w.envelope})
@@ -265,6 +310,7 @@ func (mo *mouth) run(v *voice) {
 			os.Remove(c.path)
 		}
 		if c.last {
+			mo.record("spoken", map[string]any{"say_id": c.say})
 			mo.finished()
 		}
 	}

@@ -105,9 +105,16 @@ faut, la CI/CD, les plugins, la marketplace, les GitHub release ».
 
 - `brain.exe -mcp` serves Claude Code over stdio with two tools, `say` and `listen`, and a channel.
   - A sentence goes to the oldest waiting `listen`.
-  - With no `listen` waiting, it goes to the session as a channel event, but only if "Delta" is in its first five
-    words, or if it comes within 45 s of Delta's last words or of the last sentence passed on (`-no-wake` lifts this).
+  - With no `listen` waiting, it goes to the session as a channel event, but only if one of its first three words
+    calls Delta, or if it comes within 15 s of a sentence that did, or within 20 s of Delta's last words.
+  - A sentence that calls Claude, Gaïa, Indigo, Amber or Codex first, says it is for one of them ("je parle à
+    Claude"), or tells Delta it is not for it ("je ne te parle pas") is dropped, and ends the conversation.
+    `-no-wake` lets everything else through.
   - Otherwise it is dropped.
+  - `-journal <file>` records, one JSON line each:
+    - each sentence heard, with its `utterance_id`, where it went and why;
+    - each `say` call, with the `utterance_id` it answers;
+    - when Delta started and finished saying it.
   - stdout carries only JSON-RPC.
   - Piper and whisper-server run with no console and die with the brain (Windows job).
 - The marketplace is `.claude-plugin/marketplace.json`; the plugin is `plugins/delta`.
@@ -135,6 +142,28 @@ Measured:
   - it heard a sentence at 14.4 s and exited 0 when stdin closed.
 - Silence was transcribed once as "Voirte.". Through the channel the wake gate drops such words; under `/delta:talk`
   Claude receives them.
+
+## First live session through Claude Code (2026-10-22, afternoon)
+
+The author ran a real Claude Code session with Delta's channel (`server:delta`, the plugin's brain, journal on). The
+journal of the first 12 minutes, 23 sentences heard and 14 said:
+
+- Before the first "Delta", sentences 1 to 5 were dropped, among them a Whisper hallucination in Korean.
+- Answers were tied to their questions: 10 of the 14 `say` calls carried the `utterance_id` they answered (not 7, 11,
+  12 and 14).
+- A question of fact was checked before it was answered. "Ok, est-ce que tout doit être transmis à Claude Code…"
+  (utterance 12) got « je regarde comment Delta est configuré » 4.3 s later, then 2 min later an answer starting
+  « Voici la règle, d'après les notes de commit de Delta ».
+- A short answer started 4.0 s after its transcript (utterance 9), about 6 s after the end of the sentence; the
+  transcription itself took 1.7 to 2.4 s.
+- The 45 s window, extended by every sentence let through, kept the channel open while the author talked to others.
+  "Ok Gaia, tais-toi parce que Delta parle" and "Non, Gaia, je vais toujours à d'altar" reached the session, as did
+  "Ok, c'est fait, Delta est lancé", said to the Claude session in the terminal.
+- "Delta, je ne te parle pas" would have been let through as calling Delta.
+
+The author asked for that to stop: « Quand je parle à Claude, c'est à Claude que je parle, c'est pas à Delta. Delta,
+je ne te parle pas, et Gaïa, je ne te parle pas non plus. » The wake gate now ends the conversation on a sentence for
+someone else, and no longer stretches on sentences that do not call Delta. `TestAddressee` holds those sentences.
 
 ## Known problems
 

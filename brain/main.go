@@ -65,6 +65,7 @@ func main() {
 	home := flag.String("home", "", "with -mcp, where setup.ps1 installed Piper, a voice and whisper.cpp")
 	noScene := flag.Bool("no-scene", false, "with -mcp, do not open Delta's window")
 	noWake := flag.Bool("no-wake", false, "with -mcp, send everything heard to Claude, not only what follows \"Delta\"")
+	journalFile := flag.String("journal", "", "with -mcp, append what Delta hears and says to this file, one JSON line each")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -80,7 +81,7 @@ func main() {
 			addr = "127.0.0.1:8805"
 		}
 		runMCP(mcpConfig{home: *home, piper: *piper, voice: *voiceModel, whisper: *whisper, whisperModel: *whisperModel,
-			scene: addr, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
+			scene: addr, journal: *journalFile, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
 		return
 	}
 	if *transcribe {
