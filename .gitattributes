@@ -1,2 +1,4 @@
 # gofmt compares bytes: Go files stay LF on Windows checkouts too, or CI's gofmt -l lists them all.
 *.go text eol=lf
+# Git runs hooks with sh, which a carriage return at the end of each line breaks.
+.githooks/* text eol=lf
