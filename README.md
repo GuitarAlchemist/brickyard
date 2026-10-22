@@ -65,7 +65,7 @@ Delta does some things itself, without Claude, when a short sentence asks for th
 - **Its shelf**, a small menu in its window. « Delta, montre-moi les sessions » lists this computer's Claude Code
   sessions, grouped by wmux workspace, those waiting for you first. « Montre les plugins » and « montre les
   marketplaces » list what is installed. While the shelf is open, « descends », « monte », « ouvre » and « retour »
-  move through it without « Delta », and « ferme le menu » closes it. Tab or M opens it with the keyboard too, then
+  move through it, without « Delta » within 20 seconds of the last step, and « ferme le menu » closes it. Tab or M opens it with the keyboard too, then
   the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session that runs in wmux,
   « Aller à cette session » shows its pane.
 
