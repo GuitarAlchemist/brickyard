@@ -155,6 +155,11 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   nuit » makes it sleepy, and it dozes off after four minutes of quiet.
 - Delta speaks with IX's warm voice: the same Piper voice through an equaliser, a gentle compressor, a touch of
   saturation and a small room (`brain\fx.go`). `-fx none` gives Piper's own voice.
+- A camera process can post hand gestures to the same address, `POST /gesture` with the same header:
+  `{"gesture":"thumbs_up","hand":"right","confidence":0.92,"t_ms":...}`. A thumb up makes Delta smile and a thumb
+  down look sorry; a wave opens the conversation, so that the next sentence needs no « Delta »; pointing up or down
+  and swiping left or right walk the shelf while it is open. `open_palm` and `fist` are only recorded. Each gesture
+  is a `gesture` line in the journal. No camera process ships yet.
 - whisper.cpp's server then runs on a free port.
 
 The marketplace is [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json). A tag `v<version>` builds the

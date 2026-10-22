@@ -147,6 +147,7 @@ func runMCP(c mcpConfig) {
 		},
 	}
 	m.busy = h.busy
+	h.gesture = func(g gesture) { m.gesture(g, time.Now()) }
 	if c.hooks != "" {
 		go h.serve(c.hooks)
 	}

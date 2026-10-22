@@ -250,8 +250,8 @@ The author asked to see Claude's compactions and how full the context is on the 
 The author asked, by voice and while busy, for expressions on the robot, for Delta to move its own window
 (« maximise ta fenêtre », « en haut à gauche »), for a tray icon, for a 3D replica of Claude Code's plugin and
 marketplace menu with the list of Claude Code sessions, « quelque chose qui n'encombre pas trop l'écran, quelque
-chose de hiérarchique », and for IX's warm voice. Camera gestures went to IX: the brain would take
-`POST /gesture` on 8807 with `{"gesture","hand","confidence","t_ms"}`; no answer yet.
+chose de hiérarchique », and for IX's warm voice. Camera gestures were offered to IX, which answered that they are outside its current slice, that the author
+decides, and that the receiving end is Delta's.
 
 - **Face.** Brows and mouth corners join the eyes and the mouth; nine expressions are presets of the same few parts.
   A `mood` line holds one for six seconds. Claude gives `say` a mood; the brain sends it with the first sentence's
@@ -278,6 +278,12 @@ chose de hiérarchique », and for IX's warm voice. Camera gestures went to IX: 
 - **Warm voice.** IX's chain (GuitarAlchemist/claude-plugins `plugins/voice/service/fx.go` at fb2b2f5), ported to
   float samples. One effect runs through all the sentences of one `say` call, so that they flow as one signal, and
   its 0.3 s tail rings after the last; each sentence's WAV is rewritten before it plays and its envelope recomputed.
+- **Gestures, the receiving end.** `POST /gesture` on the hooks' address, behind the same header, takes
+  `{"gesture","hand","confidence","t_ms"}`. Nine gestures are known; an unknown one gets 400. Below 0.6 confidence a
+  gesture is recorded and not acted on. The journal line keeps the camera's time as `seen_ms`, since `t_ms` is the
+  journal's own, and says what the gesture did (`does`) or why not (`why`). IX's delta@1 copies every top-level field,
+  so the lines reach IX without a change there. Which process watches the camera, and with what model, is the
+  author's call.
 - **End to end**, a muted, deaf brain with its own LOCALAPPDATA, so that the live Delta kept the lock, drove the new
   scene through JSON-RPC: `say` with `joy`, `window` top-left (8,8), maximize (zoomed), restore, bottom-right
   (1684,867), and `shelf` sessions, down and close, without an error from Piper, the effect or the scene.

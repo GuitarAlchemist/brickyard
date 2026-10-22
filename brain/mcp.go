@@ -500,10 +500,7 @@ func (m *mcpServer) command(text string, fields map[string]any, now time.Time) s
 	if m.show == nil {
 		return ""
 	}
-	m.mu.Lock()
-	open := !m.shelfAt.IsZero() && now.Sub(m.shelfAt) < shelfIdle
-	m.mu.Unlock()
-	if move := shelfCommand(text, open); move != "" {
+	if move := shelfCommand(text, m.shelfOpen(now)); move != "" {
 		fields["shelf"] = move
 		m.walkShelf(move, now)
 		m.gate.open(now) // the user walks the shelf without saying Delta at each step
@@ -517,6 +514,13 @@ func (m *mcpServer) command(text string, fields map[string]any, now time.Time) s
 		return "window"
 	}
 	return ""
+}
+
+// shelfOpen says whether the shelf is open: it moved less than shelfIdle ago, and was not closed since.
+func (m *mcpServer) shelfOpen(now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !m.shelfAt.IsZero() && now.Sub(m.shelfAt) < shelfIdle
 }
 
 // walkShelf sends the shelf a move, and keeps when it last moved: the scene closes it after shelfIdle without one.

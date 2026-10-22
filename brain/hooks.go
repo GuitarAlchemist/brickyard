@@ -41,6 +41,7 @@ type hooks struct {
 	compacting func(trigger string)
 	compacted  func(trigger string, seconds float64)
 	context    func(used, limit int)
+	gesture    func(g gesture) // a gesture a camera process posted (gesture.go)
 	logf       func(string, ...any)
 	maxCompact time.Duration // after which a compaction that no hook ended is taken as over
 
@@ -192,6 +193,25 @@ func (h *hooks) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent) // nothing on curl's stdout, which some hooks add to Claude's context
 		go h.handle(p)
+	})
+	mux.HandleFunc("/gesture", func(w http.ResponseWriter, r *http.Request) { // gesture.go
+		if r.Method != http.MethodPost || r.Header.Get(hookHeader) == "" {
+			http.Error(w, "a gesture posts its JSON with the "+hookHeader+" header", http.StatusForbidden)
+			return
+		}
+		var g gesture
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&g); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, ok := gestures[g.Gesture]; !ok {
+			http.Error(w, "unknown gesture "+strconv.Quote(g.Gesture), http.StatusBadRequest)
+			return
+		}
+		if h.gesture != nil {
+			h.gesture(g) // in order: a step through the shelf follows the one before
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
 }
