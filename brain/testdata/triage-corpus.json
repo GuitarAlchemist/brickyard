@@ -1,0 +1,252 @@
+[
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Cool.",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Qu'est-ce que tu peux faire ?",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Ok Gaia, tais-toi parce que Delta parle.",
+  "want": "ignore"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Ok.",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "하게.",
+  "want": "ignore"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Merci Delta, c'est parfait.",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Ok, est-ce qu'on peut le développer maintenant ?",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Salut Delta !",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Delta, lance les tests du brain.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Chérie, tu peux fermer la porte ?",
+  "want": "ignore"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Hmm.",
+  "want": "ignore"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Ah!",
+  "want": "ignore"
+ },
+ {
+  "recent": [
+   "User: Delta, on peut migrer ?",
+   "Delta: Je peux lancer la migration sur la base de test. Je le fais ?"
+  ],
+  "text": "Ok.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "User: Delta, on peut migrer ?",
+   "Delta: Je peux lancer la migration sur la base de test. Je le fais ?"
+  ],
+  "text": "Oui vas-y.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "User: Delta, on peut migrer ?",
+   "Delta: Je peux lancer la migration sur la base de test. Je le fais ?"
+  ],
+  "text": "Non, attends.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Il fait quel temps demain à Montréal ?",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Bonne nuit Delta.",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Je pense qu'on devrait plutôt utiliser Haiku pour ça.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Oui, c'est bien, Delta. Tu as compris que le message était pour toi et pas pour Gaia. C'est cool. Oui, c'est bien, Delta. Tu as compris que le message était pour toi et pas pour Gaia. C'est cool.",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Attends, je reviens.",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Gaia, lance le watcher.",
+  "want": "ignore"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Non, Gaia, je vais toujours à d'altar.",
+  "want": "ignore"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Ok, Claude, essaie d'améliorer tous les points de la rétro.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Ok, Claude, répare tous les trucs notés dans la repo.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Alors pour le point 1, je ne comprends pas de quoi tu parles.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Delta, demande à Claude de lancer les tests.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "User: Ok cool.",
+   "Delta: Super."
+  ],
+  "text": "Ah d'accord, donc je vois quand tu as un truc orange qui s'affiche mais pas Cloud Code, c'est toi-même qui réfléchis, c'est ça ?",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Ne joue pas au perroquet.",
+  "want": "local"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Est-ce que tu es capable de faire des trucs comme des pirouettes ?",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Alors un truc que j'aime pas c'est que tu as l'air de tout transmettre à Claude Code sans essayer de comprendre toi-même.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Alors Delta, est-ce que tu penses que tu aurais besoin d'un modèle plus puissant ?",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Alors, tu as l'air de tronquer les phrases que tu envoies à Claude.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: La session IX a répondu. Son control plane est un bus d'événements, pas encore une boucle agentique.",
+   "User: Ouais, Ollama n'aura pas grande connaissance de notre système."
+  ],
+  "text": "Ok, mais fais collaborer les deux.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: Parfait, le son passe."
+  ],
+  "text": "Sinon, Delta, est-ce que tu es satisfait ou satisfaite de ton apparence ? Sinon, on peut l'améliorer.",
+  "want": "claude"
+ },
+ {
+  "recent": [
+   "Delta: C'est prêt. J'ai fermé ma fenêtre, tu peux reconnecter Delta dans le menu MCP."
+  ],
+  "text": "Delta n'entend plus rien.",
+  "want": "claude"
+ }
+]

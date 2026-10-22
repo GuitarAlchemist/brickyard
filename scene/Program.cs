@@ -5,7 +5,8 @@
 //
 //	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--hidden] [--immediate] [--cap N] | --selftest
 //
-// --demo plays idle, thinking and speaking in a loop without the brain, and --shots DIR saves a PNG of each. The scene
+// --demo plays idle, listening, thinking, speaking and a compaction in a loop without the brain, while the context
+// gauge fills, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
 //
@@ -147,7 +148,7 @@ internal static unsafe class Stage
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
         var shotsDir = Option(args, "--shots");
         const double S = Splash.Seconds;
-        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking")];
+        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting")];
         if (shots.Length > 0 && !demo)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
@@ -553,9 +554,9 @@ internal static unsafe class Stage
                 link.Demo(linkNow);
             }
 
-            var (state, level) = link.Read(linkNow);
+            var moment = link.Read(linkNow);
             var time = (float)now;
-            robot.Pose(time, dt, state, level, worlds, glows);
+            robot.Pose(time, dt, moment, worlds, glows);
 
             // The camera drifts a little from side to side in front of the robot, at the height of its face.
             var eye = new SN.Vector3(0.45f * MathF.Sin(time * 0.11f), 1.08f + (0.04f * MathF.Sin(time * 0.07f)), 2.55f);
@@ -678,7 +679,7 @@ internal static unsafe class Stage
                 var path = Path.Combine(shotsDir!, shots[shot].Name + ".png");
                 var bgra = surfaceFormat.Format.ToString().StartsWith("B8G8R8", StringComparison.Ordinal);
                 Png.Save(path, new ReadOnlySpan<byte>((byte*)readbackMapped, (int)(extent.Width * extent.Height * 4)), extent.Width, extent.Height, bgra);
-                Console.WriteLine($"SCENE shot {path} at {now:F2} s ({state}, level {level:F2})");
+                Console.WriteLine($"SCENE shot {path} at {now:F2} s ({moment.State}, level {moment.Level:F2}, context {moment.Context:F2}{(moment.Compacting ? ", compacting" : "")})");
                 shot++;
                 lastPresent = clock.Elapsed.TotalSeconds; // the capture's wait is not a frame time
             }

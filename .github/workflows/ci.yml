@@ -38,6 +38,8 @@ jobs:
         working-directory: scene
         shell: pwsh
         run: |
-          dotnet build -c Release --locked-mode -nologo
+          dotnet restore --locked-mode -r win-x64
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          dotnet build -c Release --no-restore -nologo
           if ($LASTEXITCODE -ne 0) { exit 1 }
           dotnet run -c Release --no-build -- --selftest

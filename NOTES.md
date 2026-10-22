@@ -136,6 +136,115 @@ Measured:
 - Silence was transcribed once as "Voirte.". Through the channel the wake gate drops such words; under `/delta:talk`
   Claude receives them.
 
+## Local triage and the cost lamp (2026-10-22, afternoon)
+
+Live, the wake gate let everything through once a conversation had started: « Cool. », « Ah! », sentences meant for
+Gaia or for Claude in another window. The author asked for a cheaper model to read what Delta hears first and pass
+only the rest to Claude, and for a small indicator of when an answer is free and when it costs.
+
+- `-triage <ollama model>` (or `"triage"` in `delta.json`) sorts each sentence the wake gate lets through, before the
+  channel:
+  - two rules need no model: fillers and artefacts (« Ah! », « Hmm. », another script) are dropped, and so is a
+    sentence that calls Gaia, Claude or Codex among its first three words without calling Delta among its first five;
+  - when Claude's last words ended with a question mark, the next sentence goes to Claude untriaged, since a bare
+    « ok » is then an answer;
+  - otherwise the model answers `ignore`, `local` with a short answer that Delta speaks at no cost, or `claude`;
+  - a failure, or no verdict within 4 s, sends the sentence to Claude;
+  - the next channel event carries what was handled locally in its `handled_locally` meta;
+  - the journal records each verdict and its time.
+- The schema is written out in order: Go sorts a map's keys, Ollama generates in the schema's order, and with
+  `answer` before `route` qwen3:8b answered first and routed « Delta, lance les tests » to itself.
+- The scene takes an optional `"cost":"free"|"paid"` on its lines. A lamp above the chest panel is dark at rest,
+  green while the local model answers, and gold while Claude thinks or speaks. The author then asked for a Claude Code
+  sign when a sentence goes to Claude: a terracotta eight-pointed star grows in beside the head while the cost is
+  `paid`, turns slowly, and shrinks away after.
+
+Measured:
+
+- qwen3:8b through Ollama: 0.2 s a verdict once loaded, 13 s cold; the brain loads it at start.
+- On 21 sentences from this session, the model alone sorted 16 right. Of the 5 misses, 4 are covered by the rules
+  above, and the last one sent to Claude a sentence meant for someone else, which costs tokens but loses nothing.
+- 9 new Go tests: small talk, dropping, fillers, failure and slowness, Claude's question, `handled_locally`, the
+  verdict's parsing, the Ollama request, the other-assistant rule. The scene's selftest checks the cost field.
+- Live, after `/mcp` reconnected delta: « Salut Delta ! » got « Salut ! » from qwen3:8b, the lamp lit green, and Claude
+  received it in `handled_locally` with the next sentence.
+- That reconnect started the new brain but left the old one running, a child of the same claude.exe: both heard the
+  microphone, both sent channel events, and two whisper-servers sharing the CPU took a transcription from about 2 s to
+  8.5 s. Stopping the old brain ended it. Whether Claude Code kept its stdin open is not established.
+
+## After the first live hour of the triage (2026-10-22, afternoon)
+
+The journal showed the small model going wrong in four ways, and the author asked to fix the retrospective's points.
+Each fix is a rule in code, not a prompt change alone:
+
+- It parroted: « Ok cool. » answered « Ok cool. », and a whole question came back word for word. An answer that
+  shares four in five of its words with the sentence is not said, except a greeting returned.
+- It kept a question, « c'est toi-même qui réfléchis, c'est ça ? ». A sentence with a question mark goes to Claude.
+- It promised work: « Ok, mais fais collaborer les deux. » got « D'accord, je m'en occupe. ». An answer that takes on
+  work, such as « je m'en occupe » or « je vais », sends the sentence to Claude instead.
+- It answered « Ok. » and « Cool. » with « De rien. ». Acknowledgement words alone are now kept silently, without the
+  model.
+- It kept « Delta n'entend plus rien. » and answered « D'accord. ». Only a sentence with a word of small talk, such as
+  merci, salut, bonne nuit, bravo or attends, may now stay with the small model; the rest goes to Claude.
+- The rule written first, that a sentence calling Claude is for another window, was wrong. « Ok, Claude, améliore la
+  rétro » was dropped, and the author had to type it. « Claude » is now a wake word, like « Delta », that skips the
+  triage. Gaia, Codex and IX are the other assistants. Whisper writes IX, which the author says « ixe », as « X ».
+- Piper read « IX » as « neuf romain ». Delta now says « ixe », and Whisper hears its clip as « X ». Whisper's prompt
+  names IX and Gaia.
+
+Around it:
+
+- One Delta at a time on the machine: a new brain writes its pid to `%LOCALAPPDATA%\delta\brain.pid`, whatever its
+  `-home`, and an older brain that sees another pid tells its session on the channel, then stops. `/mcp` reconnects
+  twice left the old brain running beside the new one, and the author asked that two Delta sessions never run at once.
+  A first version kept the file beside `delta.json`, which left the installed plugin and a dev build free to run
+  together; new brains still write there once, to stop brains of that version.
+- While Delta listens, pads on its ears stand out and light green. The author asked for an ear sign, since green eyes
+  were the only one.
+- Each journal line carries `pid`, `journal_seq` and `t_ms`, for IX's planned `delta@1` probe, which tails the journal.
+- The MCP instructions name the repository and, with `-journal`, the journal's path.
+- `brain/testdata/triage-corpus.json` holds 34 sentences heard live with their right route. `TestTriageCorpus` runs
+  them through the real model when `DELTA_TRIAGE_OLLAMA` is set. It fails on a sentence lost to Claude or answered
+  for someone else.
+- `.githooks/pre-commit` runs CI's checks on the parts a commit touches. `ci.yml` built the scene with
+  `dotnet build --locked-mode`, which SDK 10.0.113 refuses as an unknown switch: CI never ran, being unpushed, and
+  would have failed. It now restores with `--locked-mode -r win-x64`, since the lock file holds the win-x64 graph that `release.ps1`'s
+  publish writes, then builds with `--no-restore`. A plain `dotnet build` rewrites the lock file without that graph.
+- `dev-deploy.ps1` builds the checkout into `delta-dev-<git describe>` beside the installed Delta and points an
+  `.mcp.json` at it.
+- The author asked for a body of Mac minis: the torso is fourteen of them, two to a layer, each with a foot, a port
+  slot and a status light that breathes and flickers with the voice; each arm is four small ones.
+
+Measured:
+
+- qwen3:8b on the corpus: 33 of 35 right. Both misses go to Claude, which costs tokens but loses nothing.
+- After the second deploy, Delta seemed deaf for about a minute: the CPU was at 100%, com.docker.backend taking about
+  10 of 24 cores, and the new brain's whisper-server took that long to load. Transcriptions then took 18 to 54 s
+  instead of about 2 s.
+- The Go tests pass, and so do the scene's selftest and the hook.
+
+## Context gauge and compaction (2026-10-22, evening)
+
+The author asked to see Claude's compactions and how full the context is on the robot. A compaction had just taken
+92 s, during which Delta seemed slow and Claude heard nothing.
+
+- The lights of the 14 Mac minis are now a gauge, one part per layer of two. Fill is used / limit. used is what
+  Claude's last answer read and wrote (input, cache read, cache creation and output tokens), from the end of the
+  transcript, or a compaction's postTokens. limit is the preTokens of the transcript's last automatic compaction,
+  which is where this session's model and settings compact. Before one, it is CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (95 %
+  without it) of CLAUDE_CODE_AUTO_COMPACT_WINDOW or of a million tokens. Here the override is 40 % and the window a
+  million: the first compaction came at 392,630 tokens.
+- The brain finds the transcript without hooks. Its parent is claude.exe, whose `~\.claude\sessions\<pid>.json`
+  names the session, and the transcript is `~\.claude\projects\<cwd with dashes>\<session>.jsonl`. It reads it when
+  it grows, at most every 5 s.
+- Only the start of a compaction needs a hook: nothing is written to the transcript until it ends. PreCompact,
+  PostCompact and SessionStart (compact) run one curl that posts the hook's JSON to the brain. The brain answers 204,
+  so that curl prints nothing, and refuses a post without the X-Delta-Hook header, which a web page cannot send. A
+  hook from another session is ignored. A compaction no hook ends is over after 10 minutes.
+- A sentence for Claude during a compaction still goes to Claude, and Delta also says, once per compaction, that
+  Claude is compacting and will answer in about a minute.
+- --demo now ends with 2.5 s of compaction, while the gauge fills; --shots saves `full` and `compacting`.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

@@ -1,0 +1,29 @@
+#!/bin/sh
+# CI's checks on the parts a commit touches, run before it leaves the machine: gofmt, vet and the tests for the brain,
+# the build and selftest for the scene, check-plugin.ps1 for the plugin and the marketplace. Enable once per clone:
+#   git config core.hooksPath .githooks
+set -e
+root=$(git rev-parse --show-toplevel)
+staged=$(git diff --cached --name-only)
+touches() { printf '%s\n' "$staged" | grep -q -E "$1"; }
+
+if touches '^brain/'; then
+	cd "$root/brain"
+	unformatted=$(gofmt -l .)
+	if [ -n "$unformatted" ]; then
+		echo "pre-commit: gofmt -l lists: $unformatted (a Windows editor or script may have written CRLF)" >&2
+		exit 1
+	fi
+	go vet ./...
+	go test ./... >/dev/null || { echo "pre-commit: go test failed; run it in brain/ to see why" >&2; exit 1; }
+fi
+if touches '^scene/'; then
+	cd "$root/scene"
+	dotnet restore --locked-mode -r win-x64 >/dev/null || { echo "pre-commit: the scene's packages differ from packages.lock.json" >&2; exit 1; }
+	dotnet build -c Release --no-restore -nologo >/dev/null || { echo "pre-commit: the scene does not build" >&2; exit 1; }
+	dotnet run -c Release --no-build -- --selftest
+fi
+if touches '^(plugins/|\.claude-plugin/|check-plugin\.ps1)'; then
+	cd "$root"
+	powershell -NoProfile -ExecutionPolicy Bypass -File check-plugin.ps1
+fi

@@ -111,7 +111,8 @@ while it hears you, amber while it thinks, and its mouth follows its voice. Pres
   soon as it is ready.
 - `scene\` is in C# and draws with Vulkan through [BRUTAL](https://github.com/ahwootech/BRUTAL). The brain tells it what Delta
   is doing with one JSON line per change on 127.0.0.1:8805. The line can be `{"state":"idle"}`, `"listening"` or
-  `"thinking"`, or `{"state":"speaking","seconds":S,"envelope":[...]}` with the voice's loudness every 20 ms.
+  `"thinking"`, or `{"state":"speaking","seconds":S,"envelope":[...]}` with the voice's loudness every 20 ms. A line
+  can also carry `"context":{"used":tokens,"limit":tokens}` and `"compacting":true` or `false`.
 
 The brain starts whisper.cpp's server itself and stops it when it exits.
 
@@ -119,9 +120,22 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
 ([plugins/delta](plugins/delta)).
 - It gives Claude two tools: `say` speaks a text and returns at once; `listen` waits for the next sentence.
 - It declares a Claude Code channel. A sentence that no `listen` is waiting for is pushed into the session as a
-  channel event, if it starts with "Delta" or comes soon after Delta spoke.
+  channel event, if it starts with "Delta" or "Claude" or comes soon after Delta spoke.
+- With `-triage <model>`, or `"triage"` in `delta.json`, a small Ollama model sorts those sentences first. It answers
+  greetings and thanks itself at no cost, drops what is meant for someone else, and passes the rest to Claude.
+  Questions, sentences that start with "Claude", and answers to Claude's own questions always go to Claude. A lamp on
+  Delta's chest is green while the small model answers and gold while Claude does, with a star beside its head.
+- With `-journal <file>`, it writes one JSON line per sentence heard, with its route and the triage's verdict, and
+  per sentence said.
+- One Delta runs at a time on the machine: a newer brain records itself in `%LOCALAPPDATA%\delta\brain.pid`, and the
+  older one tells its session, then stops.
+- The Mac minis Delta's torso is stacked from show how full Claude's context is: their lights fill layer by layer up
+  to the top, where Claude Code compacts the conversation, pale blue, then amber, then red. The brain reads it from the
+  session's transcript every few seconds. While Claude Code compacts, the stack is pressed down, a violet light runs
+  down it, and Delta tells whoever speaks to Claude meanwhile that the answer will be late. The plugin's hooks
+  ([plugins/delta/hooks/hooks.json](plugins/delta/hooks/hooks.json)) post the start and the end of a compaction to the
+  brain on 127.0.0.1:8807 (`-hooks`).
 - whisper.cpp's server then runs on a free port.
-- Ollama is not used.
 
 The marketplace is [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json). A tag `v<version>` builds the
 release with [.github/workflows/release.yml](.github/workflows/release.yml). `/delta:setup` installs that release, for
@@ -136,6 +150,11 @@ needs no brain to run:
 - `scene.exe --demo` plays the four states;
 - `--shots DIR` with `--demo` saves a PNG of each;
 - `--selftest` checks the protocol without a window.
+
+`git config core.hooksPath .githooks` runs CI's checks, for the parts a commit touches, before each commit.
+`.\dev-deploy.ps1 -PluginData <dir> -McpJson <.mcp.json>` builds the checkout beside the installed Delta and points
+Claude Code at it, to try a change live. With Ollama running, `DELTA_TRIAGE_OLLAMA=http://127.0.0.1:11434 go test -run
+TriageCorpus -v` in `brain\` sorts sentences heard live (`brain\testdata\triage-corpus.json`) with the real model.
 
 ## Licences and credits
 

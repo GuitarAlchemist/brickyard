@@ -103,7 +103,8 @@ func TestMCPHandshakeDeclaresAChannelAndTwoTools(t *testing.T) {
 	if _, ok := capabilities["tools"]; !ok {
 		t.Fatalf("no tools capability: %v", capabilities)
 	}
-	if result["protocolVersion"] != "2025-06-18" || !strings.Contains(result["instructions"].(string), "say tool") {
+	if result["protocolVersion"] != "2025-06-18" || !strings.Contains(result["instructions"].(string), "say tool") ||
+		!strings.Contains(result["instructions"].(string), "github.com/GuitarAlchemist/brickyard") {
 		t.Fatalf("%v", result)
 	}
 
@@ -138,10 +139,10 @@ func TestMCPHandshakeDeclaresAChannelAndTwoTools(t *testing.T) {
 func TestMCPSayQueuesTheText(t *testing.T) {
 	said := make(chan string, 1)
 	_, in, out := startServer(t, func(m *mcpServer) {
-		m.speak = func(text string) (string, error) { said <- text; return "queued", nil }
+		m.speak = func(text string, _ int, _ string) (string, error) { said <- text; return "3 words, about 2 s", nil }
 	})
 	call(in, 1, "say", `{"text":"Bonjour, je t'écoute."}`)
-	if r := next(t, out); toolText(t, r) != "queued" || isError(r) {
+	if r := next(t, out); toolText(t, r) != "Delta is saying it (say 1): 3 words, about 2 s." || isError(r) {
 		t.Fatalf("%v", r)
 	}
 	if got := <-said; got != "Bonjour, je t'écoute." {
@@ -150,6 +151,51 @@ func TestMCPSayQueuesTheText(t *testing.T) {
 	call(in, 2, "say", `{"text":"  "}`)
 	if r := next(t, out); !isError(r) {
 		t.Fatalf("empty text accepted: %v", r)
+	}
+}
+
+// An answer names the utterance it answers, so that the journal ties what was heard to what Delta said back.
+func TestMCPSayTiesTheAnswerToTheUtterance(t *testing.T) {
+	ids := make(chan int, 2)
+	records := make(chan map[string]any, 2)
+	_, in, out := startServer(t, func(m *mcpServer) {
+		m.speak = func(_ string, id int, _ string) (string, error) { ids <- id; return "5 words, about 3 s", nil }
+		m.record = func(event string, fields map[string]any) { fields["event"] = event; records <- fields }
+	})
+	call(in, 1, "say", `{"text":"Le dépôt IX est GuitarAlchemist ix.","utterance_id":"4"}`)
+	if r := next(t, out); toolText(t, r) != "Delta is saying it (say 1, answering utterance 4): 5 words, about 3 s." {
+		t.Fatalf("%v", r)
+	}
+	if id := <-ids; id != 1 {
+		t.Fatalf("say id %d", id)
+	}
+	if r := <-records; r["event"] != "say" || r["say_id"] != 1 || r["utterance_id"] != "4" || r["request"] != "1" ||
+		r["text"] != "Le dépôt IX est GuitarAlchemist ix." {
+		t.Fatalf("%v", r)
+	}
+	call(in, 2, "say", `{"text":"Autre chose ?","utterance_id":5}`) // a number is taken too
+	if r := next(t, out); toolText(t, r) != "Delta is saying it (say 2, answering utterance 5): 5 words, about 3 s." {
+		t.Fatalf("%v", r)
+	}
+}
+
+func TestMCPRecordsWhereEachUtteranceWent(t *testing.T) {
+	records := make(chan map[string]any, 2)
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.record = func(event string, fields map[string]any) { fields["event"] = event; records <- fields }
+	})
+	now := time.Now()
+	m.hear(utterance{text: "Delta, quel est le dépôt IX ?", asr: 900 * time.Millisecond}, now)
+	if meta := next(t, out)["params"].(map[string]any)["meta"].(map[string]any); meta["utterance_id"] != "1" {
+		t.Fatalf("%v", meta)
+	}
+	if r := <-records; r["event"] != "heard" || r["utterance_id"] != "1" || r["route"] != "channel" ||
+		r["asr_ms"] != int64(900) || r["text"] != "Delta, quel est le dépôt IX ?" {
+		t.Fatalf("%v", r)
+	}
+	m.hear(utterance{text: "la télé parle"}, now.Add(time.Hour))
+	if r := <-records; r["utterance_id"] != "2" || r["route"] != "ignored" {
+		t.Fatalf("%v", r)
 	}
 }
 

@@ -1,0 +1,39 @@
+{
+  "description": "Tells Delta's brain when Claude Code compacts the conversation, so that the robot shows it.",
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -H \"X-Delta-Hook: 1\" --data-binary @- http://127.0.0.1:8807/hook",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -H \"X-Delta-Hook: 1\" --data-binary @- http://127.0.0.1:8807/hook",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 2 -H \"X-Delta-Hook: 1\" --data-binary @- http://127.0.0.1:8807/hook",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
