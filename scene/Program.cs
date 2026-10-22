@@ -170,6 +170,11 @@ internal static unsafe class Stage
         if (!demo)
         {
             var error = link.Listen(port);
+            if (error is null)
+            {
+                Closed(port, false); // a window the brain started again, or that the user asked for
+            }
+
             if (error is not null)
             {
                 Console.Error.WriteLine($"SCENE FAIL: {error}");
@@ -1038,7 +1043,35 @@ internal static unsafe class Stage
         Console.WriteLine($"SCENE frames {frame} in {loopSeconds:F2} s ({frame / loopSeconds:F0} fps); frame ms p50 {P(0.5):F3} p95 {P(0.95):F3} p99 {P(0.99):F3} max {(frameTimes.Count > 0 ? frameTimes[^1] : double.NaN):F3}");
         Console.WriteLine($"SCENE CPU {cpu.TotalSeconds:F2} s over {loopSeconds:F2} s ({100 * cpu.TotalSeconds / loopSeconds / Environment.ProcessorCount:F1} % of {Environment.ProcessorCount} logical CPUs), peak working set {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024)} MB");
         Console.WriteLine($"SCENE closed by {reason} after {clock.Elapsed.TotalSeconds:F2} s");
+        if (reason is "window closed" or "Esc")
+        {
+            Closed(port, true);
+        }
+
         return 0;
+    }
+
+    // %LOCALAPPDATA%\delta\scene-<port>.closed says that the user closed the window listening on that port, so that a
+    // brain, which may not have started it, leaves it closed until something asks for it (brain/scene.go).
+    private static void Closed(int port, bool closed)
+    {
+        var marker = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", $"scene-{port}.closed");
+        try
+        {
+            if (closed)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+                File.WriteAllText(marker, DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                File.Delete(marker);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Console.WriteLine($"SCENE {marker}: {e.Message}");
+        }
     }
 
     [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]

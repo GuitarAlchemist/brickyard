@@ -328,6 +328,9 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	}
 	path := filepath.Join(filepath.Dir(exe), "scene", "scene.exe")
 	_, port, _ := net.SplitHostPort(c.scene)
+	if dir, err := os.UserCacheDir(); err == nil { // the window's own marker (scene/Program.cs Closed)
+		s.closed = filepath.Join(dir, "delta", "scene-"+port+".closed")
+	}
 	s.launch = func() {
 		cmd := exec.Command(path, "--listen", port)
 		hideConsole(cmd)

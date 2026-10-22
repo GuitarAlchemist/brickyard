@@ -3,13 +3,15 @@ package main
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
 
 // scene tells the window what Delta is doing, one JSON line per change. Without a window it does nothing, and a lost
 // window is dialled again at the next change. A window that crashed, or that the user asks for (summon), is started
-// again at the next line nobody answers; one the user closed stays closed until then.
+// again at the next line nobody answers; one the user closed stays closed until then, even one another brain started:
+// the window leaves a marker when the user closes it.
 type scene struct {
 	mu       sync.Mutex
 	addr     string
@@ -18,6 +20,7 @@ type scene struct {
 	launch   func()    // starts the window, when the brain may (startScene)
 	wanted   bool      // the window should be on screen
 	launched time.Time // its last start, so that a window that cannot start is not started at every line
+	closed   string    // the file the window leaves when the user closes it, if known
 }
 
 // relaunchEvery is the least time between two starts of the window.
@@ -31,6 +34,18 @@ func (s *scene) summon() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.wanted = true
+	if s.closed != "" {
+		os.Remove(s.closed)
+	}
+}
+
+// userClosed says whether the user closed the window, whoever started it. The caller holds mu.
+func (s *scene) userClosed() bool {
+	if s.closed == "" {
+		return false
+	}
+	_, err := os.Stat(s.closed)
+	return err == nil
 }
 
 // exited records how a window the brain started ended: crashed, it comes back with the next line; closed, or crashed
@@ -67,7 +82,7 @@ func (s *scene) send(event map[string]any) {
 		if fresh {
 			c, err := net.DialTimeout("tcp", s.addr, 200*time.Millisecond)
 			if err != nil {
-				if s.launch != nil && s.wanted && time.Since(s.launched) > relaunchEvery {
+				if s.launch != nil && s.wanted && !s.userClosed() && time.Since(s.launched) > relaunchEvery {
 					s.launched = time.Now()
 					go s.launch()
 				}
