@@ -403,6 +403,15 @@ over WebRTC. The brain's side, as agreed with IX's session (`brain/remote.go`):
     anything destructive or irreversible such a sentence asks for.
   - The brain still listens on 127.0.0.1 only: the local network is the gateway's.
 
+## The window that closed by itself (2026-10-22, night)
+
+The live window vanished at 16:35 while the brain went on speaking: `scene.log` ended with an unhandled
+`VkResultError: ... vkQueuePresentKHR failed with error: VK_ERROR_OUT_OF_DATE_KHR`. BRUTAL throws Vulkan's errors
+rather than returning them, so the frame loop's check for an out-of-date swapchain never ran: a window that changes
+size between acquiring an image and presenting it closed the scene. Acquire and present now catch that one error and
+rebuild the swapchain. Resizing the window every few milliseconds closed the old scene at the first resize; the new
+one rebuilt its swapchain 443 times in 60 s and closed at its time limit.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

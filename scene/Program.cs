@@ -801,7 +801,18 @@ internal static unsafe class Stage
 
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
-            var result = device.AcquireNextImageKHR(swapchain, -1, acquired[slot], default, out var imageIndex);
+            VkResult result;
+            int imageIndex;
+            try
+            {
+                result = device.AcquireNextImageKHR(swapchain, -1, acquired[slot], default, out imageIndex);
+            }
+            catch (VkResultError e) when (e.Result == VkResult.ErrorOutOfDateKHR)
+            {
+                result = e.Result; // BRUTAL throws Vulkan's errors; this one only says the window changed
+                imageIndex = 0;
+            }
+
             if (result == VkResult.ErrorOutOfDateKHR)
             {
                 stale = true;
@@ -891,14 +902,22 @@ internal static unsafe class Stage
                 fences[slot]);
             var presentIndex = imageIndex;
             var presentSwapchain = swapchain; // Build reassigns swapchain, whose address cannot be taken
-            result = queue.PresentKHR(new VkPresentInfoKHR
+            try
             {
-                WaitSemaphoreCount = 1,
-                WaitSemaphores = &signalSemaphore,
-                SwapchainCount = 1,
-                Swapchains = &presentSwapchain,
-                ImageIndices = &presentIndex,
-            });
+                result = queue.PresentKHR(new VkPresentInfoKHR
+                {
+                    WaitSemaphoreCount = 1,
+                    WaitSemaphores = &signalSemaphore,
+                    SwapchainCount = 1,
+                    Swapchains = &presentSwapchain,
+                    ImageIndices = &presentIndex,
+                });
+            }
+            catch (VkResultError e) when (e.Result == VkResult.ErrorOutOfDateKHR)
+            {
+                result = e.Result; // the window changed while the frame was drawn, as on 2026-10-22 at 16:35
+            }
+
             if (result is VkResult.ErrorOutOfDateKHR or VkResult.SuboptimalKHR)
             {
                 stale = true;
