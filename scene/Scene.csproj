@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Brickyard P0 (GuitarAlchemist/gaia#260): the robot's scene, drawn with Vulkan through BRUTAL's bindings as
+       ga-brutal's HallSlice is, with the same exact package versions and a lock file. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>scene</AssemblyName>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Ahwoo.Brutal.Core" Version="[2026.10.1]" />
+    <PackageReference Include="Ahwoo.Brutal.Glfw" Version="[2026.10.4]" />
+    <PackageReference Include="Ahwoo.Brutal.Vulkan" Version="[2026.10.2]" />
+    <PackageReference Include="Ahwoo.Brutal.Vulkan.Abstractions" Version="[2026.10.2]" />
+    <PackageReference Include="Ahwoo.Brutal.ShaderC" Version="[2026.10.2]" />
+  </ItemGroup>
+
+</Project>
