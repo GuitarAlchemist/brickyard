@@ -154,8 +154,8 @@ journal of the first 12 minutes, 23 sentences heard and 14 said:
 - A question of fact was checked before it was answered. "Ok, est-ce que tout doit être transmis à Claude Code…"
   (utterance 12) got « je regarde comment Delta est configuré » 4.3 s later, then 2 min later an answer starting
   « Voici la règle, d'après les notes de commit de Delta ».
-- A short answer started 4.0 s after its transcript (utterance 9), about 6 s after the end of the sentence; the
-  transcription itself took 1.7 to 2.4 s.
+- A short answer started 4.0 s after its transcript (utterance 9). Add the transcription, which took 1.5 s to 13.9 s
+  over the 23 sentences.
 - The 45 s window, extended by every sentence let through, kept the channel open while the author talked to others.
   "Ok Gaia, tais-toi parce que Delta parle" and "Non, Gaia, je vais toujours à d'altar" reached the session, as did
   "Ok, c'est fait, Delta est lancé", said to the Claude session in the terminal.
