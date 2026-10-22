@@ -22,7 +22,7 @@ func captureArgs(hwnd uintptr, port int) []string {
 		"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
 		"-profile:v", "baseline", "-level:v", "3.1",
 		"-g", "30", "-bf", "0", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "1000k",
-		"-an", "-f", "rtp", fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", port),
+		"-an", "-f", "rtp", fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200&localaddr=127.0.0.1", port),
 	}
 }
 
