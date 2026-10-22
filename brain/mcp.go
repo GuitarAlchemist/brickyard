@@ -34,6 +34,8 @@ const mcpGuidance = `Pass say the utterance_id you are answering. ` +
 	`Give say a mood when your words carry one, such as joy, proud or sorry: Delta's face shows it as it speaks. ` +
 	`The window tool moves, sizes or hides Delta's window, and the shelf tool opens its menu of Claude Code sessions, plugins and ` +
 	`marketplaces; Delta also does both by itself when the user asks it aloud, and you read those requests as handled_locally. ` +
+	`An event whose meta has source "remote" was spoken on another device through Delta's remote gateway, not at this computer: ` +
+	`before anything destructive or irreversible it asks for, have the user confirm it at the computer. ` +
 	`Delta's code is github.com/GuitarAlchemist/brickyard.`
 
 // toolsFor lists Delta's tools, with the language Delta hears and speaks in their descriptions.
@@ -342,11 +344,22 @@ func (m *mcpServer) stopWaiting(key string) bool {
 // the user addressed Delta, through the triage if there is one, then to the session as a channel event. It returns
 // where it went: "listen", "channel", "ignored" by the wake gate, or "dropped" or "local" by the triage.
 func (m *mcpServer) hear(u utterance, now time.Time) string {
+	_, route := m.heardAs(u, now)
+	return route
+}
+
+// heardAs is hear, which also returns the utterance's number. A sentence from another device (source "remote") needs
+// no wake word: holding the device's button addressed Delta. Its heard line and channel event say where it came from.
+func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	m.mu.Lock()
 	m.heard++
 	h := heardText{id: m.heard, text: u.text}
-	route := "channel"
+	id = h.id
+	route = "channel"
 	fields := map[string]any{"utterance_id": strconv.Itoa(h.id), "text": u.text, "asr_ms": u.asr.Milliseconds()}
+	if u.source != "" {
+		fields["source"] = u.source
+	}
 	defer func() {
 		fields["route"] = route
 		m.note("heard", fields)
@@ -361,26 +374,32 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 		m.gate.open(now)
 		route = "listen"
 		fields["reason"] = "Claude was listening"
-		return route
+		return id, route
 	}
 	m.mu.Unlock()
+	if u.source == "remote" {
+		m.gate.open(now)
+	}
 	admitted, why := m.gate.admit(u.text, now)
 	fields["reason"] = why
 	if !admitted {
 		route = "ignored"
-		return route
+		return id, route
 	}
 	if r := m.command(u.text, fields, now); r != "" {
 		route = r
-		return route
+		return id, route
 	}
 	if m.triage != nil {
 		if r := m.sort(u.text, fields); r != "" {
 			route = r
-			return route
+			return id, route
 		}
 	}
 	meta := map[string]string{"utterance_id": strconv.Itoa(h.id), "asr_ms": strconv.FormatInt(u.asr.Milliseconds(), 10)}
+	if u.source != "" {
+		meta["source"] = u.source
+	}
 	m.mu.Lock()
 	if len(m.local) > 0 {
 		meta["handled_locally"] = strings.Join(m.local, " / ")
@@ -406,7 +425,7 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 			}
 		}
 	}
-	return route
+	return id, route
 }
 
 // sort asks the triage what to do with a transcript the wake gate let through, after rules that need no model: a

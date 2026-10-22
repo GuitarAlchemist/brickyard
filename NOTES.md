@@ -375,6 +375,34 @@ After the plugin's first release, the author asked: « il faut que ça marche po
   - The scene's shelf learns the language from a `{"language":"en"|"fr"}` line, which the brain sends first on every
     connection, so that a window started later, or by another brain, knows it too. `--lang fr` sets it for shots.
 
+## Another device, through a gateway (2026-10-22, night)
+
+IX is building a gateway that lets the author speak to Delta from a phone or another computer on the local network,
+over WebRTC. The brain's side, as agreed with IX's session (`brain/remote.go`):
+
+- **`POST /hear`** takes a 16 kHz mono 16-bit WAV of at most 30 s: 960,000 bytes and a header; more gets 413, another
+  rate 400. The brain transcribes it with its own whisper-server and routes it as it would a sentence from the
+  microphone, with three differences:
+  - it needs no wake word, since pressing the device's button addressed Delta;
+  - its `heard` line and its channel event carry `source: "remote"`;
+  - a chime of two short notes, 880 then 1320 Hz, tells the room, unless Delta is speaking, since one sound stops the
+    other. The microphone is deaf while it rings.
+
+  It answers 202 with `{"utterance_id","text","route"}`, or 503 until the ears are ready.
+- **`GET /said`** streams server-sent events, one per sentence as it starts playing here:
+  `{"say_id","text","seconds","t_ms","wav_b64"}`, the sentence's WAV after the warm voice. A device too slow to take an
+  event misses it rather than holding the voice back. A comment line every 15 s keeps the stream open. It carries what
+  Delta says even when the brain is muted.
+- **Security**, from IX's review.
+  - The whole hooks address now refuses a request with an `Origin` header, which browsers add, and any Host other than
+    127.0.0.1, localhost or ::1, against DNS rebinding.
+  - `/hear` and `/said` also need `X-Delta-Remote`: a secret of 32 random bytes the brain writes at each start to
+    `%LOCALAPPDATA%\delta\remote.secret`, in the user's profile, compared in constant time. A brain without a secret
+    refuses every device. The gateway reads the file at each request, so a new brain needs no restart of it.
+  - A sentence from another device is never consent: Claude's instructions have the user confirm at the computer
+    anything destructive or irreversible such a sentence asks for.
+  - The brain still listens on 127.0.0.1 only: the local network is the gateway's.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -398,3 +426,4 @@ After the plugin's first release, the author asked: « il faut que ça marche po
   - a session with `--dangerously-load-development-channels plugin:delta@brickyard`.
 - A live English session with a human voice: the wake word, "Delter", and the latency.
 - English for the local window and shelf commands, the triage and the compaction sentence.
+- The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.

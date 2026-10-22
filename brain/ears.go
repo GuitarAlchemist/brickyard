@@ -30,9 +30,10 @@ type ears struct {
 // utterance is something heard: its text, when the speaker stopped (or the line was read), and how long the
 // transcription took.
 type utterance struct {
-	text  string
-	ended time.Time
-	asr   time.Duration
+	text   string
+	ended  time.Time
+	asr    time.Duration
+	source string // "" for this computer's microphone, "remote" for another device (remote.go)
 }
 
 // startEars runs whisper-server on the loopback port, transcribing lang ("en" or "fr").

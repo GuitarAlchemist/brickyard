@@ -42,6 +42,7 @@ type hooks struct {
 	compacted  func(trigger string, seconds float64)
 	context    func(used, limit int)
 	gesture    func(g gesture) // a gesture a camera process posted (gesture.go)
+	remote     *remote         // another device's gateway (remote.go), or nil
 	lang       string          // the code of the language Delta speaks, for busy
 	logf       func(string, ...any)
 	maxCompact time.Duration // after which a compaction that no hook ended is taken as over
@@ -220,7 +221,26 @@ func (h *hooks) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return mux
+	if h.remote != nil {
+		h.remote.handle(mux)
+	}
+	return localOnly(mux)
+}
+
+// localOnly keeps web pages off the whole port. A page's script reaches 127.0.0.1 too, but its browser sends an Origin
+// header, and a page that rebinds its own name to 127.0.0.1 sends that name as the Host.
+func localOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = strings.Trim(r.Host, "[]")
+		}
+		if _, sent := r.Header["Origin"]; sent || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
+			http.Error(w, "Delta's brain answers this computer only", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // serve answers the hooks on addr. A brain that takes over waits for the one it replaces to free the port.

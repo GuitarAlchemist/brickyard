@@ -155,6 +155,35 @@ func runMCP(c mcpConfig) {
 	}
 	m.busy = h.busy
 	h.gesture = func(g gesture) { m.gesture(g, time.Now()) }
+
+	// Another device speaks to Delta and hears it through a gateway on this computer, such as IX's (remote.go).
+	rm := &remote{route: func(u utterance) (int, string) {
+		id, where := m.heardAs(u, time.Now())
+		logf("heard %q from another device in %d ms: %s", u.text, u.asr.Milliseconds(), where)
+		if where == "ignored" || where == "dropped" || where == "local" {
+			s.send(map[string]any{"state": "idle"})
+		}
+		return id, where
+	}}
+	if chime, err := chimeFile(os.TempDir()); err != nil {
+		logf("remote: %v; no chime", err)
+	} else {
+		rm.chime = func() { // only while Delta is quiet: one sound stops another
+			if !c.mute && mo.quiet() {
+				mo.busy.Store(true) // the microphone does not hear the chime
+				play(chime)
+				mo.routed()
+			}
+		}
+	}
+	if secret, path, err := newRemoteSecret(); err != nil {
+		logf("remote: %v; no other device can speak to Delta", err)
+	} else {
+		rm.secret = secret
+		logf("remote: a gateway's secret is in %s", path)
+	}
+	h.remote = rm
+	mo.onClip = rm.publish
 	if c.hooks != "" {
 		go h.serve(c.hooks)
 	}
@@ -200,6 +229,7 @@ func runMCP(c mcpConfig) {
 		notHearing = nil
 		hearing.Unlock()
 		logf("ears ready on %s", e.url)
+		rm.hearWith(e.hear)
 		heard := make(chan utterance)
 		go listen(e, s, &mo.busy, heard, false)
 		for u := range heard {
@@ -318,9 +348,10 @@ type mouth struct {
 	mute   bool
 	queue  chan said
 	record func(event string, fields map[string]any)
-	fx     func(rate int) *warm // a fresh effect for each say call, or nil for Piper's own voice
-	lang   string               // the code of the language Delta speaks, for speakable
-	busy   atomic.Bool          // the microphone's: deaf while Delta speaks or while a transcript is routed
+	fx     func(rate int) *warm                           // a fresh effect for each say call, or nil for Piper's own voice
+	lang   string                                         // the code of the language Delta speaks, for speakable
+	onClip func(say int, text string, w wav, path string) // each sentence as it starts, for remote.go, or nil
+	busy   atomic.Bool                                    // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
 	pending int // say calls not yet spoken to the end
@@ -361,7 +392,7 @@ func (mo *mouth) fail(err error) {
 
 func (mo *mouth) run(v *voice) {
 	type clip struct {
-		path        string
+		path, text  string
 		say         int
 		cost, mood  string
 		first, last bool // of its say call
@@ -387,7 +418,7 @@ func (mo *mouth) run(v *voice) {
 					fmt.Fprintln(os.Stderr, "delta: voice:", err)
 					path = ""
 				}
-				clips <- clip{path: path, say: s.id, cost: s.cost, mood: s.mood, first: i == 0, last: i == len(parts)-1}
+				clips <- clip{path: path, text: part, say: s.id, cost: s.cost, mood: s.mood, first: i == 0, last: i == len(parts)-1}
 			}
 		}
 	}()
@@ -414,6 +445,9 @@ func (mo *mouth) run(v *voice) {
 					line["mood"], mood = mood, ""
 				}
 				mo.s.send(line)
+				if mo.onClip != nil {
+					mo.onClip(c.say, c.text, w, c.path)
+				}
 			}
 			if !mo.mute {
 				play(c.path)
@@ -464,6 +498,13 @@ func (mo *mouth) finished() {
 	mo.spoke = time.Now()
 	mo.mu.Unlock()
 	mo.gate.open(time.Now())
+}
+
+// quiet says whether Delta has nothing left to say.
+func (mo *mouth) quiet() bool {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	return mo.pending == 0
 }
 
 // routed is the end of one transcript's routing: the microphone listens again, unless Delta is speaking.
