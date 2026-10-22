@@ -120,26 +120,12 @@ func carriesNothing(text string) bool {
 var fillers = map[string]bool{"ah": true, "oh": true, "eh": true, "hein": true, "euh": true, "heu": true, "hum": true,
 	"hmm": true, "hm": true, "mmh": true, "mm": true, "bah": true, "ben": true, "uh": true, "um": true, "oups": true}
 
-// namesAnother is a transcript that calls another assistant by name among its first three words, and not Delta among
-// its first five: the user speaks to Gaia or Codex, not to Delta. Claude is not another: the author calls Delta's brain
-// Claude, and « Ok, Claude, ... » is meant for it.
+// namesAnother is a transcript spoken to another session than Delta's, as addressee reads it: the user speaks to Gaia
+// or Codex, not to Delta. The wake gate drops these already; with -no-wake, the triage still does.
 func namesAnother(text string) bool {
-	if namesDelta(text) {
-		return false
-	}
-	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) })
-	for i, w := range words {
-		if i == 3 {
-			break
-		}
-		if others[w] {
-			return true
-		}
-	}
-	return false
+	to := addressee(text)
+	return to != "" && to != "Delta" && to != "Claude"
 }
-
-var others = map[string]bool{"gaia": true, "gaïa": true, "codex": true, "ix": true, "x": true} // Whisper writes IX, said « ixe », as X
 
 // callsClaude is a transcript that calls Claude among its first three words, as Whisper writes it: « Claude », or
 // « Cloud Code » misheard. It goes straight to Claude, past the wake gate and the triage.

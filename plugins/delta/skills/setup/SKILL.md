@@ -43,4 +43,9 @@ Then tell the user the two ways to talk to Delta:
 Delta's window opens when the delta MCP server starts. If the server failed before setup, run `/mcp` and reconnect
 delta, or restart Claude Code.
 
-Delta only passes on what starts with its name, "Delta", or what comes within 45 seconds of its last words.
+Delta only passes on these:
+- what starts by calling it, "Delta, …", or its brain, "Claude, …";
+- what follows within 15 seconds;
+- an answer within 20 seconds of its last words.
+
+« je ne te parle pas » is not passed on.

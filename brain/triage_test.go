@@ -93,8 +93,14 @@ func TestTriageNeedsNoModelForFillersAndArtefacts(t *testing.T) {
 		}
 		m.gate.off = true
 	})
-	for _, text := range []string{"Ah!", "Hmm.", "Euh... ben", "하게.", "...", "Gaïa, lance le watcher.", "Non, Gaia, je parle à Delta."} {
+	for _, text := range []string{"Ah!", "Hmm.", "Euh... ben", "하게.", "..."} {
 		if where := m.hear(utterance{text: text}, time.Now()); where != "dropped" {
+			t.Errorf("%q went to %s", text, where)
+		}
+	}
+	// What is said to another session stops at the wake gate, even with the gate off.
+	for _, text := range []string{"Gaïa, lance le watcher.", "Non, Gaia, je parle à Delta."} {
+		if where := m.hear(utterance{text: text}, time.Now()); where != "ignored" {
 			t.Errorf("%q went to %s", text, where)
 		}
 	}

@@ -23,7 +23,8 @@ func startServer(t *testing.T, configure func(*mcpServer)) (*mcpServer, io.Write
 	t.Helper()
 	out := make(lineSink, 16)
 	m := &mcpServer{version: "test", out: out, listenMin: 10 * time.Millisecond, listenMax: time.Second}
-	m.gate.window = time.Minute
+	m.gate.window = 20 * time.Second
+	m.gate.follow = 15 * time.Second
 	if configure != nil {
 		configure(m)
 	}
@@ -190,11 +191,11 @@ func TestMCPRecordsWhereEachUtteranceWent(t *testing.T) {
 		t.Fatalf("%v", meta)
 	}
 	if r := <-records; r["event"] != "heard" || r["utterance_id"] != "1" || r["route"] != "channel" ||
-		r["asr_ms"] != int64(900) || r["text"] != "Delta, quel est le dépôt IX ?" {
+		r["asr_ms"] != int64(900) || r["text"] != "Delta, quel est le dépôt IX ?" || r["reason"] != "called Delta" {
 		t.Fatalf("%v", r)
 	}
-	m.hear(utterance{text: "la télé parle"}, now.Add(time.Hour))
-	if r := <-records; r["utterance_id"] != "2" || r["route"] != "ignored" {
+	m.hear(utterance{text: "Gaïa, la télé parle"}, now.Add(time.Hour))
+	if r := <-records; r["utterance_id"] != "2" || r["route"] != "ignored" || r["reason"] != "spoken to Gaïa" {
 		t.Fatalf("%v", r)
 	}
 }
@@ -263,32 +264,78 @@ func TestMCPChannelNeedsTheWakeWordToStartAConversation(t *testing.T) {
 		t.Fatalf("%v", event)
 	}
 
-	// Within the window, the conversation goes on without the wake word, and each transcript extends it.
-	if where := m.hear(utterance{text: "et aussi le lint"}, now.Add(50*time.Second)); where != "channel" {
+	// Right after naming Delta, the user may go on in another sentence without naming it again.
+	if where := m.hear(utterance{text: "et aussi le lint"}, now.Add(10*time.Second)); where != "channel" {
 		t.Fatalf("went to %s", where)
 	}
 	next(t, out)
-	if where := m.hear(utterance{text: "la télé parle"}, now.Add(3*time.Minute)); where != "ignored" {
-		t.Fatalf("went to %s after the window", where)
+	// That sentence does not keep the conversation open: talk that goes on and on is not all for Delta.
+	if where := m.hear(utterance{text: "et la doc"}, now.Add(40*time.Second)); where != "ignored" {
+		t.Fatalf("went to %s after the follow-up window", where)
 	}
-	if thoughtful != 2 {
-		t.Fatalf("Delta looked thoughtful %d times, not 2", thoughtful)
+	// After Delta speaks, the user may answer it without naming it.
+	m.gate.open(now.Add(60 * time.Second))
+	if where := m.hear(utterance{text: "oui, vas-y"}, now.Add(70*time.Second)); where != "channel" {
+		t.Fatalf("went to %s", where)
+	}
+	next(t, out)
+	// A sentence for someone else is not for Delta, and ends the conversation.
+	if where := m.hear(utterance{text: "Gaïa, note ça."}, now.Add(72*time.Second)); where != "ignored" {
+		t.Fatalf("went to %s", where)
+	}
+	if where := m.hear(utterance{text: "et ensuite"}, now.Add(74*time.Second)); where != "ignored" {
+		t.Fatalf("went to %s after the user turned to someone else", where)
+	}
+	silent(t, out)
+	if thoughtful != 3 {
+		t.Fatalf("Delta looked thoughtful %d times, not 3", thoughtful)
 	}
 }
 
-func TestNamesDeltaAmongTheFirstWords(t *testing.T) {
-	for text, want := range map[string]bool{
-		"Delta, lance les tests.":                  true,
-		"Bon, Delta ?":                             true,
-		"DELTA! Tu m'entends":                      true,
-		"Il faut que tu dises à Delta de chercher": false, // seventh word
-		"Les deltas du Rhône":                      false,
-		"":                                         false,
+// The sentences are those of the author's first live sessions (2026-10-22), where Delta's microphone also heard what
+// was said to the Claude session in a terminal and to Gaïa. The author then named that session Brutal, and kept
+// Claude for Delta's brain.
+func TestAddressee(t *testing.T) {
+	for text, want := range map[string]string{
+		"Delta, quel est le dépôt IX ?":                       "Delta",
+		"Bon, Delta ?":                                        "Delta",
+		"DELTA! Tu m'entends":                                 "Delta",
+		"Delta, déploie ça dans le cloud.":                    "Delta",
+		"Delta, envoie ça à Gaïa.":                            "Delta",
+		"Ok, Claude, améliore la rétro.":                      "Claude",
+		"Allô, Claude, est-ce que tu peux améliorer tout ça?": "Claude",
+		"Cloud Code, regarde ça.":                             "Claude",
+		"Le cloud est lent.":                                  "",
+		"Brutal, fusionne la branche.":                        "Brutal",
+		"Oui, Delta, je parle à Brutal directement.":          "Brutal",
+		"Quand je parle à Brutal, c'est à Brutal que je parle, c'est pas à Delta.": "Brutal",
+		"X, relance le build.":                     "IX",
+		"Ok Gaia, tais-toi parce que Delta parle.": "Gaïa",
+		"Non, Gaïa, je vais toujours à d'altar.":   "Gaïa",
+		"Delta, je ne te parle pas.":               "someone else",
+		"Delta, c'est pas pour toi.":               "someone else",
+		"Ok, c'est fait, Delta est lancé.":         "", // fifth word: not a call
+		"Il faut que tu dises à Delta de chercher": "",
+		"Les deltas du Rhône":                      "",
+		"":                                         "",
 	} {
-		if got := namesDelta(text); got != want {
-			t.Errorf("namesDelta(%q) = %v", text, got)
+		if got := addressee(text); got != want {
+			t.Errorf("addressee(%q) = %q, not %q", text, got, want)
 		}
 	}
+}
+
+func TestMCPTellingDeltaItIsNotSpokenToEndsTheConversation(t *testing.T) {
+	m, _, out := startServer(t, nil)
+	now := time.Now()
+	m.gate.open(now) // Delta just spoke
+	if where := m.hear(utterance{text: "Delta, je ne te parle pas."}, now.Add(time.Second)); where != "ignored" {
+		t.Fatalf("went to %s", where)
+	}
+	if where := m.hear(utterance{text: "je disais donc"}, now.Add(2*time.Second)); where != "ignored" {
+		t.Fatalf("went to %s", where)
+	}
+	silent(t, out)
 }
 
 func TestHomePathsPreferDeltaJSONThenTheHomeLayout(t *testing.T) {

@@ -46,7 +46,13 @@ You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a m
 Delta's window opens when Claude Code starts the plugin's MCP server.
 
 Which speech Delta passes on:
-- **Through the channel**, only sentences that start with "Delta", or that come within 45 seconds of its last words.
+- **Through the channel**:
+  - sentences that start by calling it, "Delta, …", or its brain, "Claude, …";
+  - the next sentences within 15 seconds;
+  - your answer within 20 seconds of its last words.
+
+  It drops a sentence that says « je ne te parle pas », or that calls one of the author's other sessions first: Brutal,
+  Gaïa, Indigo, Amber, Codex or IX. That also ends the conversation.
 - **With `/delta:talk`**, everything Delta hears while Claude listens.
 
 Claude Code asks your permission the first time Claude uses Delta's `say` and `listen` tools.

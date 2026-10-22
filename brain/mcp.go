@@ -350,10 +350,13 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 		l.ch <- h
 		m.gate.open(now)
 		route = "listen"
+		fields["reason"] = "Claude was listening"
 		return route
 	}
 	m.mu.Unlock()
-	if !m.gate.admit(u.text, now) {
+	admitted, why := m.gate.admit(u.text, now)
+	fields["reason"] = why
+	if !admitted {
 		route = "ignored"
 		return route
 	}
@@ -572,45 +575,96 @@ func (m *mcpServer) notify(method string, params any) {
 	m.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 }
 
-// wakeGate lets a transcript reach the session when it names Delta among its first five words or calls Claude among its
-// first three, or when it comes within
-// the window after Delta's last words or after the last transcript let through: a conversation, once started, needs no
-// wake word, while a voice from a television or a call does not start one.
+// wakeGate lets a transcript reach the session when it calls Delta or Claude, Delta's brain, or when it comes soon
+// after: within follow of such a call, for the rest of what the user says, or within window of Delta's last words, for
+// an answer. A sentence let through without a call extends neither, so that talk that goes on and on does not all go
+// to Claude, and a sentence for someone else ends the conversation: the same microphone hears the author talk to other
+// sessions, Brutal in a terminal and Gaïa among them.
 type wakeGate struct {
 	mu     sync.Mutex
-	off    bool
-	window time.Duration
+	off    bool          // let everything through but what is said to someone else
+	window time.Duration // after Delta's last words
+	follow time.Duration // after the user called Delta
 	until  time.Time
 }
 
-func (g *wakeGate) admit(text string, now time.Time) bool {
+// admit says whether a transcript is for Delta, and why.
+func (g *wakeGate) admit(text string, now time.Time) (bool, string) {
+	to := addressee(text)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.off || now.Before(g.until) || namesDelta(text) || callsClaude(text) {
-		g.until = now.Add(g.window)
-		return true
+	switch {
+	case to == "Delta" || to == "Claude":
+		g.extend(now.Add(g.follow))
+		return true, "called " + to
+	case to != "":
+		g.until = time.Time{}
+		return false, "spoken to " + to
+	case g.off:
+		return true, "wake gate off"
+	case now.Before(g.until):
+		return true, "in the conversation"
 	}
-	return false
+	return false, "not addressed to Delta"
 }
 
-// open keeps the conversation going for a window from now.
+// open keeps the conversation going for a window from now: Delta has just spoken, or Claude has just listened.
 func (g *wakeGate) open(now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if t := now.Add(g.window); t.After(g.until) {
-		g.until = t
+	g.extend(now.Add(g.window))
+}
+
+func (g *wakeGate) extend(to time.Time) {
+	if to.After(g.until) {
+		g.until = to
 	}
 }
 
-func namesDelta(text string) bool {
-	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) })
-	for i, w := range words {
-		if i == 5 {
+// otherListeners are the other sessions the author speaks to near Delta's microphone, as Whisper writes their names:
+// Brutal is the Claude session in a terminal that builds Brickyard, and Whisper writes IX, said « ixe », as X. Claude
+// is not one of them: the author calls Delta's brain Claude (2026-10-22), and « Ok, Claude, … » is for it.
+var otherListeners = map[string]string{"brutal": "Brutal", "gaia": "Gaïa", "indigo": "Indigo", "amber": "Amber",
+	"codex": "Codex", "ix": "IX", "x": "IX"}
+
+// notForDelta are the words by which the user tells Delta that a sentence is not for it.
+var notForDelta = []string{" te parle pas ", " pas a toi ", " pas pour toi "}
+
+var foldAccents = strings.NewReplacer("à", "a", "â", "a", "ä", "a", "é", "e", "è", "e", "ê", "e", "ë", "e", "î", "i",
+	"ï", "i", "ô", "o", "ö", "o", "ù", "u", "û", "u", "ü", "u", "ç", "c")
+
+// addressee says whom a sentence is spoken to: "Delta" or "Claude" when one of its first three words calls Delta or
+// its brain (« Cloud Code » as Whisper may write it), another listener's name when one comes first or when the user
+// says they speak to that listener (« je parle à Brutal »), "someone else" when the user tells Delta it is not for it,
+// and "" when it calls no one.
+func addressee(text string) string {
+	words := strings.FieldsFunc(foldAccents.Replace(strings.ToLower(text)), func(r rune) bool { return !unicode.IsLetter(r) })
+	called := ""
+	for i, w := range words[:min(3, len(words))] {
+		if w == "delta" {
+			called = "Delta"
 			break
 		}
-		if w == "delta" {
-			return true
+		if w == "claude" || (w == "cloud" && i+1 < len(words) && words[i+1] == "code") {
+			called = "Claude"
+			break
+		}
+		if who, ok := otherListeners[w]; ok {
+			return who
 		}
 	}
-	return false
+	joined := " " + strings.Join(words, " ") + " "
+	if strings.Contains(joined, " parle ") {
+		for i, w := range words {
+			if who, ok := otherListeners[w]; ok && i > 0 && (words[i-1] == "a" || words[i-1] == "au" || words[i-1] == "avec") {
+				return who
+			}
+		}
+	}
+	for _, phrase := range notForDelta {
+		if strings.Contains(joined, phrase) {
+			return "someone else"
+		}
+	}
+	return called
 }
