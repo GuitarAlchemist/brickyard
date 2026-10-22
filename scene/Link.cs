@@ -308,6 +308,13 @@ internal sealed class Link(Func<double> clock)
         var fallback = Words.Say("Folder", "Dossier");
         Words.Language = "en";
         Check(french == "Dossier" && fallback == "Folder" && Words.Say("Folder", "Dossier") == "Folder", "the labels follow the language, English by default");
+        var year = DateTime.Now.Year;
+        var english = (Words.Date(new DateTime(year, 10, 22, 19, 13, 0)), Words.Date(new DateTime(2020, 3, 1, 8, 5, 0)), Words.Number(1.5));
+        Words.Language = "fr";
+        var inFrench = (Words.Date(new DateTime(year, 10, 22, 19, 13, 0)), Words.Date(new DateTime(2020, 3, 1, 8, 5, 0)), Words.Number(1.5));
+        Words.Language = "en";
+        Check(english == ("October 22, 19:13", "March 1, 2020, 08:05", "1.5") && inFrench == ("22 octobre, 19:13", "1 mars 2020, 08:05", "1,5"),
+            "dates and numbers in both languages, without culture data");
         var link = new Link(() => 0);
         link.Apply(new Change("speaking", [0f, 0.1f, 0.05f], "free", null, null), 10.0);
         Check(link.Read(10.03) is { State: "speaking", Level: 1f, Cost: "free", Context: -1f, Compacting: false, Mood: "neutral" }, "the loudest step opens the mouth fully");

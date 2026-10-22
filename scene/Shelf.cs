@@ -293,7 +293,7 @@ internal sealed class Shelf
             rows.Add(new Node(Words.Say("State", "État"), state));
             if (s.Started > 0)
             {
-                rows.Add(new Node(Words.Say("Started", "Démarrée"), DateTimeOffset.FromUnixTimeMilliseconds(s.Started).ToLocalTime().ToString(Words.Say("MMMM d, HH:mm", "d MMMM, HH:mm"), Words.Culture)));
+                rows.Add(new Node(Words.Say("Started", "Démarrée"), Words.Date(DateTimeOffset.FromUnixTimeMilliseconds(s.Started).LocalDateTime)));
             }
 
             rows.Add(new Node("Claude Code", s.Version.Length > 0 ? "version " + s.Version : Words.Say("unknown version", "version inconnue")));

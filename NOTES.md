@@ -412,6 +412,11 @@ size between acquiring an image and presenting it closed the scene. Acquire and 
 rebuild the swapchain. Resizing the window every few milliseconds closed the old scene at the first resize; the new
 one rebuilt its swapchain 443 times in 60 s and closed at its time limit.
 
+The same evening, opening a session in the shelf closed the window too: its "Started" row asked .NET for the fr-FR
+(later en-US) culture, and the scene runs with `InvariantGlobalization`, where that throws, on a thread-pool thread
+that nothing catches. It had done so since the shelf's first version. `Words.Date` and `Words.Number` now write months
+and decimal commas themselves, and the selftest checks both languages.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
