@@ -65,7 +65,8 @@ func runMCP(c mcpConfig) {
 	var hearing sync.Mutex
 	notHearing := errors.New("Delta is still starting: its ears (whisper.cpp) are loading. Try again in a few seconds.")
 	m := &mcpServer{version: version, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
-	m.gate.window = 45 * time.Second
+	m.gate.window = 20 * time.Second
+	m.gate.follow = 15 * time.Second
 	m.gate.off = c.wakeOff
 	if c.triage != "" {
 		m.triage = ollamaTriage(c.ollama, c.triage)
