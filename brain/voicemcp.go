@@ -85,6 +85,24 @@ func runMCP(c mcpConfig) {
 			}
 			logf("triage ready: %s in %.1f s", c.triage, time.Since(start).Seconds())
 		}()
+		// Ollama unloads the model after its keep_alive, or for another model, and a load takes longer than the triage
+		// waits: each sentence would then cancel the load the one before began. After a failure the model loads in the
+		// background, without the sentence's deadline, and the next sentence finds it ready.
+		var warming atomic.Bool
+		m.rewarm = func() {
+			if !warming.CompareAndSwap(false, true) {
+				return
+			}
+			go func() {
+				defer warming.Store(false)
+				start := time.Now()
+				if err := warmTriage(m.triage, lang); err != nil {
+					logf("triage: %v", err)
+					return
+				}
+				logf("triage awake again in %.1f s", time.Since(start).Seconds())
+			}()
+		}
 	}
 	m.ready = func() error {
 		hearing.Lock()

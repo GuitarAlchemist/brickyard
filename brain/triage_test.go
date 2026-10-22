@@ -120,7 +120,10 @@ func TestClaudeGetsWhatTheTriageCannotSort(t *testing.T) {
 		"a request": fixed(verdict{Route: "claude"}, nil),
 	} {
 		t.Run(name, func(t *testing.T) {
-			m, _, out := startServer(t, func(m *mcpServer) { m.triage = tr; m.triageMax = 20 * time.Millisecond })
+			rewarmed := 0
+			m, _, out := startServer(t, func(m *mcpServer) {
+				m.triage, m.triageMax, m.rewarm = tr, 20*time.Millisecond, func() { rewarmed++ }
+			})
 			start := time.Now()
 			if where := m.hear(utterance{text: "Delta, lance les tests."}, start); where != "channel" {
 				t.Fatalf("went to %s", where)
@@ -130,6 +133,9 @@ func TestClaudeGetsWhatTheTriageCannotSort(t *testing.T) {
 			}
 			if p := next(t, out)["params"].(map[string]any); p["content"] != "Delta, lance les tests." {
 				t.Fatalf("%v", p)
+			}
+			if (rewarmed == 1) != (name != "a request") { // a model that failed loads again for the next sentence
+				t.Fatalf("%d warm-ups after %s", rewarmed, name)
 			}
 		})
 	}

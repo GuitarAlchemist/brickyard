@@ -417,6 +417,14 @@ The same evening, opening a session in the shelf closed the window too: its "Sta
 that nothing catches. It had done so since the shelf's first version. `Words.Date` and `Words.Number` now write months
 and decimal commas themselves, and the selftest checks both languages.
 
+## The triage that fell asleep (2026-10-22, night)
+
+After an hour without a transcript, every sentence went to Claude with `triage: failed: ... context deadline
+exceeded`, small talk included, and Delta seemed slow. Ollama had unloaded qwen3:8b after its 30 minutes of
+keep_alive; loading it again took 7.4 s, longer than the 4 s a sentence waits, and four sentences in two minutes failed
+that way before one found the model loaded. After a failure the brain now loads the model in the background, without a
+deadline, one load at a time, so that the next sentence finds it ready.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

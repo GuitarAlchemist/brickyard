@@ -110,6 +110,7 @@ type mcpServer struct {
 	triage    triage        // sorts what the wake gate lets through before Claude sees it, if set
 	about     string        // appended to the instructions: what only the running brain knows, such as its journal
 	triageMax time.Duration // after which a transcript goes to Claude without the triage's verdict
+	rewarm    func()        // loads the triage's model again after it failed, if set
 
 	outMu sync.Mutex
 	out   io.Writer
@@ -471,6 +472,9 @@ func (m *mcpServer) sort(text string, fields map[string]any) string {
 		fields["triage_ms"] = time.Since(start).Milliseconds()
 		if err != nil {
 			fields["triage"] = "failed: " + err.Error()
+			if m.rewarm != nil {
+				m.rewarm()
+			}
 			return ""
 		}
 		fields["triage"] = v.Route
