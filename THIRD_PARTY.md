@@ -25,7 +25,9 @@ The splash draws BRUTAL's copyright notice at start-up with Windows' Segoe UI. N
 
 ## Not in the release
 
-You install these yourself (README, "What you need"). Each comes under its own terms.
+You install these yourself, or `/delta:setup` downloads them for you, from where their authors publish them, at pinned
+versions checked by SHA-256 (`plugins/delta/scripts/setup.ps1`). Each comes under its own terms. With Claude Code,
+Ollama and qwen3:8b are not used.
 
 | Component | Licence |
 |---|---|

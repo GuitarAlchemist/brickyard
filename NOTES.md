@@ -98,6 +98,44 @@ The release also carries every licence and notice text of the packages, the runt
 `LICENSES\PACKAGES.txt`. Whisper, Piper, the voices and Ollama are not shipped: README says where to get each, with the
 tested hashes.
 
+## Claude Code plugin (2026-10-22, night)
+
+The author asked to make Delta easy for anyone to install and connect to their own Claude Code: « fais tout ce qu'il
+faut, la CI/CD, les plugins, la marketplace, les GitHub release ».
+
+- `brain.exe -mcp` serves Claude Code over stdio with two tools, `say` and `listen`, and a channel.
+  - A sentence goes to the oldest waiting `listen`.
+  - With no `listen` waiting, it goes to the session as a channel event, but only if "Delta" is in its first five
+    words, or if it comes within 45 s of Delta's last words or of the last sentence passed on (`-no-wake` lifts this).
+  - Otherwise it is dropped.
+  - stdout carries only JSON-RPC.
+  - Piper and whisper-server run with no console and die with the brain (Windows job).
+- The marketplace is `.claude-plugin/marketplace.json`; the plugin is `plugins/delta`.
+  - Its MCP server is `${CLAUDE_PLUGIN_DATA}/delta-<version>/brain.exe`, so an update installs beside the running brain
+    instead of over it.
+  - `/delta:setup` runs `scripts/setup.ps1`, which installs Delta's release zip, checked against GitHub's SHA-256 for
+    the asset, and Piper, the voice, whisper.cpp and the model, at pinned URLs and SHA-256s.
+  - `/delta:talk` holds a spoken conversation with `listen` and `say`, for sessions without the channel.
+- `check-plugin.ps1` checks that the marketplace, the manifest, the skills and the version agree, and that every script
+  parses under PowerShell 5.1.
+- `ci.yml` runs gofmt, vet, the Go tests, the scene's build and selftest, and that check.
+- `release.yml`, on a tag `v<version>`, builds with `release.ps1`, checks the built versions and publishes the
+  release with `docs/releases/<version>.md`.
+
+Measured:
+
+- 9 Go tests on the MCP server pass: handshake, `say`, routing, timeout, cancellation, not ready, wake gate.
+- `claude plugin validate` passes on the marketplace and on the plugin (Claude Code 2.1.308).
+- `check-plugin.ps1` passes under PowerShell 5.1.26100 and 7.6.7.
+- The 0.2.0 zip, built locally, is 42.1 MB with 242 files.
+- `setup.ps1` under PowerShell 5.1, with `-Zip` and IX's Piper and whisper.cpp named instead of downloaded:
+  - `-Check` changed nothing;
+  - the install wrote `delta.json` without a BOM, and a second run found everything installed;
+  - the installed `brain.exe -mcp` answered `initialize` in 0.02 s and refused `listen` while its ears loaded;
+  - it heard a sentence at 14.4 s and exited 0 when stdin closed.
+- Silence was transcribed once as "Voirte.". Through the channel the wake gate drops such words; under `/delta:talk`
+  Claude receives them.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -111,3 +149,8 @@ tested hashes.
 - Transcription on the GPU: IX's CUDA 12.4 build predates the RTX 5080; a Vulkan or CUDA 12.8 build of whisper.cpp
   would need a download and a build.
 - A recording of a dozen exchanges, with latency p50 and worst case.
+- The plugin from the published marketplace, on a machine without IX's tools:
+  - `/plugin install`, then `/delta:setup` downloading everything;
+  - a session with `--dangerously-load-development-channels plugin:delta@brickyard`.
+- That the release workflow publishes v0.2.0, and that `setup.ps1` installs its zip, checked against the asset's
+  digest.

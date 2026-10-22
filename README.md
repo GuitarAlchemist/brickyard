@@ -1,16 +1,61 @@
 # Delta
 
 Delta is a small robot you talk to, in French, with your voice. It stands in a brick hall drawn with Vulkan, listens on
-your microphone, answers with a language model running on your machine and speaks with a local voice. Nothing leaves
-your computer.
+your microphone, and speaks with a local voice. It works two ways:
+
+- **As Claude Code's voice.** Delta hears you and passes what you say to your Claude Code session. Claude does the work
+  and answers through Delta.
+- **On its own.** It answers with a language model running on your machine, and nothing leaves your computer. It can
+  only talk: it cannot build, run or change anything, and it says so.
 
 ![Delta speaking, in its brick hall](docs/delta.png)
 
 Delta is the first step of Brickyard, a software factory you drive by voice
-([GuitarAlchemist/gaia#259](https://github.com/GuitarAlchemist/gaia/issues/259)). For now it can only talk: it cannot
-build, run or change anything yet, and it says so.
+([GuitarAlchemist/gaia#259](https://github.com/GuitarAlchemist/gaia/issues/259)).
 
-## What you need
+## With Claude Code
+
+You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a microphone, and
+[Claude Code](https://code.claude.com/docs/en/overview). Headphones keep Delta's voice out of the microphone.
+
+1. Install the plugin. In Claude Code, run:
+
+   ```
+   /plugin marketplace add GuitarAlchemist/brickyard
+   /plugin install delta@brickyard
+   ```
+
+   Since Claude Code 2.1.275, `/plugin install delta --marketplace GuitarAlchemist/brickyard` does both in one step.
+2. Run `/delta:setup`. Claude checks what is already there, tells you what it would download, and asks first.
+   - The first time, that is about 700 MB: Delta, Piper and a French voice, whisper.cpp, and a Whisper model.
+   - If you already have Piper, whisper.cpp or the model, give Claude their paths instead.
+   - Each download is checked against its SHA-256.
+3. Talk to Delta, in either of two ways:
+   - **Your voice comes in by itself.** Restart Claude Code with Delta's
+     [channel](https://code.claude.com/docs/en/channels), then start a sentence with "Delta":
+
+     ```
+     claude --dangerously-load-development-channels plugin:delta@brickyard
+     ```
+
+     Channels are a research preview, so Claude Code asks you to confirm the flag. On Team and Enterprise plans, an
+     admin must allow channels first.
+   - **Any session, without the flag.** Run `/delta:talk`. Claude then listens and answers in turns until you say
+     « au revoir ».
+
+Delta's window opens when Claude Code starts the plugin's MCP server.
+
+Which speech Delta passes on:
+- **Through the channel**, only sentences that start with "Delta", or that come within 45 seconds of its last words.
+- **With `/delta:talk`**, everything Delta hears while Claude listens.
+
+Claude Code asks your permission the first time Claude uses Delta's `say` and `listen` tools.
+
+What you say is transcribed on your machine. The text then goes to Claude like anything you type.
+
+## On its own
+
+### What you need
 
 - Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3.
 - A microphone and speakers or headphones. Delta does not listen while it speaks, but headphones keep its voice out of
@@ -35,9 +80,9 @@ The versions Delta was tested with have these SHA-256 hashes: `whisper-blas-bin-
 Any French Piper voice works. Read its model card before using it in public: siwis's gives its dataset's licence as
 CC BY 4.0, and says the voice was fine-tuned from the English lessac voice.
 
-## Start
+### Start
 
-Unzip the release, add the programs above, then run this in PowerShell, in that folder:
+Unzip `delta-<version>-win-x64.zip` from the [latest release](https://github.com/GuitarAlchemist/brickyard/releases/latest), add the programs above, then run this in PowerShell, in that folder:
 
 ```powershell
 Get-ChildItem -Recurse | Unblock-File   # once: Windows marks files downloaded from the internet
@@ -70,9 +115,21 @@ while it hears you, amber while it thinks, and its mouth follows its voice. Pres
 
 The brain starts whisper.cpp's server itself and stops it when it exits.
 
+With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's manifest starts
+([plugins/delta](plugins/delta)).
+- It gives Claude two tools: `say` speaks a text and returns at once; `listen` waits for the next sentence.
+- It declares a Claude Code channel. A sentence that no `listen` is waiting for is pushed into the session as a
+  channel event, if it starts with "Delta" or comes soon after Delta spoke.
+- whisper.cpp's server then runs on a free port.
+- Ollama is not used.
+
+The marketplace is [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json). A tag `v<version>` builds the
+release with [.github/workflows/release.yml](.github/workflows/release.yml). `/delta:setup` installs that release, for
+the plugin's version.
+
 ## Build from source
 
-You need the .NET 10 SDK and Go. `.\release.ps1` builds both parts and packs `dist\delta-<version>-win-x64.zip`. You
+You need the .NET 10 SDK and Go. `.\check-plugin.ps1` checks the plugin and the marketplace. `.\release.ps1` builds both parts and packs `dist\delta-<version>-win-x64.zip`. You
 can also build each part on its own: `go build` in `brain\`, and `dotnet build -c Release` in `scene\`. The scene
 needs no brain to run:
 

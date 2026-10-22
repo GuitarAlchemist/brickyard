@@ -1,0 +1,65 @@
+name: release
+
+# A tag v<version> builds Delta and publishes it as a GitHub release, with docs/releases/<version>.md as its notes.
+# The delta plugin's setup downloads that release's zip and checks it against the SHA-256 GitHub records for it.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: brain/go.mod
+          cache: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Version
+        id: version
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "The tag $env:TAG is not v<major>.<minor>.<patch>." }
+          $version = $Matches[1]
+          if (-not (Test-Path "docs/releases/$version.md")) { throw "docs/releases/$version.md is missing." }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Check
+        shell: powershell
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: .\check-plugin.ps1 -Version $env:VERSION
+
+      - name: Test
+        working-directory: brain
+        run: go test ./...
+
+      - name: Build
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./release.ps1 -Version $env:VERSION
+          & "dist/delta-$env:VERSION-win-x64/scene/scene.exe" --selftest
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $built = & "dist/delta-$env:VERSION-win-x64/brain.exe" -version
+          if ($built -ne $env:VERSION) { throw "brain.exe says $built, not $env:VERSION." }
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create $env:TAG "dist/delta-$env:VERSION-win-x64.zip" --title "Delta $env:VERSION" --notes-file "docs/releases/$env:VERSION.md" --verify-tag
+          if ($LASTEXITCODE -ne 0) { exit 1 }

@@ -1,0 +1,14 @@
+{
+  "name": "brickyard",
+  "description": "Brickyard, a software factory you drive by voice. Its first plugin, Delta, gives Claude Code a voice.",
+  "owner": {
+    "name": "GuitarAlchemist"
+  },
+  "plugins": [
+    {
+      "name": "delta",
+      "source": "./plugins/delta",
+      "description": "Talk to Claude Code aloud, in French, on Windows: Delta, a small robot in its own window, hears your microphone and says Claude's answers."
+    }
+  ]
+}

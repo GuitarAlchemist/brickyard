@@ -1,7 +1,7 @@
 # Builds Delta for Windows x64 and packs dist\delta-<version>-win-x64.zip: the brain, the scene (self-contained, so
 # that no .NET install is needed), the launcher, and the licence and notice texts the binaries come with
 # (THIRD_PARTY.md). Needs the .NET 10 SDK and Go.
-param([string]$Version = '0.1.0')
+param([string]$Version = '0.2.0')
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $name = "delta-$Version-win-x64"
@@ -12,7 +12,7 @@ New-Item -ItemType Directory -Force (Join-Path $out 'LICENSES') | Out-Null
 Push-Location (Join-Path $root 'brain')
 try {
     $env:CGO_ENABLED = '0'
-    go build -trimpath -ldflags '-s -w -buildid=' -o (Join-Path $out 'brain.exe') .
+    go build -trimpath -ldflags "-s -w -buildid= -X main.version=$Version" -o (Join-Path $out 'brain.exe') .
     if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
     $goLicence = Join-Path (go env GOROOT) 'LICENSE'
 } finally {
