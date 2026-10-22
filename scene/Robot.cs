@@ -11,7 +11,9 @@ internal sealed class Robot
     public const int Leds = Spark + 1; // the status lights of the Mac minis the torso is stacked from, a part per layer
     public const int Layers = 7;
     public const int EarLeft = Leds + Layers, EarRight = EarLeft + 1; // pads on the ears, lit while Delta listens
-    public const int Parts = EarRight + 1;
+    public const int BrowLeft = EarRight + 1, BrowRight = BrowLeft + 1; // faint until an expression needs them
+    public const int CornerLeft = BrowRight + 1, CornerRight = CornerLeft + 1; // the mouth's corners, up for a smile
+    public const int Parts = CornerRight + 1;
 
     private static readonly SN.Vector3 HeadPivot = new(0f, 0.84f, 0f);
     private static readonly SN.Vector3 Cyan = new(0.35f, 0.8f, 1f);
@@ -27,6 +29,11 @@ internal sealed class Robot
     private const float StackBottom = 0.24f;
 
     private float listening, thinking, speaking, level, free, paid, compact, gauge, fill;
+    private readonly float[] moods = new float[Faces.Length]; // how much each expression shows, eased in and out
+    private float presenting;
+
+    // Whether the shelf is open at the window's left, which the robot then looks at and points to.
+    public bool Presenting { get; set; }
 
     public static Vertex[][] Meshes()
     {
@@ -118,6 +125,10 @@ internal sealed class Robot
 
         Boxes.Add(head, new(0.14f, 0.48f, -0.06f), new(0.016f, 0.2f, 0.016f), steel);
         Boxes.Add(parts[Tip], SN.Vector3.Zero, new(0.05f, 0.05f, 0.05f), unlit);
+        Boxes.Add(parts[BrowLeft], SN.Vector3.Zero, new(0.11f, 0.014f, 0.008f), unlit);
+        Boxes.Add(parts[BrowRight], SN.Vector3.Zero, new(0.11f, 0.014f, 0.008f), unlit);
+        Boxes.Add(parts[CornerLeft], new(-0.022f, 0f, 0f), new(0.044f, 0.012f, 0.008f), unlit); // from its inner end
+        Boxes.Add(parts[CornerRight], new(0.022f, 0f, 0f), new(0.044f, 0.012f, 0.008f), unlit);
         Boxes.Add(parts[EyeLeft], SN.Vector3.Zero, new(0.1f, 0.07f, 0.01f), unlit);
         Boxes.Add(parts[EyeRight], SN.Vector3.Zero, new(0.1f, 0.07f, 0.01f), unlit);
         Boxes.Add(parts[Mouth], SN.Vector3.Zero, new(0.2f, 1f, 0.01f), unlit);
@@ -155,6 +166,7 @@ internal sealed class Robot
         thinking += ((state == "thinking" ? 1f : 0f) - thinking) * k;
         speaking += ((state == "speaking" ? 1f : 0f) - speaking) * k;
         compact += ((m.Compacting ? 1f : 0f) - compact) * k;
+        presenting += ((Presenting ? 1f : 0f) - presenting) * k;
         gauge += ((m.Context >= 0f ? 1f : 0f) - gauge) * k;
         if (m.Context >= 0f)
         {
@@ -171,7 +183,7 @@ internal sealed class Robot
         var squeeze = compact * (0.05f + (0.025f * (1f + MathF.Sin(t * 4.2f))));
         var press = SN.Matrix4x4.CreateTranslation(0f, -StackBottom, 0f) * SN.Matrix4x4.CreateScale(1f, 1f - squeeze, 1f)
             * SN.Matrix4x4.CreateTranslation(0f, StackBottom, 0f);
-        var bob = SN.Matrix4x4.CreateTranslation(0f, (0.008f * MathF.Sin(t * 2.8f)) + (0.012f * voice), 0f);
+        var bob = SN.Matrix4x4.CreateTranslation(0f, (0.008f * MathF.Sin(t * 2.8f)) + (0.012f * voice) + (0.02f * moods[1] * MathF.Abs(MathF.Sin(t * 7f))), 0f);
         var body = press * bob;
         world[Base] = SN.Matrix4x4.Identity;
         world[Torso] = body;
@@ -193,11 +205,26 @@ internal sealed class Robot
         world[Spark] = SN.Matrix4x4.CreateScale(MathF.Max(paid, 0.0001f) * (1f + (0.06f * MathF.Sin(t * 3f)))) * spin
             * SN.Matrix4x4.CreateTranslation(-0.36f, 1.3f + (0.02f * MathF.Sin(t * 1.4f)), 0.05f) * neck;
 
+        // The expression: the one asked for eases in and the others out; a long silence makes Delta sleepy.
+        var asked = Array.IndexOf(Link.Moods, m.Mood);
+        var drowsy = state == "idle" && m.Quiet > 240f && asked <= 0;
+        for (var i = 1; i < Faces.Length; i++)
+        {
+            var want = i == asked || (drowsy && Link.Moods[i] == "sleepy") ? 1f : 0f;
+            moods[i] += (want - moods[i]) * (1f - MathF.Exp((want > moods[i] ? -8f : -3f) * dt));
+        }
+
+        var face = Faces[0];
+        for (var i = 1; i < Faces.Length; i++)
+        {
+            face = face.Toward(Faces[i], moods[i]);
+        }
+
         // The head looks about while idle, faces the speaker with a tilt while listening, looks up and aside while
-        // thinking, nods with the voice, and looks down at its chest while compacting.
-        var yaw = (0.14f * MathF.Sin(t * 0.37f) * calm) + (0.3f * thinking) + (0.05f * speaking * MathF.Sin(t * 1.3f));
-        var pitch = (0.2f * thinking) + (0.08f * voice) + (0.05f * listening) - (0.03f * calm) - (0.22f * compact);
-        var roll = (0.14f * thinking) - (0.1f * listening) + (0.03f * speaking * MathF.Sin(t * 2.1f));
+        // thinking, nods with the voice, looks down at its chest while compacting, and leans as the expression wants.
+        var yaw = (0.14f * MathF.Sin(t * 0.37f) * calm * (1f - presenting)) + (0.3f * thinking) + (0.05f * speaking * MathF.Sin(t * 1.3f)) + face.Yaw - (0.42f * presenting);
+        var pitch = (0.2f * thinking) + (0.08f * voice) + (0.05f * listening) - (0.03f * calm) - (0.22f * compact) + face.Pitch;
+        var roll = (0.14f * thinking) - (0.1f * listening) + (0.03f * speaking * MathF.Sin(t * 2.1f)) + face.Roll;
         var head = SN.Matrix4x4.CreateRotationX(-pitch) * SN.Matrix4x4.CreateRotationZ(roll) * SN.Matrix4x4.CreateRotationY(yaw)
             * SN.Matrix4x4.CreateTranslation(HeadPivot) * neck;
         world[Head] = head;
@@ -210,21 +237,28 @@ internal sealed class Robot
         }
 
         // The eyes blink, narrow while thinking and more while compacting, and glance up and aside; the mouth is a bar
-        // that opens with the voice.
-        var open = SN.Matrix4x4.CreateScale(1f, Blink(t) * (1f - (0.45f * thinking)) * (1f - (0.6f * compact)) * (1f + (0.15f * voice) + (0.2f * listening)), 1f);
-        var glance = SN.Matrix4x4.CreateTranslation(0.012f * thinking, 0.01f * thinking, 0f);
-        world[EyeLeft] = open * SN.Matrix4x4.CreateTranslation(-0.1f, 0.22f, 0.205f) * glance * head;
-        world[EyeRight] = open * SN.Matrix4x4.CreateTranslation(0.1f, 0.22f, 0.205f) * glance * head;
-        world[Mouth] = SN.Matrix4x4.CreateScale(1f - (0.25f * voice), 0.012f + (0.065f * voice), 1f)
+        // that opens with the voice. The expression shapes them on top: how open the eyes are and how high, the brows'
+        // height and slant, the smile at the mouth's corners.
+        var lids = Blink(t) * (1f - (0.45f * thinking)) * (1f - (0.6f * compact)) * (1f + (0.15f * voice) + (0.2f * listening)) * face.EyeOpen;
+        var glance = SN.Matrix4x4.CreateTranslation(0.012f * thinking, (0.01f * thinking) + face.EyeLift, 0f);
+        world[EyeLeft] = SN.Matrix4x4.CreateScale(1f, lids * (1f - (0.92f * face.Wink)), 1f) * SN.Matrix4x4.CreateTranslation(-0.1f, 0.22f, 0.205f) * glance * head;
+        world[EyeRight] = SN.Matrix4x4.CreateScale(1f, lids, 1f) * SN.Matrix4x4.CreateTranslation(0.1f, 0.22f, 0.205f) * glance * head;
+        world[BrowLeft] = SN.Matrix4x4.CreateRotationZ(face.BrowTiltLeft) * SN.Matrix4x4.CreateTranslation(-0.1f, 0.284f + face.BrowLiftLeft, 0.206f) * head;
+        world[BrowRight] = SN.Matrix4x4.CreateRotationZ(-face.BrowTiltRight) * SN.Matrix4x4.CreateTranslation(0.1f, 0.284f + face.BrowLiftRight, 0.206f) * head;
+        var wide = face.MouthWide * (1f - (0.25f * voice));
+        world[Mouth] = SN.Matrix4x4.CreateScale(wide, 0.012f + (0.065f * voice) + face.MouthOpen, 1f)
             * SN.Matrix4x4.CreateTranslation(0f, 0.1f, 0.205f) * head;
+        world[CornerLeft] = SN.Matrix4x4.CreateRotationZ(-face.Smile) * SN.Matrix4x4.CreateTranslation(-0.1f * wide, 0.1f, 0.206f) * head;
+        world[CornerRight] = SN.Matrix4x4.CreateRotationZ(face.Smile) * SN.Matrix4x4.CreateTranslation(0.1f * wide, 0.1f, 0.206f) * head;
         world[Tip] = SN.Matrix4x4.CreateTranslation(0.14f, 0.6f, -0.06f) * head;
 
         // The arms hang and sway; while thinking, the right hand comes up to the chin; speaking moves them with the voice.
         var sway = 0.06f * MathF.Sin(t * 0.8f) * calm;
-        var left = -sway - (voice * 0.5f * (0.6f + (0.4f * MathF.Sin(t * 3.1f))));
-        var right = sway - (1.9f * thinking) - (voice * 0.35f * (0.5f + (0.5f * MathF.Sin((t * 2.3f) + 1f))));
+        var left = -sway - (voice * 0.5f * (0.6f + (0.4f * MathF.Sin(t * 3.1f)))) - face.Arms;
+        var right = sway - (1.9f * thinking) - (voice * 0.35f * (0.5f + (0.5f * MathF.Sin((t * 2.3f) + 1f)))) - face.Arms;
         var shoulders = 0.68f - (squeeze * (0.68f - StackBottom));
-        world[ArmLeft] = SN.Matrix4x4.CreateRotationX(left) * SN.Matrix4x4.CreateTranslation(-0.32f, shoulders, 0f) * bob;
+        world[ArmLeft] = SN.Matrix4x4.CreateRotationX(left - (0.5f * presenting)) * SN.Matrix4x4.CreateRotationZ(-1.05f * presenting)
+            * SN.Matrix4x4.CreateTranslation(-0.32f, shoulders, 0f) * bob;
         world[ArmRight] = SN.Matrix4x4.CreateRotationX(right) * SN.Matrix4x4.CreateRotationY(-0.5f * thinking)
             * SN.Matrix4x4.CreateTranslation(0.32f, shoulders, 0f) * bob;
 
@@ -233,6 +267,10 @@ internal sealed class Robot
         var churn = compact * 0.35f * MathF.Sin(t * 9f);
         glow[EyeLeft] = glow[EyeRight] = new SN.Vector4(hue, 0.9f + (0.3f * speaking) + (0.4f * voice) + churn);
         glow[Mouth] = new SN.Vector4(Cyan, 0.12f + (1.3f * voice));
+        var showing = MathF.Min(1f, moods.Sum());
+        glow[BrowLeft] = glow[BrowRight] = new SN.Vector4(hue, (0.06f + (0.8f * showing)) * face.Glow);
+        glow[CornerLeft] = glow[CornerRight] = new SN.Vector4(Cyan, (0.1f + (1.2f * MathF.Min(1f, MathF.Abs(face.Smile) * 2.5f))) * face.Glow);
+        glow[EyeLeft] = glow[EyeRight] = new SN.Vector4(hue, glow[EyeLeft].W * face.Glow);
         var flash = MathF.Sin(t * MathF.Tau * 3f) > 0f ? 1.3f : 0.12f;
         glow[Tip] = new SN.Vector4(hue, (calm * (0.3f + (0.2f * MathF.Sin(t * 1.6f)))) + (thinking * flash) + (listening * 1.1f) + (speaking * (0.3f + voice))
             + (compact * (0.7f + (0.6f * MathF.Sin(t * 4.2f)))));
@@ -271,6 +309,34 @@ internal sealed class Robot
         glow[EarLeft] = glow[EarRight] = new SN.Vector4(Green, 0.06f + (1.6f * listening));
         glow[Base] = glow[Torso] = glow[Head] = glow[ArmLeft] = glow[ArmRight] = default;
     }
+
+    // An expression: how open the eyes are (1 as at rest) and how much higher they sit, each brow's lift and its inner
+    // end's rise (radians), the smile at the mouth's corners (radians, negative for a frown), how much the mouth opens
+    // and how wide it is, the head's pitch, roll and yaw, how far the arms come forward, a closed left eye, and how
+    // bright the face glows.
+    private readonly record struct Face(float EyeOpen, float EyeLift, float BrowLiftLeft, float BrowLiftRight, float BrowTiltLeft, float BrowTiltRight,
+        float Smile, float MouthOpen, float MouthWide, float Pitch, float Roll, float Yaw, float Arms, float Wink, float Glow)
+    {
+        public Face Toward(Face to, float w) => w <= 0f ? this : new(
+            EyeOpen + ((to.EyeOpen - Faces[0].EyeOpen) * w), EyeLift + (to.EyeLift * w),
+            BrowLiftLeft + (to.BrowLiftLeft * w), BrowLiftRight + (to.BrowLiftRight * w), BrowTiltLeft + (to.BrowTiltLeft * w), BrowTiltRight + (to.BrowTiltRight * w),
+            Smile + (to.Smile * w), MouthOpen + (to.MouthOpen * w), MouthWide + ((to.MouthWide - Faces[0].MouthWide) * w),
+            Pitch + (to.Pitch * w), Roll + (to.Roll * w), Yaw + (to.Yaw * w), Arms + (to.Arms * w), Wink + (to.Wink * w), Glow + ((to.Glow - Faces[0].Glow) * w));
+    }
+
+    // In Link.Moods' order: neutral, joy, surprise, doubt, sorry, proud, wink, focus, sleepy.
+    private static readonly Face[] Faces =
+    [
+        new(1f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 0f, 1f),
+        new(0.55f, 0.008f, 0.012f, 0.012f, 0f, 0f, 0.5f, 0f, 1.05f, 0.08f, 0f, 0f, 0.35f, 0f, 1.15f),
+        new(1.5f, 0.004f, 0.03f, 0.03f, 0f, 0f, 0f, 0.05f, 0.35f, 0.1f, 0f, 0f, 0.15f, 0f, 1.2f),
+        new(0.8f, 0f, 0.024f, -0.006f, 0f, -0.25f, -0.15f, 0f, 0.85f, 0f, 0.16f, -0.12f, 0f, 0f, 1f),
+        new(0.7f, -0.008f, 0.006f, 0.006f, 0.38f, 0.38f, -0.45f, 0f, 0.9f, -0.2f, 0.05f, 0f, -0.08f, 0f, 0.85f),
+        new(0.75f, 0f, 0.006f, 0.006f, -0.08f, -0.08f, 0.32f, 0f, 1f, 0.2f, 0f, 0f, 0f, 0f, 1.1f),
+        new(1f, 0f, -0.004f, 0.016f, 0f, 0f, 0.45f, 0f, 1f, 0f, -0.1f, 0.05f, 0f, 1f, 1.1f),
+        new(0.55f, 0f, -0.008f, -0.008f, -0.28f, -0.28f, 0f, 0f, 0.8f, -0.05f, 0f, 0f, 0f, 0f, 1f),
+        new(0.22f, -0.012f, -0.006f, -0.006f, 0.1f, 0.1f, 0f, 0f, 0.7f, -0.22f, 0.12f, 0f, -0.05f, 0f, 0.55f),
+    ];
 
     // How open the eyes are, from 1 down to 0.1: a blink about every 3.7 s, a double one every third time.
     private static float Blink(float t)

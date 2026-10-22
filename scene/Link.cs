@@ -8,7 +8,10 @@ using System.Text.Json;
 //
 // A line carries any of: "state" (idle, listening, thinking or speaking) with "envelope" while speaking and "cost";
 // "context", how full Claude's conversation is, as {"used": tokens, "limit": tokens}, where limit is where Claude Code
-// compacts it; and "compacting", true while Claude Code compacts the conversation. Each changes only what it names.
+// compacts it; "compacting", true while Claude Code compacts the conversation; and "window", what to do with the
+// window (Placement.Actions), which Window runs; "mood", an expression the face holds for MoodSeconds (Moods); and
+// "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs. Each changes only what it
+// names.
 internal sealed class Link(Func<double> clock)
 {
     private const int MaxLine = 256 * 1024;
@@ -23,14 +26,32 @@ internal sealed class Link(Func<double> clock)
     private float peak = 1f;
     private float context = -1f;
     private bool compacting;
+    private string mood = "neutral";
+    private double moodSince = double.NegativeInfinity;
+    private double heard = double.NegativeInfinity; // when the last line came
+
+    // The expressions the face knows; "neutral" ends the one shown.
+    public static readonly string[] Moods = ["neutral", "joy", "surprise", "doubt", "sorry", "proud", "wink", "focus", "sleepy"];
+
+    // How long the face holds an expression.
+    public const double MoodSeconds = 6.0;
 
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null);
+
+    // Takes what the brain asks of the window, on the link's threads.
+    public Action<string>? Window { get; set; }
+
+    // Takes the brain's moves through the shelf, on the link's threads.
+    public Action<string>? Shelf { get; set; }
+
+    public static readonly string[] ShelfMoves = ["open", "sessions", "plugins", "marketplaces", "close", "up", "down", "enter", "back"];
 
     // The robot's moment: the state, the voice's loudness as a fraction of the sentence's loudest step (0 outside
     // speech), what the answer costs ("free", "paid", or "" when the line did not say), how full the context is as a
-    // fraction of where it is compacted (-1 when unknown), and whether it is being compacted.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting);
+    // fraction of where it is compacted (-1 when unknown), whether it is being compacted, the expression the face holds
+    // ("neutral" for none) and how long ago the brain last said anything, in seconds.
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -62,22 +83,29 @@ internal sealed class Link(Func<double> clock)
         {
             var i = (int)((now - since) / Step);
             var level = state == "speaking" && i >= 0 && i < envelope.Length ? Math.Clamp(envelope[i] / peak, 0f, 1f) : 0f;
-            return new Moment(state, level, cost, context, compacting);
+            var face = now - moodSince < MoodSeconds ? mood : "neutral";
+            var quiet = double.IsNegativeInfinity(heard) ? 0f : (float)Math.Max(0, now - heard);
+            return new Moment(state, level, cost, context, compacting, face, quiet);
         }
     }
 
     // --demo: idle, listening and thinking for 1.5 s each, then 3.5 s of speech-like loudness, 0.5 s idle again and
-    // 2.5 s of compaction, while the context fills from empty to full and starts again after the compaction.
+    // 2.5 s of compaction, while the context fills from empty to full and starts again after the compaction; then each
+    // expression for 1 s.
+    public const double DemoSeconds = 19.0;
+
     public void Demo(double now)
     {
-        var t = now % 11.0;
+        var t = now % DemoSeconds;
         var want = t < 1.5 ? "idle" : t < 3.0 ? "listening" : t < 4.5 ? "thinking" : t < 8.0 ? "speaking" : "idle";
         bool changed;
         lock (gate)
         {
             changed = want != state;
             context = t < 8.5 ? (float)(t / 8.5) : 0.08f;
-            compacting = t >= 8.5;
+            compacting = t is >= 8.5 and < 11.0;
+            mood = t >= 11.0 ? Moods[1 + Math.Min(Moods.Length - 2, (int)(t - 11.0))] : "neutral";
+            moodSince = now;
         }
 
         if (changed)
@@ -125,15 +153,48 @@ internal sealed class Link(Func<double> clock)
                 compacting = k.GetBoolean();
             }
 
+            string? window = null;
+            if (root.TryGetProperty("window"u8, out var w))
+            {
+                window = w.ValueKind == JsonValueKind.String ? w.GetString() : null;
+                if (window is null || !Placement.Actions.Contains(window))
+                {
+                    error = $"the window cannot {w}";
+                    return null;
+                }
+            }
+
+            string? shelf = null;
+            if (root.TryGetProperty("shelf"u8, out var sh))
+            {
+                shelf = sh.ValueKind == JsonValueKind.String ? sh.GetString() : null;
+                if (shelf is null || !ShelfMoves.Contains(shelf))
+                {
+                    error = $"the shelf cannot {sh}";
+                    return null;
+                }
+            }
+
+            string? mood = null;
+            if (root.TryGetProperty("mood"u8, out var md))
+            {
+                mood = md.ValueKind == JsonValueKind.String ? md.GetString() : null;
+                if (mood is null || !Moods.Contains(mood))
+                {
+                    error = $"the face cannot show {md}";
+                    return null;
+                }
+            }
+
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting);
+                return new Change(null, [], "", context, compacting, window, mood, shelf);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -183,7 +244,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf);
         }
         catch (JsonException ex)
         {
@@ -220,15 +281,25 @@ internal sealed class Link(Func<double> clock)
         Check(Parse("""{"compacting":true}""", out _) is { State: null, Context: null, Compacting: true }, "a compaction begins");
         Check(Parse("""{"compacting":"yes"}""", out _) is null, "compacting is a boolean");
         Check(Parse("""{"seconds":1}""", out var nothing) is null && nothing == "no state", "a line that changes nothing is refused");
+        Check(Parse("""{"window":"top-left"}""", out _) is { State: null, Window: "top-left" }, "the window goes to a corner");
+        Check(Parse("""{"window":"dance"}""", out _) is null, "an unknown window action is refused");
+        Check(Parse("""{"mood":"joy"}""", out _) is { State: null, Mood: "joy" }, "a smile");
+        Check(Parse("""{"mood":"rage"}""", out _) is null, "an unknown expression is refused");
+        Check(Parse("""{"state":"speaking","seconds":0.2,"envelope":[0.1,0.3],"cost":"paid","mood":"proud"}""", out _) is { State: "speaking", Mood: "proud" },
+            "a sentence starts with an expression");
+        Check(Parse("""{"shelf":"sessions"}""", out _) is { State: null, Shelf: "sessions" }, "the shelf opens on the sessions");
+        Check(Parse("""{"shelf":"delete"}""", out _) is null, "an unknown move through the shelf is refused");
         var link = new Link(() => 0);
         link.Apply(new Change("speaking", [0f, 0.1f, 0.05f], "free", null, null), 10.0);
-        Check(link.Read(10.03) == new Moment("speaking", 1f, "free", -1f, false), "the loudest step opens the mouth fully");
+        Check(link.Read(10.03) is { State: "speaking", Level: 1f, Cost: "free", Context: -1f, Compacting: false, Mood: "neutral" }, "the loudest step opens the mouth fully");
         Check(link.Read(10.05).Level == 0.5f, "half as loud, half open");
         Check(link.Read(10.07).Level == 0f, "closed after the sentence");
         link.Apply(new Change(null, [], "", 0.5f, true), 10.08);
         Check(link.Read(10.09) is { State: "speaking", Context: 0.5f, Compacting: true }, "a compaction leaves the voice alone");
         link.Apply(new Change("idle", [], "", null, null), 11.0);
-        Check(link.Read(11.01) == new Moment("idle", 0f, "", 0.5f, true), "a state leaves the context and the compaction alone");
+        Check(link.Read(11.01) is { State: "idle", Level: 0f, Cost: "", Context: 0.5f, Compacting: true, Mood: "neutral" }, "a state leaves the context and the compaction alone");
+        link.Apply(new Change(null, [], "", null, null, null, "joy"), 12.0);
+        Check(link.Read(12.5).Mood == "joy" && link.Read(12.0 + MoodSeconds + 0.1).Mood == "neutral", "an expression lasts a few seconds");
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
     }
@@ -237,6 +308,13 @@ internal sealed class Link(Func<double> clock)
     {
         lock (gate)
         {
+            heard = at;
+            if (change.Mood is { } face)
+            {
+                mood = face;
+                moodSince = at;
+            }
+
             if (change.Context is { } c)
             {
                 context = c;
@@ -261,6 +339,16 @@ internal sealed class Link(Func<double> clock)
         {
             var paying = change.Cost == "" ? "" : $" ({change.Cost})";
             Console.WriteLine(newState == "speaking" ? $"SCENE speaking{paying} {change.Envelope.Length * Step:F2} s at {at:F2} s" : $"SCENE {newState}{paying} at {at:F2} s");
+        }
+
+        if (change.Window is { } action)
+        {
+            Window?.Invoke(action);
+        }
+
+        if (change.Shelf is { } move)
+        {
+            Shelf?.Invoke(move);
         }
 
         if (change.Compacting is { } compactingNow)

@@ -3,10 +3,10 @@
 // {"state":"idle"}, "listening", "thinking", or {"state":"speaking","seconds":S,"envelope":[...]} with the voice's
 // loudness every 20 ms, which opens the mouth as the sentence plays.
 //
-//	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--hidden] [--immediate] [--cap N] | --selftest
+//	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--shelf SECTION] [--hidden] [--immediate] [--cap N] | --selftest
 //
-// --demo plays idle, listening, thinking, speaking and a compaction in a loop without the brain, while the context
-// gauge fills, and --shots DIR saves a PNG of each. The scene
+// --demo plays idle, listening, thinking, speaking, a compaction and each expression in a loop without the brain, while
+// the context gauge fills, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
 //
@@ -147,8 +147,9 @@ internal static unsafe class Stage
         var cap = int.TryParse(Option(args, "--cap"), out var capValue) ? capValue : hidden ? 60 : 0;
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
         var shotsDir = Option(args, "--shots");
+        var shelfAtStart = Option(args, "--shelf");
         const double S = Splash.Seconds;
-        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting")];
+        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m))];
         if (shots.Length > 0 && !demo)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
@@ -184,7 +185,7 @@ internal static unsafe class Stage
         }
 
         Glfw.WindowHint(GlfwWindowHint.ClientApi, 0);
-        Glfw.WindowHint(GlfwWindowHint.Resizable, 0);
+        Glfw.WindowHint(GlfwWindowHint.Resizable, 1);
         if (hidden)
         {
             Glfw.WindowHint(GlfwWindowHint.Visible, 0);
@@ -280,50 +281,18 @@ internal static unsafe class Stage
             }
         }
 
-        var caps = physical.GetSurfaceCapabilitiesKHR(surface);
-        var extent = caps.CurrentExtent.Width == -1 ? new VkExtent2D { Width = Width, Height = Height } : caps.CurrentExtent;
-        var imageCount = Math.Max(caps.MinImageCount, 3);
-        if (caps.MaxImageCount != 0)
-        {
-            imageCount = Math.Min(imageCount, caps.MaxImageCount);
-        }
-
-        var swapchain = device.CreateSwapchainKHR(new VkSwapchainCreateInfoKHR
-        {
-            Surface = surface,
-            MinImageCount = imageCount,
-            ImageFormat = surfaceFormat.Format,
-            ImageColorSpace = surfaceFormat.ColorSpace,
-            ImageExtent = extent,
-            ImageArrayLayers = 1,
-            ImageUsage = VkImageUsageFlags.ColorAttachmentBit | (shots.Length == 0 ? default : VkImageUsageFlags.TransferSrcBit),
-            ImageSharingMode = VkSharingMode.Exclusive,
-            PreTransform = caps.CurrentTransform,
-            CompositeAlpha = VkCompositeAlphaFlagsKHR.OpaqueBitKHR,
-            PresentMode = presentMode,
-            Clipped = true,
-        }, null);
-        var images = new VkImage[device.GetSwapchainImagesKHR_Count(swapchain)];
-        device.GetSwapchainImagesKHR_Write(swapchain, images);
-
-        // Depth buffer.
+        // The swapchain and what is as large as the window, built by Build and rebuilt when the window changes size.
         const VkFormat depthFormat = VkFormat.D32SFloat;
-        var depthImage = device.CreateImage(new VkImageCreateInfo
-        {
-            ImageType = VkImageType._2D,
-            Format = depthFormat,
-            Extent = new VkExtent3D { Width = extent.Width, Height = extent.Height, Depth = 1 },
-            MipLevels = 1,
-            ArrayLayers = 1,
-            Samples = VkSampleCountFlags._1Bit,
-            Tiling = VkImageTiling.Optimal,
-            Usage = VkImageUsageFlags.DepthStencilAttachmentBit,
-            SharingMode = VkSharingMode.Exclusive,
-            InitialLayout = VkImageLayout.Undefined,
-        }, null);
-        var depthMemory = device.AllocateMemory(physical, depthImage, VkMemoryPropertyFlags.DeviceLocalBit, null);
-        device.BindImageMemory(depthImage, depthMemory, ByteSize.Zero);
-        var depthView = device.CreateImageView(View(depthImage, depthFormat, VkImageAspectFlags.DepthBit), null);
+        var extent = default(VkExtent2D);
+        var swapchain = default(VkSwapchainKHR);
+        var hasSwapchain = false;
+        var images = Array.Empty<VkImage>();
+        var depthImage = default(VkImage);
+        var depthMemory = default(VkDeviceMemory);
+        var depthView = default(VkImageView);
+        var views = Array.Empty<VkImageView>();
+        var framebuffers = Array.Empty<VkFramebuffer>();
+        var renderDone = Array.Empty<VkSemaphore>();
 
         // One subpass: colour to present, depth cleared and discarded.
         Span<VkAttachmentDescription> attachments =
@@ -378,24 +347,110 @@ internal static unsafe class Stage
             Dependencies = &dependency,
         }, null);
 
-        var views = new VkImageView[images.Length];
-        var framebuffers = new VkFramebuffer[images.Length];
-        var renderDone = new VkSemaphore[images.Length];
-        var pair = stackalloc VkImageView[] { default, depthView };
-        for (var i = 0; i < images.Length; i++)
+        // Builds the swapchain at the window's size, with its depth buffer, image views, framebuffers and semaphores. It
+        // is false while the window has no size, when it is minimised.
+        bool Build()
         {
-            views[i] = device.CreateImageView(View(images[i], surfaceFormat.Format, VkImageAspectFlags.ColorBit), null);
-            pair[0] = views[i];
-            framebuffers[i] = device.CreateFramebuffer(new VkFramebufferCreateInfo
+            var caps = physical.GetSurfaceCapabilitiesKHR(surface);
+            var size = caps.CurrentExtent.Width == -1 ? new VkExtent2D { Width = window.FramebufferSize.X, Height = window.FramebufferSize.Y } : caps.CurrentExtent;
+            if (size.Width <= 0 || size.Height <= 0)
             {
-                RenderPass = renderPass,
-                AttachmentCount = 2,
-                Attachments = pair,
-                Width = extent.Width,
-                Height = extent.Height,
-                Layers = 1,
+                return false;
+            }
+
+            extent = size;
+            var imageCount = Math.Max(caps.MinImageCount, 3);
+            if (caps.MaxImageCount != 0)
+            {
+                imageCount = Math.Min(imageCount, caps.MaxImageCount);
+            }
+
+            var old = swapchain;
+            swapchain = device.CreateSwapchainKHR(new VkSwapchainCreateInfoKHR
+            {
+                Surface = surface,
+                MinImageCount = imageCount,
+                ImageFormat = surfaceFormat.Format,
+                ImageColorSpace = surfaceFormat.ColorSpace,
+                ImageExtent = extent,
+                ImageArrayLayers = 1,
+                ImageUsage = VkImageUsageFlags.ColorAttachmentBit | (shots.Length == 0 ? default : VkImageUsageFlags.TransferSrcBit),
+                ImageSharingMode = VkSharingMode.Exclusive,
+                PreTransform = caps.CurrentTransform,
+                CompositeAlpha = VkCompositeAlphaFlagsKHR.OpaqueBitKHR,
+                PresentMode = presentMode,
+                Clipped = true,
+                OldSwapchain = old,
             }, null);
-            renderDone[i] = device.CreateSemaphore(new VkSemaphoreCreateInfo(), null);
+            if (hasSwapchain)
+            {
+                device.DestroySwapchainKHR(old, null);
+            }
+
+            hasSwapchain = true;
+            images = new VkImage[device.GetSwapchainImagesKHR_Count(swapchain)];
+            device.GetSwapchainImagesKHR_Write(swapchain, images);
+
+            depthImage = device.CreateImage(new VkImageCreateInfo
+            {
+                ImageType = VkImageType._2D,
+                Format = depthFormat,
+                Extent = new VkExtent3D { Width = extent.Width, Height = extent.Height, Depth = 1 },
+                MipLevels = 1,
+                ArrayLayers = 1,
+                Samples = VkSampleCountFlags._1Bit,
+                Tiling = VkImageTiling.Optimal,
+                Usage = VkImageUsageFlags.DepthStencilAttachmentBit,
+                SharingMode = VkSharingMode.Exclusive,
+                InitialLayout = VkImageLayout.Undefined,
+            }, null);
+            depthMemory = device.AllocateMemory(physical, depthImage, VkMemoryPropertyFlags.DeviceLocalBit, null);
+            device.BindImageMemory(depthImage, depthMemory, ByteSize.Zero);
+            depthView = device.CreateImageView(View(depthImage, depthFormat, VkImageAspectFlags.DepthBit), null);
+
+            views = new VkImageView[images.Length];
+            framebuffers = new VkFramebuffer[images.Length];
+            renderDone = new VkSemaphore[images.Length];
+            var pair = stackalloc VkImageView[] { default, depthView };
+            for (var i = 0; i < images.Length; i++)
+            {
+                views[i] = device.CreateImageView(View(images[i], surfaceFormat.Format, VkImageAspectFlags.ColorBit), null);
+                pair[0] = views[i];
+                framebuffers[i] = device.CreateFramebuffer(new VkFramebufferCreateInfo
+                {
+                    RenderPass = renderPass,
+                    AttachmentCount = 2,
+                    Attachments = pair,
+                    Width = extent.Width,
+                    Height = extent.Height,
+                    Layers = 1,
+                }, null);
+                renderDone[i] = device.CreateSemaphore(new VkSemaphoreCreateInfo(), null);
+            }
+
+            return true;
+        }
+
+        // Destroys what Build made, but the swapchain, which the next one replaces.
+        void Teardown()
+        {
+            for (var i = 0; i < images.Length; i++)
+            {
+                device.DestroySemaphore(renderDone[i], null);
+                device.DestroyFramebuffer(framebuffers[i], null);
+                device.DestroyImageView(views[i], null);
+            }
+
+            device.DestroyImageView(depthView, null);
+            device.DestroyImage(depthImage, null);
+            device.FreeMemory(depthMemory, null);
+            images = [];
+        }
+
+        if (!Build())
+        {
+            Console.Error.WriteLine("SCENE FAIL: the window has no size");
+            return 1;
         }
 
         // Shaders, compiled from GLSL at start-up.
@@ -415,6 +470,7 @@ internal static unsafe class Stage
         Console.WriteLine($"SCENE geometry: hall {hallVertices.Length / 36} boxes, robot {parts.Sum(p => p.Count) / 36} boxes in {parts.Length} parts");
 
         // --shots: a frame's pixels, copied from the swapchain image into a host-visible buffer.
+        var shotExtent = extent;
         var readbackSize = new ByteSize((nuint)(extent.Width * extent.Height * 4));
         var readback = default(VkBuffer);
         var readbackMemory = default(VkDeviceMemory);
@@ -460,8 +516,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 2,
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 2 }],
+            MaxSets = 3,
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 3 }],
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -502,13 +558,146 @@ internal static unsafe class Stage
         SN.Vector3[] splashTints = [SN.Vector3.One, new(0.62f)];
         Console.WriteLine($"SCENE splash: BRUTAL logo {logoWidth}x{logoHeight} px from {logoSourceWidth}x{logoSourceHeight}, notice {(noticePixels is null ? "on the console only" : $"{noticeWidth}x{noticeHeight} px")}");
 
+        var placement = new Placement();
+        link.Window = placement.Ask;
+        var tray = OperatingSystem.IsWindows() ? new Tray() : null;
+        if (tray is not null)
+        {
+            tray.Clicked += () => placement.Ask("show");
+        }
+
+        var stale = false; // the swapchain no longer matches the window
+        window.OnFramebufferSize += (_, _) => stale = true;
+
+        // The shelf (Shelf.cs): Tab or M opens it; the arrows, Enter, Backspace and the mouse move through it; Esc
+        // closes it, and the window when it is closed. Its card is drawn again when what it shows changes.
+        var shelf = new Shelf();
+        var cardSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        var uploadPool = device.CreateCommandPool(new VkCommandPoolCreateInfo { QueueFamilyIndex = family }, null);
+        var uploader = device.AllocateCommandBuffer(new VkCommandBufferAllocateInfo { CommandPool = uploadPool, Level = VkCommandBufferLevel.Primary });
+        Texture? cardTexture = null;
+        Panel.Card? card = null;
+        var cardVersion = -1;
+        var cardHeight = 0;
+        int CardMargin() => Math.Max(12, extent.Height / 48);
+        link.Shelf = command =>
+        {
+            var at = clock.Elapsed.TotalSeconds;
+            switch (command)
+            {
+                case "open":
+                    shelf.Show(at);
+                    break;
+                case "sessions" or "plugins" or "marketplaces":
+                    shelf.Show(at, command);
+                    break;
+                case "close":
+                    shelf.Hide();
+                    break;
+                case "up":
+                    shelf.Move(at, -1);
+                    break;
+                case "down":
+                    shelf.Move(at, 1);
+                    break;
+                case "enter":
+                    shelf.Enter(at);
+                    break;
+                case "back":
+                    shelf.Back(at);
+                    break;
+            }
+        };
+
+        if (shelfAtStart is not null)
+        {
+            shelf.Show(0, shelfAtStart);
+        }
+
         var reason = "window closed";
         window.OnKey += (w, key, scancode, action, mods) =>
         {
-            if (action != GlfwKeyAction.Release && key == GlfwKey.Escape)
+            if (action == GlfwKeyAction.Release)
+            {
+                return;
+            }
+
+            var at = clock.Elapsed.TotalSeconds;
+            if (shelf.Open)
+            {
+                switch (key)
+                {
+                    case GlfwKey.Escape or GlfwKey.Tab:
+                        shelf.Hide();
+                        break;
+                    case GlfwKey.Up:
+                        shelf.Move(at, -1);
+                        break;
+                    case GlfwKey.Down:
+                        shelf.Move(at, 1);
+                        break;
+                    case GlfwKey.Enter or GlfwKey.Right:
+                        shelf.Enter(at);
+                        break;
+                    case GlfwKey.Backspace or GlfwKey.Left:
+                        shelf.Back(at);
+                        break;
+                }
+
+                return;
+            }
+
+            if (key is GlfwKey.Tab or GlfwKey.M)
+            {
+                shelf.Show(at);
+            }
+            else if (key == GlfwKey.Escape)
             {
                 reason = "Esc";
                 w.ShouldClose = true;
+            }
+        };
+
+        // A row under the cursor, in the card's pixels, from the window's coordinates.
+        int RowAt(GlfwWindow w)
+        {
+            if (card is null || !shelf.Open)
+            {
+                return -1;
+            }
+
+            var x = w.CursorX * extent.Width / Math.Max(1, w.Width) - CardMargin();
+            var y = w.CursorY * extent.Height / Math.Max(1, w.Height) - CardMargin();
+            if (x < 0 || x >= card.Width)
+            {
+                return -1;
+            }
+
+            foreach (var (row, top, bottom) in card.Rows)
+            {
+                if (y >= top && y < bottom)
+                {
+                    return row;
+                }
+            }
+
+            return -1;
+        }
+
+        window.OnMouseButton += (w, button, action, mods) =>
+        {
+            if (action == GlfwButtonAction.Press && RowAt(w) is var row and >= 0)
+            {
+                var at = clock.Elapsed.TotalSeconds;
+                shelf.Select(at, row);
+                shelf.Enter(at);
+            }
+        };
+        window.OnScroll += (w, offset) =>
+        {
+            if (shelf.Open && offset.Y != 0)
+            {
+                shelf.Move(clock.Elapsed.TotalSeconds, offset.Y > 0 ? -1 : 1);
             }
         };
 
@@ -535,6 +724,7 @@ internal static unsafe class Stage
         while (!window.ShouldClose)
         {
             Glfw.PollEvents();
+            placement.Apply(window, tray);
             var now = clock.Elapsed.TotalSeconds;
             if (now >= limit)
             {
@@ -556,6 +746,8 @@ internal static unsafe class Stage
 
             var moment = link.Read(linkNow);
             var time = (float)now;
+            shelf.Tick(now);
+            robot.Presenting = shelf.Open;
             robot.Pose(time, dt, moment, worlds, glows);
 
             // The camera drifts a little from side to side in front of the robot, at the height of its face.
@@ -564,13 +756,55 @@ internal static unsafe class Stage
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, new SN.Vector3(0f, 0.7f, 0f), SN.Vector3.UnitY) * projection;
 
+            // A window hidden by the clock or minimised draws nothing; one whose size changed gets a new swapchain first.
+            if (placement.Hidden || window.IsIconified)
+            {
+                Thread.Sleep(50);
+                continue;
+            }
+
+            if (stale)
+            {
+                device.WaitIdle();
+                Teardown();
+                if (!Build())
+                {
+                    Thread.Sleep(50);
+                    continue;
+                }
+
+                stale = false;
+                Console.WriteLine($"SCENE swapchain rebuilt at {extent.Width}x{extent.Height}");
+                continue; // the projection follows the new size
+            }
+
+            if (shelf.Open && !splashing && (shelf.Version != cardVersion || extent.Height != cardHeight))
+            {
+                cardVersion = shelf.Version;
+                cardHeight = extent.Height;
+                card = Panel.Draw(shelf.Levels, extent.Height);
+                device.WaitIdle(); // the old card may still be read by a frame in flight
+                device.ResetCommandPool(uploadPool, VkCommandPoolResetFlags.None);
+                uploader.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+                var fresh = new Texture(device, physical, uploader, card.Rgba, card.Width, card.Height);
+                uploader.End();
+                var uploaderHandle = uploader.Handle;
+                queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploaderHandle }], default);
+                device.WaitIdle();
+                fresh.FreeStaging();
+                cardTexture?.Dispose();
+                cardTexture = fresh;
+                var cardImage = new VkDescriptorImageInfo { Sampler = sampler, ImageView = cardTexture.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+                device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = cardSet, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &cardImage }], []);
+            }
+
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
             var result = device.AcquireNextImageKHR(swapchain, -1, acquired[slot], default, out var imageIndex);
             if (result == VkResult.ErrorOutOfDateKHR)
             {
-                reason = "swapchain out of date (the window is fixed-size; rebuilding is out of scope)";
-                break;
+                stale = true;
+                continue;
             }
 
             device.ResetFences([fences[slot]]);
@@ -610,10 +844,20 @@ internal static unsafe class Stage
                 {
                     Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
                 }
+
+                if (shelf.Open && card is not null && cardTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var margin = CardMargin();
+                    var push = new SplashPush(Rect(margin, margin, card.Width, card.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [cardSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
             }
 
             cb.EndRenderPass();
-            var capturing = shot < shots.Length && shown >= shots[shot].At;
+            var capturing = shot < shots.Length && shown >= shots[shot].At && extent.Width == shotExtent.Width && extent.Height == shotExtent.Height;
             if (capturing)
             {
                 cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
@@ -645,18 +889,18 @@ internal static unsafe class Stage
                 ],
                 fences[slot]);
             var presentIndex = imageIndex;
+            var presentSwapchain = swapchain; // Build reassigns swapchain, whose address cannot be taken
             result = queue.PresentKHR(new VkPresentInfoKHR
             {
                 WaitSemaphoreCount = 1,
                 WaitSemaphores = &signalSemaphore,
                 SwapchainCount = 1,
-                Swapchains = &swapchain,
+                Swapchains = &presentSwapchain,
                 ImageIndices = &presentIndex,
             });
-            if (result == VkResult.ErrorOutOfDateKHR)
+            if (result is VkResult.ErrorOutOfDateKHR or VkResult.SuboptimalKHR)
             {
-                reason = "swapchain out of date (the window is fixed-size; rebuilding is out of scope)";
-                break;
+                stale = true;
             }
 
             var presented = clock.Elapsed.TotalSeconds;
@@ -745,6 +989,9 @@ internal static unsafe class Stage
             texture.Dispose();
         }
 
+        cardTexture?.Dispose();
+        device.DestroyCommandPool(uploadPool, null);
+
         device.DestroyDescriptorPool(descriptorPool, null);
         device.DestroyPipeline(splashPipeline, null);
         device.DestroyPipelineLayout(splashLayout, null);
@@ -756,18 +1003,10 @@ internal static unsafe class Stage
         device.DestroyPipelineLayout(layout, null);
         device.DestroyShaderModule(vertexModule, null);
         device.DestroyShaderModule(fragmentModule, null);
-        for (var i = 0; i < images.Length; i++)
-        {
-            device.DestroySemaphore(renderDone[i], null);
-            device.DestroyFramebuffer(framebuffers[i], null);
-            device.DestroyImageView(views[i], null);
-        }
-
+        Teardown();
         device.DestroyRenderPass(renderPass, null);
-        device.DestroyImageView(depthView, null);
-        device.DestroyImage(depthImage, null);
-        device.FreeMemory(depthMemory, null);
         device.DestroySwapchainKHR(swapchain, null);
+        tray?.Dispose();
         device.Dispose();
         instance.DestroySurfaceKHR(surface, null);
         instance.Dispose();

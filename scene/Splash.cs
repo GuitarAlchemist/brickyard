@@ -52,8 +52,9 @@ internal static class Splash
         return output;
     }
 
-    // A line of white text whose alpha is GDI's antialiased coverage, in the system's Segoe UI, or null off Windows.
-    public static byte[]? Text(string text, int pixels, out int width, out int height)
+    // A line of white text whose alpha is GDI's antialiased coverage, in the system's Segoe UI, semibold if asked, or
+    // null off Windows.
+    public static byte[]? Text(string text, int pixels, out int width, out int height, bool bold = false)
     {
         width = height = 0;
         if (!OperatingSystem.IsWindows())
@@ -62,7 +63,7 @@ internal static class Splash
         }
 
         var dc = CreateCompatibleDC(0);
-        var font = CreateFontW(-pixels, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI"); // ANTIALIASED_QUALITY, no ClearType fringes
+        var font = CreateFontW(-pixels, 0, 0, 0, bold ? 600 : 400, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI"); // ANTIALIASED_QUALITY, no ClearType fringes
         var oldFont = SelectObject(dc, font);
         GetTextExtentPoint32W(dc, text, text.Length, out var size);
         width = size.Cx + 2;
