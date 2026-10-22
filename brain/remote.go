@@ -89,7 +89,7 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 	transcribe := r.transcribe
 	r.mu.Unlock()
 	if transcribe == nil {
-		http.Error(w, "Delta's ears are still loading", http.StatusServiceUnavailable)
+		http.Error(w, "Delta cannot hear yet: its ears are loading, or missing", http.StatusServiceUnavailable)
 		return
 	}
 	start := time.Now()
