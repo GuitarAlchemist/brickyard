@@ -1,6 +1,6 @@
 // Brickyard P0 (GuitarAlchemist/gaia#260): the robot you talk to, standing in a brick hall, drawn with Vulkan through
 // BRUTAL's bindings. The brain (../brain) tells it what it is doing, one JSON line per change on a local TCP port:
-// {"state":"idle"}, {"state":"thinking"}, or {"state":"speaking","seconds":S,"envelope":[...]} with the voice's
+// {"state":"idle"}, "listening", "thinking", or {"state":"speaking","seconds":S,"envelope":[...]} with the voice's
 // loudness every 20 ms, which opens the mouth as the sentence plays.
 //
 //	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--hidden] [--immediate] [--cap N] | --selftest
@@ -109,7 +109,7 @@ internal static unsafe class Stage
         var cap = int.TryParse(Option(args, "--cap"), out var capValue) ? capValue : hidden ? 60 : 0;
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
         var shotsDir = Option(args, "--shots");
-        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.6, "idle"), (3.4, "thinking"), (6.2, "speaking")];
+        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.0, "idle"), (2.6, "listening"), (4.2, "thinking"), (6.2, "speaking")];
         if (shots.Length > 0 && !demo)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");

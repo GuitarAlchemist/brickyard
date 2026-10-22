@@ -3,9 +3,13 @@
 // Go's standard library only; nothing leaves the machine.
 //
 //	brain -piper <piper.exe> -voice <model.onnx> [-model qwen3:8b] [-scene 127.0.0.1:8805] [-mute]
+//	      [-whisper <whisper-server.exe> [-whisper-model <ggml.bin>] [-mic | -hear a.wav,b.wav]]
 //
-// Each line on standard input is something heard. For each answer it prints when the first token, the first sentence
-// and the first audio came, counted from the moment the line was read.
+// Each line on standard input is something heard. With -whisper, the brain also runs whisper.cpp's server on
+// 127.0.0.1 (-ears-port) to transcribe: -mic listens on the default microphone, cutting utterances at 700 ms of quiet
+// and hearing nothing while Delta answers; -hear transcribes WAV files instead, one after another, for tests. For each
+// answer it prints how long the transcription took and when the first token, the first sentence and the first audio
+// came, counted from the end of what was heard.
 package main
 
 import (
@@ -15,7 +19,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,9 +42,49 @@ func main() {
 	voiceModel := flag.String("voice", "", "a Piper voice, .onnx with its .onnx.json (required)")
 	sceneAddr := flag.String("scene", "", "the scene's address, to show Delta's state")
 	mute := flag.Bool("mute", false, "synthesise but do not play")
+	whisper := flag.String("whisper", "", "whisper.cpp's whisper-server executable, to listen")
+	whisperModel := flag.String("whisper-model", filepath.Join(os.Getenv("LOCALAPPDATA"), "voice-listen", "models", "ggml-large-v3-turbo-q5_0.bin"), "a whisper.cpp model")
+	earsPort := flag.Int("ears-port", 8806, "the loopback port for whisper-server")
+	threads := flag.Int("threads", 16, "whisper-server's CPU threads")
+	useMic := flag.Bool("mic", false, "listen on the default microphone (needs -whisper)")
+	hearFiles := flag.String("hear", "", "comma-separated WAV files to transcribe as if heard, then exit (needs -whisper)")
+	transcribe := flag.Bool("transcribe", false, "with -hear, only transcribe the files and time it")
+	// 768 is about 15 s, the longest utterance the endpoint lets through; on the CPU it took the transcription of 2 to
+	// 3 s of French from 4.9-7.0 s down to 1.6-2.4 s, with the same words.
+	audioCtx := flag.Int("audio-ctx", 768, "whisper's audio context, 0 for the model's 30 s window (1500)")
 	flag.Parse()
+	if *transcribe {
+		e, err := startEars(*whisper, *whisperModel, *earsPort, *threads, "Delta, Brickyard.", *audioCtx)
+		if err != nil {
+			fail(err)
+		}
+		defer e.close()
+		for _, path := range append([]string{""}, strings.Split(*hearFiles, ",")...) {
+			samples := make([]float32, earsRate) // first, a second of silence loads the weights and kernels
+			if path != "" {
+				w, err := readWav(path)
+				if err != nil {
+					fail(err)
+				}
+				samples = resample(w.samples, w.rate, earsRate)
+			}
+			t0 := time.Now()
+			text, err := e.hear(samples)
+			if err != nil {
+				fail(err)
+			}
+			line, _ := json.Marshal(map[string]any{"file": filepath.Base(path), "seconds": float64(len(samples)) / earsRate,
+				"heard": text, "asr_ms": time.Since(t0).Milliseconds()})
+			fmt.Println(string(line))
+		}
+		return
+	}
 	if *piper == "" || *voiceModel == "" {
 		fmt.Fprintln(os.Stderr, "brain: -piper and -voice are required; check the voice's licence")
+		os.Exit(2)
+	}
+	if (*useMic || *hearFiles != "") && *whisper == "" {
+		fmt.Fprintln(os.Stderr, "brain: -mic and -hear need -whisper")
 		os.Exit(2)
 	}
 	dir, err := os.MkdirTemp("", "brickyard-voice-")
@@ -63,39 +109,89 @@ func main() {
 	}
 	fmt.Printf("ready: voice %d ms, %s loaded in %d ms\n", voiceReady.Milliseconds(), *model, time.Since(start).Milliseconds())
 
+	var e *ears
+	if *whisper != "" {
+		start = time.Now()
+		if e, err = startEars(*whisper, *whisperModel, *earsPort, *threads, "Delta, Brickyard.", *audioCtx); err != nil {
+			fail(err)
+		}
+		defer e.close()
+		if _, err := e.hear(make([]float32, earsRate)); err != nil { // loads the model's weights and kernels
+			fail(err)
+		}
+		fmt.Printf("ears ready on %s in %d ms\n", e.url, time.Since(start).Milliseconds())
+	}
+
 	s := dialScene(*sceneAddr)
 	s.send(map[string]any{"state": "idle"})
 	history := []message{{"system", persona}}
-	in := bufio.NewScanner(os.Stdin)
-	for in.Scan() {
-		heard := strings.TrimSpace(in.Text())
-		if heard == "" {
-			continue
+	respond := func(u utterance) {
+		if u.text == "" {
+			s.send(map[string]any{"state": "idle"})
+			return
 		}
-		history = append(history, message{"user", heard})
-		t, err := answer(*ollama, *model, history, v, s, *mute)
+		history = append(history, message{"user", u.text})
+		t, err := answer(*ollama, *model, history, v, s, *mute, u.ended)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "brain:", err)
 			history = history[:len(history)-1]
-			continue
+			return
 		}
 		history = append(history, message{"assistant", t.answer})
 		if len(history) > 13 { // the persona and the last six exchanges
 			history = append(history[:1], history[len(history)-12:]...)
 		}
 		line, _ := json.Marshal(map[string]any{
-			"heard": heard, "answer": t.answer, "first_token_ms": t.firstToken.Milliseconds(),
-			"first_sentence_ms": t.firstSentence.Milliseconds(), "first_audio_ms": t.firstAudio.Milliseconds(),
-			"done_ms": t.done.Milliseconds(),
+			"heard": u.text, "answer": t.answer, "asr_ms": u.asr.Milliseconds(),
+			"first_token_ms": t.firstToken.Milliseconds(), "first_sentence_ms": t.firstSentence.Milliseconds(),
+			"first_audio_ms": t.firstAudio.Milliseconds(), "done_ms": t.done.Milliseconds(),
 		})
 		fmt.Println(string(line))
 	}
+
+	if *hearFiles != "" {
+		for _, path := range strings.Split(*hearFiles, ",") {
+			w, err := readWav(path)
+			if err != nil {
+				fail(err)
+			}
+			ended := time.Now()
+			text, err := e.hear(resample(w.samples, w.rate, earsRate))
+			if err != nil {
+				fail(err)
+			}
+			respond(utterance{text: text, ended: ended, asr: time.Since(ended)})
+		}
+		return
+	}
+
+	var busy atomic.Bool
+	heard := make(chan utterance)
+	go func() {
+		in := bufio.NewScanner(os.Stdin)
+		for in.Scan() {
+			if text := strings.TrimSpace(in.Text()); text != "" {
+				heard <- utterance{text: text, ended: time.Now()}
+			}
+		}
+		if !*useMic {
+			close(heard)
+		}
+	}()
+	if *useMic {
+		go listen(e, s, &busy, heard)
+	}
+	for u := range heard {
+		busy.Store(true)
+		respond(u)
+		time.Sleep(300 * time.Millisecond) // the room's echo of the last word is not heard as speech
+		busy.Store(false)
+	}
 }
 
-// answer runs one turn: the model's tokens are cut into sentences, each sentence is synthesised while the model goes
-// on, and the sound is played in order.
-func answer(url, model string, history []message, v *voice, s *scene, mute bool) (turn, error) {
-	t0 := time.Now()
+// answer runs one turn, timed from t0: the model's tokens are cut into sentences, each sentence is synthesised while
+// the model goes on, and the sound is played in order.
+func answer(url, model string, history []message, v *voice, s *scene, mute bool, t0 time.Time) (turn, error) {
 	var t turn
 	s.send(map[string]any{"state": "thinking"})
 	toSay := make(chan string, 16)

@@ -57,8 +57,11 @@ func (v *voice) close() {
 	v.cmd.Wait()
 }
 
-// wav is a 16-bit mono PCM file's length and loudness envelope: one RMS value, 0 to 1, per 20 ms.
+// wav is a 16-bit mono PCM file: its samples (-1 to 1), rate and length, and its loudness envelope, one RMS value,
+// 0 to 1, per 20 ms.
 type wav struct {
+	rate     int
+	samples  []float32
 	seconds  float64
 	envelope []float32
 }
@@ -88,21 +91,29 @@ func readWav(path string) (wav, error) {
 			if rate == 0 {
 				return wav{}, fmt.Errorf("%s: not 16-bit mono PCM", path)
 			}
-			n := size / 2
-			step := rate / 50
-			w := wav{seconds: float64(n) / float64(rate)}
-			for i := 0; i < n; i += step {
-				sum := 0.0
-				end := min(i+step, n)
-				for j := i; j < end; j++ {
-					s := float64(int16(binary.LittleEndian.Uint16(data[body+2*j:]))) / 32768
-					sum += s * s
-				}
-				w.envelope = append(w.envelope, float32(math.Sqrt(sum/float64(end-i))))
+			w := wav{rate: rate, samples: make([]float32, size/2)}
+			for i := range w.samples {
+				w.samples[i] = float32(int16(binary.LittleEndian.Uint16(data[body+2*i:]))) / 32768
 			}
+			w.seconds = float64(len(w.samples)) / float64(rate)
+			w.envelope = envelope(w.samples, rate/50)
 			return w, nil
 		}
 		at = body + size + size%2
 	}
 	return wav{}, fmt.Errorf("%s: no audio", path)
+}
+
+// envelope is the RMS of each step of samples.
+func envelope(samples []float32, step int) []float32 {
+	var out []float32
+	for i := 0; i < len(samples); i += step {
+		end := min(i+step, len(samples))
+		sum := 0.0
+		for _, s := range samples[i:end] {
+			sum += float64(s) * float64(s)
+		}
+		out = append(out, float32(math.Sqrt(sum/float64(end-i))))
+	}
+	return out
 }

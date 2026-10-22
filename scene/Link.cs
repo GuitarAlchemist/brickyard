@@ -52,11 +52,11 @@ internal sealed class Link(Func<double> clock)
         }
     }
 
-    // --demo: idle for 2 s, thinking for 2.5 s, then 3.5 s of speech-like loudness, again and again.
+    // --demo: idle, listening and thinking for 1.5 s each, then 3.5 s of speech-like loudness and 0.5 s idle again.
     public void Demo(double now)
     {
-        var t = now % 8.0;
-        var want = t < 2.0 ? "idle" : t < 4.5 ? "thinking" : "speaking";
+        var t = now % 8.5;
+        var want = t < 1.5 ? "idle" : t < 3.0 ? "listening" : t < 4.5 ? "thinking" : t < 8.0 ? "speaking" : "idle";
         bool changed;
         lock (gate)
         {
@@ -84,7 +84,7 @@ internal sealed class Link(Func<double> clock)
             }
 
             var state = s.GetString()!;
-            if (state is not ("idle" or "thinking" or "speaking"))
+            if (state is not ("idle" or "listening" or "thinking" or "speaking"))
             {
                 error = $"unknown state '{state}'";
                 return null;
@@ -136,6 +136,7 @@ internal sealed class Link(Func<double> clock)
         }
 
         Check(Parse("""{"state":"idle"}""", out _) is { State: "idle" }, "idle");
+        Check(Parse("""{"state":"listening"}""", out _) is { State: "listening" }, "listening");
         Check(Parse("""{"state":"speaking","seconds":0.06,"envelope":[0,0.1,0.05]}""", out _) is { State: "speaking", Envelope.Length: 3 }, "speaking");
         Check(Parse("""{"state":"dancing"}""", out var unknown) is null && unknown!.Contains("dancing"), "an unknown state is refused");
         Check(Parse("""{"state":"speaking","envelope":["loud"]}""", out _) is null, "an envelope of words is refused");

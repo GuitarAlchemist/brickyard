@@ -11,8 +11,9 @@ internal sealed class Robot
     private static readonly SN.Vector3 HeadPivot = new(0f, 0.84f, 0f);
     private static readonly SN.Vector3 Cyan = new(0.35f, 0.8f, 1f);
     private static readonly SN.Vector3 Amber = new(1f, 0.52f, 0.1f);
+    private static readonly SN.Vector3 Green = new(0.35f, 1f, 0.5f);
 
-    private float thinking, speaking, level;
+    private float listening, thinking, speaking, level;
 
     public static Vertex[][] Meshes()
     {
@@ -95,11 +96,12 @@ internal sealed class Robot
     public void Pose(float t, float dt, string state, float heard, Span<SN.Matrix4x4> world, Span<SN.Vector4> glow)
     {
         var k = 1f - MathF.Exp(-5f * dt);
-        thinking += ((state == "thinking" ? 1f : 0f) - thinking) * k;
+        listening += ((state == "listening" ? 1f : 0f) - listening) * k;
+        thinking +=((state == "thinking" ? 1f : 0f) - thinking) * k;
         speaking += ((state == "speaking" ? 1f : 0f) - speaking) * k;
         // The mouth opens at once and closes a little slower, as a voice's loudness is heard.
         level += (heard - level) * (1f - MathF.Exp((heard > level ? -40f : -12f) * dt));
-        var calm = 1f - MathF.Max(thinking, speaking);
+        var calm = 1f - MathF.Max(listening, MathF.Max(thinking, speaking));
         var voice = speaking * level;
 
         var bob = SN.Matrix4x4.CreateTranslation(0f, (0.008f * MathF.Sin(t * 2.8f)) + (0.012f * voice), 0f);
@@ -110,16 +112,17 @@ internal sealed class Robot
             world[Chest + i] = bob;
         }
 
-        // The head looks about while idle, up and aside while thinking, and nods with the voice.
+        // The head looks about while idle, faces the speaker with a tilt while listening, looks up and aside while
+        // thinking, and nods with the voice.
         var yaw = (0.14f * MathF.Sin(t * 0.37f) * calm) + (0.3f * thinking) + (0.05f * speaking * MathF.Sin(t * 1.3f));
-        var pitch = (0.2f * thinking) + (0.08f * voice) - (0.03f * calm);
-        var roll = (0.14f * thinking) + (0.03f * speaking * MathF.Sin(t * 2.1f));
+        var pitch = (0.2f * thinking) + (0.08f * voice) + (0.05f * listening) - (0.03f * calm);
+        var roll = (0.14f * thinking) - (0.1f * listening) + (0.03f * speaking * MathF.Sin(t * 2.1f));
         var head = SN.Matrix4x4.CreateRotationX(-pitch) * SN.Matrix4x4.CreateRotationZ(roll) * SN.Matrix4x4.CreateRotationY(yaw)
             * SN.Matrix4x4.CreateTranslation(HeadPivot) * bob;
         world[Head] = head;
 
         // The eyes blink, narrow while thinking and glance up and aside; the mouth is a bar that opens with the voice.
-        var open = SN.Matrix4x4.CreateScale(1f, Blink(t) * (1f - (0.45f * thinking)) * (1f + (0.15f * voice)), 1f);
+        var open = SN.Matrix4x4.CreateScale(1f, Blink(t) * (1f - (0.45f * thinking)) * (1f + (0.15f * voice) + (0.2f * listening)), 1f);
         var glance = SN.Matrix4x4.CreateTranslation(0.012f * thinking, 0.01f * thinking, 0f);
         world[EyeLeft] = open * SN.Matrix4x4.CreateTranslation(-0.1f, 0.22f, 0.205f) * glance * head;
         world[EyeRight] = open * SN.Matrix4x4.CreateTranslation(0.1f, 0.22f, 0.205f) * glance * head;
@@ -135,18 +138,19 @@ internal sealed class Robot
         world[ArmRight] = SN.Matrix4x4.CreateRotationX(right) * SN.Matrix4x4.CreateRotationY(-0.5f * thinking)
             * SN.Matrix4x4.CreateTranslation(0.32f, 0.68f, 0f) * bob;
 
-        // Cyan at rest and speaking, amber while thinking.
-        var hue = SN.Vector3.Lerp(Cyan, Amber, thinking);
+        // Cyan at rest and speaking, green while listening, amber while thinking.
+        var hue = SN.Vector3.Lerp(SN.Vector3.Lerp(Cyan, Green, listening), Amber, thinking);
         glow[EyeLeft] = glow[EyeRight] = new SN.Vector4(hue, 0.9f + (0.3f * speaking) + (0.4f * voice));
         glow[Mouth] = new SN.Vector4(Cyan, 0.12f + (1.3f * voice));
         var flash = MathF.Sin(t * MathF.Tau * 3f) > 0f ? 1.3f : 0.12f;
-        glow[Tip] = new SN.Vector4(hue, (calm * (0.3f + (0.2f * MathF.Sin(t * 1.6f)))) + (thinking * flash) + (speaking * (0.3f + voice)));
+        glow[Tip] = new SN.Vector4(hue, (calm * (0.3f + (0.2f * MathF.Sin(t * 1.6f)))) + (thinking * flash) + (listening * 1.1f) + (speaking * (0.3f + voice)));
         for (var i = 0; i < ChestLights; i++)
         {
-            // All breathe together at rest; a light runs to and fro while thinking; a level meter while speaking.
+            // All breathe together at rest and hold steady while listening; a light runs to and fro while thinking; a
+            // level meter while speaking.
             var run = 1f - MathF.Min(MathF.Abs(i - (2f + (2f * MathF.Sin(t * 4f)))), 1f);
             var meter = voice * ChestLights > i + 0.5f ? 1.2f : 0.06f;
-            glow[Chest + i] = new SN.Vector4(hue, (calm * (0.25f + (0.15f * MathF.Sin(t * 1.6f)))) + (thinking * (0.08f + (1.2f * run))) + (speaking * meter));
+            glow[Chest + i] = new SN.Vector4(hue, (calm * (0.25f + (0.15f * MathF.Sin(t * 1.6f)))) + (listening * 0.7f) + (thinking * (0.08f + (1.2f * run))) + (speaking * meter));
         }
 
         glow[Base] = glow[Torso] = glow[Head] = glow[ArmLeft] = glow[ArmRight] = default;
