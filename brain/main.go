@@ -43,16 +43,20 @@ func main() {
 	sceneAddr := flag.String("scene", "", "the scene's address, to show Delta's state")
 	mute := flag.Bool("mute", false, "synthesise but do not play")
 	whisper := flag.String("whisper", "", "whisper.cpp's whisper-server executable, to listen")
-	whisperModel := flag.String("whisper-model", filepath.Join(os.Getenv("LOCALAPPDATA"), "voice-listen", "models", "ggml-large-v3-turbo-q5_0.bin"), "a whisper.cpp model")
+	whisperModel := flag.String("whisper-model", "", "a whisper.cpp model (default: ggml-large-v3-turbo-q5_0.bin beside -whisper)")
 	earsPort := flag.Int("ears-port", 8806, "the loopback port for whisper-server")
 	threads := flag.Int("threads", 16, "whisper-server's CPU threads")
 	useMic := flag.Bool("mic", false, "listen on the default microphone (needs -whisper)")
+	micLevels := flag.Bool("mic-levels", false, "with -mic, print the microphone's level every 2 s")
 	hearFiles := flag.String("hear", "", "comma-separated WAV files to transcribe as if heard, then exit (needs -whisper)")
 	transcribe := flag.Bool("transcribe", false, "with -hear, only transcribe the files and time it")
 	// 768 is about 15 s, the longest utterance the endpoint lets through; on the CPU it took the transcription of 2 to
 	// 3 s of French from 4.9-7.0 s down to 1.6-2.4 s, with the same words.
 	audioCtx := flag.Int("audio-ctx", 768, "whisper's audio context, 0 for the model's 30 s window (1500)")
 	flag.Parse()
+	if *whisperModel == "" && *whisper != "" {
+		*whisperModel = filepath.Join(filepath.Dir(*whisper), "ggml-large-v3-turbo-q5_0.bin")
+	}
 	if *transcribe {
 		e, err := startEars(*whisper, *whisperModel, *earsPort, *threads, "Delta, Brickyard.", *audioCtx)
 		if err != nil {
@@ -179,7 +183,7 @@ func main() {
 		}
 	}()
 	if *useMic {
-		go listen(e, s, &busy, heard)
+		go listen(e, s, &busy, heard, *micLevels)
 	}
 	for u := range heard {
 		busy.Store(true)

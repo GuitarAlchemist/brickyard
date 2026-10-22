@@ -20,7 +20,7 @@ import (
 const earsRate = 16000
 
 // ears is whisper.cpp's server, run by the brain on a loopback port and kept warm, so that each utterance costs only
-// its transcription. The server and its model are IX's (%LOCALAPPDATA%\voice-listen: whisper.cpp b5454 and
+// its transcription. On the author's machine the server and its model are IX's (whisper.cpp b5454 and
 // ggml-large-v3-turbo-q5_0), used as they are.
 type ears struct {
 	url string
@@ -41,7 +41,9 @@ func startEars(server, model string, port, threads int, prompt string, audioCtx 
 		c.Close()
 		return nil, fmt.Errorf("ears: %s is already taken", addr)
 	}
-	args := []string{"-m", model, "-l", "fr", "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt}
+	// -nf: no temperature fallback. With it, a mumbled reply took 31.6 s to come back as "Euh... Oui."; a voice loop
+	// would rather have a rough transcript at once.
+	args := []string{"-m", model, "-l", "fr", "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt, "-nf"}
 	if audioCtx > 0 {
 		args = append(args, "-ac", strconv.Itoa(audioCtx))
 	}
@@ -114,7 +116,7 @@ func cleanHeard(text string) string {
 
 // listen turns the microphone into utterances: it tells the scene when someone starts speaking, transcribes what they
 // said once they stop, and hears nothing while Delta is busy answering.
-func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance) {
+func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels bool) {
 	frames := make(chan []float32, 64)
 	m, err := openMic(frames)
 	if err != nil {
@@ -124,7 +126,15 @@ func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance) {
 	defer m.close()
 	fmt.Println("listening on the default microphone")
 	var cut endpoint
+	peak, count := 0.0, 0
 	for frame := range frames {
+		if levels { // every 2 s, the loudest frame and the room's noise as the endpoint measures it
+			peak, count = max(peak, rms(frame)), count+1
+			if count == 100 {
+				fmt.Fprintf(os.Stderr, "mic: peak %.4f, noise %.4f\n", peak, cut.noise)
+				peak, count = 0, 0
+			}
+		}
 		if busy.Load() {
 			cut.reset()
 			continue

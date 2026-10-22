@@ -4,7 +4,7 @@ import "math"
 
 // endpoint cuts a microphone's 20 ms frames into utterances. The first half second measures the room's noise. Speech
 // starts after three frames well above it and ends after 700 ms of quiet; the 300 ms before the start are kept, so that
-// the first sound is not clipped. An utterance is cut at 15 s, and one with less than 240 ms of speech is dropped as a
+// the first sound is not clipped. An utterance is cut at 14 s, and one with less than 240 ms of speech is dropped as a
 // knock or a cough.
 type endpoint struct {
 	frames  int
@@ -23,7 +23,7 @@ const (
 	startFrames  = 3
 	endFrames    = 35
 	keepFrames   = 15
-	maxFrames    = 15 * 50
+	maxFrames    = 14 * 50 // within whisper's 768-frame (about 15 s) audio context
 	minVoiced    = 12
 )
 
