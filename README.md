@@ -64,7 +64,7 @@ while it hears you, amber while it thinks, and its mouth follows its voice. Pres
   threshold cuts what you say into sentences, and whisper.cpp's server transcribes them on 127.0.0.1:8806. The text
   goes to Ollama. The answer is cut into sentences as it streams, and each sentence goes to Piper and is played as
   soon as it is ready.
-- `scene\` is in C# and draws with Vulkan through [BRUTAL](https://www.ahwoo.com/brutal). The brain tells it what Delta
+- `scene\` is in C# and draws with Vulkan through [BRUTAL](https://github.com/ahwootech/BRUTAL). The brain tells it what Delta
   is doing with one JSON line per change on 127.0.0.1:8805. The line can be `{"state":"idle"}`, `"listening"` or
   `"thinking"`, or `{"state":"speaking","seconds":S,"envelope":[...]}` with the voice's loudness every 20 ms.
 
