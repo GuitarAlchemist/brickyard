@@ -1,6 +1,6 @@
 // The shelf's picture: one level at a time on a dark translucent card at the window's left edge, its path as the title,
-// a few rows around the selected one, and the keys at the bottom; the caption under the robot, for a sentence Delta
-// let pass; the phone icon in the top right corner, with the card it opens, the QR code that pairs a phone; and the
+// a few rows around the selected one, and the keys at the bottom; the caption under the robot, for each sentence Delta
+// heard; the phone icon in the top right corner, with the card it opens, the QR code that pairs a phone; and the
 // ring in the bottom left corner that empties while Delta listens without its name. Drawn with GDI's text into RGBA,
 // then sampled like the splash.
 internal static class Panel
@@ -73,27 +73,68 @@ internal static class Panel
         return new Card(rgba, width, height, [.. drawn]);
     }
 
-    // The caption for a sentence Delta heard and let pass for want of its name: how to call Delta, then the sentence in
-    // quotes, on a card no wider than the window.
-    public static Card Caption(string heard, int windowWidth, int windowHeight)
+    // The caption for a sentence Delta heard: for whom it was (Link's "heard"), with how to call Delta when it let the
+    // sentence pass for want of its name, then the whole sentence in quotes on up to four lines, on a card no wider than
+    // the window.
+    public static Card Caption(string heard, string to, int windowWidth, int windowHeight)
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var room = Math.Min(Px(560), windowWidth - (2 * Px(12))) - (2 * Px(Pad));
-        var hint = Fit(Words.Say("Not for me? Say “Delta” first.", "Pas pour moi ? Dis « Delta » d'abord."), Px(16), true, room);
+        var room = Math.Min(Px(720), windowWidth - (2 * Px(12))) - (2 * Px(Pad));
+        var (said, edge) = to switch
+        {
+            "wake" => (Words.Say("Not for me? Say “Delta” first.", "Pas pour moi ? Dis « Delta » d'abord."), (255, 184, 77)), // amber, a word to take note of
+            "claude" => (Words.Say("For Claude", "Pour Claude"), (89, 204, 255)),
+            "delta" => (Words.Say("Delta answers", "Delta répond"), (90, 220, 130)),
+            "dropped" or "someone else" => (Words.Say("Not for Delta, it seems", "Pas pour Delta, semble-t-il"), (150, 160, 170)),
+            _ => (Words.Say($"For {to}", $"Pour {to}"), (150, 160, 170)),
+        };
+        var hint = Fit(said, Px(16), true, room);
         var (open, close) = Words.Language == "fr" ? ("« ", " »") : ("“", "”");
-        Splash.Text(close, Px(14), out var closeWidth, out _);
-        var quote = open + Fit(heard, Px(14), false, room - closeWidth - Px(14)) + close;
-        Splash.Text(hint, Px(16), out var hintWidth, out _, true);
-        Splash.Text(quote, Px(14), out var quoteWidth, out _);
-        var width = Math.Max(hintWidth, quoteWidth) + (2 * Px(Pad));
-        var height = Px(Pad) + Px(22) + Px(4) + Px(20) + Px(Pad);
+        var lines = Wrap(open + heard + close, Px(15), room, 4);
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var width = Math.Max(Wide(hint, Px(16), true), lines.Max(l => Wide(l, Px(15), false))) + (2 * Px(Pad));
+        var height = Px(Pad) + Px(22) + Px(6) + (lines.Length * Px(21)) + Px(Pad);
         var rgba = new byte[width * height * 4];
-        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 205);
-        Fill(rgba, width, 0, 0, Px(3), height, (255, 184, 77), 255); // amber, as a word to take note of
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 215);
+        Fill(rgba, width, 0, 0, Px(3), height, edge, 255);
         Text(rgba, width, height, hint, Px(16), true, Px(Pad), Px(Pad), (240, 236, 228));
-        Text(rgba, width, height, quote, Px(14), false, Px(Pad), Px(Pad) + Px(26), (150, 160, 170));
+        for (var i = 0; i < lines.Length; i++)
+        {
+            Text(rgba, width, height, lines[i], Px(15), false, Px(Pad), Px(Pad) + Px(28) + (i * Px(21)), (214, 220, 226));
+        }
+
         return new Card(rgba, width, height, []);
+    }
+
+    // Breaks text into lines of whole words no wider than width pixels, at most max of them, the last one shortened with
+    // an ellipsis when the text goes on.
+    private static string[] Wrap(string text, int pixels, int width, int max)
+    {
+        var lines = new List<string>();
+        var line = "";
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < words.Length; i++)
+        {
+            var longer = line.Length == 0 ? words[i] : line + " " + words[i];
+            if (line.Length == 0 || (Splash.Text(longer, pixels, out var w, out _) is not null && w <= width))
+            {
+                line = longer;
+                continue;
+            }
+
+            if (lines.Count == max - 1)
+            {
+                lines.Add(Fit(string.Join(' ', [line, .. words[i..]]), pixels, false, width));
+                return [.. lines];
+            }
+
+            lines.Add(Fit(line, pixels, false, width));
+            line = words[i];
+        }
+
+        lines.Add(Fit(line, pixels, false, width));
+        return [.. lines];
     }
 
     // The phone icon's size in pixels, square, for a window of that height.

@@ -338,6 +338,23 @@ func heardResult(h heardText) string {
 	return "The user said (utterance " + strconv.Itoa(h.id) + "): " + h.text
 }
 
+// heardBy is for whom the window says a sentence was: "claude"; "delta", for the triage's answer or a command Delta ran
+// itself; "wake", when Delta let it pass for want of its name; "dropped", when the triage judged it was for someone
+// else; or the name of the one it called first.
+func heardBy(route, reason string) string {
+	switch {
+	case route == "channel" || route == "listen":
+		return "claude"
+	case route == "ignored" && reason == "not addressed to Delta":
+		return "wake"
+	case route == "ignored" && strings.HasPrefix(reason, "spoken to "):
+		return strings.TrimPrefix(reason, "spoken to ")
+	case route == "ignored" || route == "dropped":
+		return "dropped"
+	}
+	return "delta"
+}
+
 // stopWaiting removes a pending listen call, and reports whether it was still pending.
 func (m *mcpServer) stopWaiting(key string) bool {
 	m.mu.Lock()
@@ -383,6 +400,10 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 		if route != "ignored" && route != "duplicate" {
 			m.routedNow(u, now)
 		}
+		if m.tell != nil && route != "duplicate" && !carriesNothing(u.text) { // what Delta heard, and where it went
+			reason, _ := fields["reason"].(string)
+			m.tell(map[string]any{"heard": map[string]any{"text": shorten(u.text, 400), "to": heardBy(route, reason)}})
+		}
 	}()
 	if m.heardTwice(u, now) { // the computer's microphone and a phone both heard it
 		m.mu.Unlock()
@@ -410,9 +431,6 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	fields["reason"] = why
 	if !admitted {
 		route = "ignored"
-		if why == "not addressed to Delta" && m.tell != nil && !carriesNothing(u.text) { // heard, and how to call Delta
-			m.tell(map[string]any{"ignored": shorten(u.text, 200)})
-		}
 		return id, route
 	}
 	if loving(u.text) && m.show != nil { // hearts rise from Delta's chest, and it smiles; the sentence goes on as any other

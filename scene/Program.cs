@@ -587,7 +587,7 @@ internal static unsafe class Stage
         var cardHeight = 0;
         int CardMargin() => Math.Max(12, extent.Height / 48);
 
-        // The caption under the robot (Panel.Caption) for a sentence Delta let pass, drawn again for each and for a new size.
+        // The caption under the robot (Panel.Caption) for each sentence Delta heard, drawn again for each and for a new size.
         var captionSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? captionTexture = null;
         Panel.Card? caption = null;
@@ -863,11 +863,11 @@ internal static unsafe class Stage
                 cardTexture = Upload(card, cardSet, cardTexture);
             }
 
-            if (moment.IgnoredAge >= 0f && !splashing && (moment.IgnoredId != captionId || (extent.Width, extent.Height) != captionSize))
+            if (moment.HeardAge >= 0f && !splashing && (moment.HeardId != captionId || (extent.Width, extent.Height) != captionSize))
             {
-                captionId = moment.IgnoredId;
+                captionId = moment.HeardId;
                 captionSize = (extent.Width, extent.Height);
-                caption = Panel.Caption(moment.Ignored, extent.Width, extent.Height);
+                caption = Panel.Caption(moment.Heard, moment.HeardTo, extent.Width, extent.Height);
                 captionTexture = Upload(caption, captionSet, captionTexture);
             }
 
@@ -962,10 +962,10 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (moment.IgnoredAge >= 0f && caption is not null && captionTexture is not null)
+                if (moment.HeardAge >= 0f && caption is not null && captionTexture is not null)
                 {
                     // Centred at the bottom; it comes in over 0.2 s and fades over the last 0.8 s.
-                    var fade = Math.Clamp(Math.Min(moment.IgnoredAge / 0.2f, ((float)Link.IgnoredSeconds - moment.IgnoredAge) / 0.8f), 0f, 1f);
+                    var fade = Math.Clamp(Math.Min(moment.HeardAge / 0.2f, ((float)Link.HeardSeconds(moment.Heard) - moment.HeardAge) / 0.8f), 0f, 1f);
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var push = new SplashPush(Rect((extent.Width - caption.Width) / 2, extent.Height - caption.Height - CardMargin(), caption.Width, caption.Height), new SN.Vector4(1f, 1f, 1f, fade));
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [captionSet], []);

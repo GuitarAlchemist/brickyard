@@ -12,8 +12,9 @@ using System.Text.Json;
 // window (Placement.Actions), which Window runs; "mood", an expression the face holds for MoodSeconds (Moods); and
 // "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs; and "language", "en" or
 // "fr", the shelf's labels (Words), which the brain sends first on each connection; and "hearts", true, a burst of
-// hearts that rise from the robot for HeartSeconds; and "ignored", a sentence Delta heard and let pass for want of its
-// name, which a caption under the robot shows for IgnoredSeconds; and "pairing", {"rows", "seconds"}, the QR code of the
+// hearts that rise from the robot for HeartSeconds; and "heard", {"text", "to"}, a sentence Delta heard and for whom
+// it was (claude, delta, wake when Delta needed its name, dropped, someone else, or whom it called), which a caption
+// under the robot shows for HeardSeconds; and "pairing", {"rows", "seconds"}, the QR code of the
 // link a phone opens to pair with Delta's gateway, one string of 0 and 1 per row, and how long its code lives, which
 // the phone icon's card shows on a click; and "lease", for how many seconds Delta listens without hearing its name,
 // which a ring that empties shows. Each changes only what it names.
@@ -22,7 +23,7 @@ internal sealed class Link(Func<double> clock)
     private const int MaxLine = 256 * 1024;
     private const int MaxEnvelope = 30_000; // ten minutes in 20 ms steps
     private const double Step = 0.02;
-    private const int MaxIgnored = 400; // the brain cuts the sentence to 200 characters, each at most two UTF-16 units
+    private const int MaxHeard = 800; // the brain cuts the sentence to 400 characters, each at most two UTF-16 units
 
     private readonly Lock gate = new();
     private string state = "idle";
@@ -36,10 +37,11 @@ internal sealed class Link(Func<double> clock)
     private double moodSince = double.NegativeInfinity;
     private double heard = double.NegativeInfinity; // when the last line came
     private double heartsSince = double.NegativeInfinity;
-    private string ignored = "";
-    private double ignoredSince = double.NegativeInfinity;
-    private int ignoredId; // counts the sentences let pass, so that the caption is drawn again for each
-    private int demoIgnored = -1; // the demo's last loop that showed the caption
+    private string heardText = "";
+    private string heardTo = "";
+    private double heardSince = double.NegativeInfinity;
+    private int heardId; // counts the sentences, so that the caption is drawn again for each
+    private int demoHeard = -1; // the demo's last loop that showed the caption
     private string[]? pairing; // the QR code of the last pairing link, a credential while its code lives
     private double pairingUntil = double.NegativeInfinity;
     private int pairingId; // counts the links, so that the card is drawn again for each
@@ -56,11 +58,11 @@ internal sealed class Link(Func<double> clock)
     // How long a burst of hearts lasts.
     public const double HeartSeconds = 4.0;
 
-    // How long the caption shows a sentence Delta let pass.
-    public const double IgnoredSeconds = 5.0;
+    // How long the caption shows a sentence: five seconds, and more for a long one, up to twelve.
+    public static double HeardSeconds(string text) => Math.Clamp(3.0 + (text.Length / 15.0), 5.0, 12.0);
 
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Ignored = null, string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -74,11 +76,11 @@ internal sealed class Link(Func<double> clock)
     // speech), what the answer costs ("free", "paid", or "" when the line did not say), how full the context is as a
     // fraction of where it is compacted (-1 when unknown), whether it is being compacted, the expression the face holds
     // ("neutral" for none), how long ago the brain last said anything, in seconds, how long ago a burst of hearts
-    // began (-1 when none is rising), and the sentence Delta last let pass while its caption shows ("" otherwise), how
+    // began (-1 when none is rising), and the sentence Delta last heard while its caption shows ("" otherwise), for whom, how
     // long ago it came (-1 when none shows) and its number, which changes with each sentence; and the pairing QR code's
     // rows while its code lives (null otherwise), the seconds it still lives (0 once it expired, -1 before any came) and
     // the link's number; and for how many seconds more Delta listens without its name (0 when it needs it), of how many.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Ignored = "", float IgnoredAge = -1f, int IgnoredId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f);
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -113,10 +115,10 @@ internal sealed class Link(Func<double> clock)
             var face = now - moodSince < MoodSeconds ? mood : "neutral";
             var quiet = double.IsNegativeInfinity(heard) ? 0f : (float)Math.Max(0, now - heard);
             var hearts = now - heartsSince is >= 0 and < HeartSeconds ? (float)(now - heartsSince) : -1f;
-            var age = now - ignoredSince is >= 0 and < IgnoredSeconds ? (float)(now - ignoredSince) : -1f;
+            var age = now - heardSince >= 0 && now - heardSince < HeardSeconds(heardText) ? (float)(now - heardSince) : -1f;
             var left = pairingId == 0 ? -1f : (float)Math.Max(0, pairingUntil - now);
             var lease = (float)Math.Max(0, leaseUntil - now);
-            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? ignored : "", age, ignoredId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f);
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f);
         }
     }
 
@@ -141,10 +143,10 @@ internal sealed class Link(Func<double> clock)
             mood = t is >= 11.0 and < 19.0 ? Moods[1 + Math.Min(Moods.Length - 2, (int)(t - 11.0))] : "neutral";
             moodSince = now;
             var loop = (int)(now / DemoSeconds);
-            caption = t >= 19.0 && demoIgnored != loop;
+            caption = t >= 19.0 && demoHeard != loop;
             if (caption)
             {
-                demoIgnored = loop;
+                demoHeard = loop;
             }
 
             link = demoPairing != loop;
@@ -170,7 +172,7 @@ internal sealed class Link(Func<double> clock)
 
         if (caption)
         {
-            Apply(new Change(null, [], "", null, null, Ignored: Words.Say("Can you dance?", "Est-ce que tu peux danser ?")), now);
+            Apply(new Change(null, [], "", null, null, Heard: Words.Say("Can you dance?", "Est-ce que tu peux danser ?"), HeardTo: "wake"), now);
         }
     }
 
@@ -303,13 +305,15 @@ internal sealed class Link(Func<double> clock)
                 hearts = true;
             }
 
-            string? ignored = null;
-            if (root.TryGetProperty("ignored"u8, out var ig))
+            string? heard = null;
+            var heardTo = "";
+            if (root.TryGetProperty("heard"u8, out var he))
             {
-                ignored = ig.ValueKind == JsonValueKind.String ? ig.GetString() : null;
-                if (string.IsNullOrWhiteSpace(ignored) || ignored.Length > MaxIgnored)
+                heard = he.ValueKind == JsonValueKind.Object && he.TryGetProperty("text"u8, out var ht) && ht.ValueKind == JsonValueKind.String ? ht.GetString() : null;
+                heardTo = he.ValueKind == JsonValueKind.Object && he.TryGetProperty("to"u8, out var to) && to.ValueKind == JsonValueKind.String ? to.GetString()! : "";
+                if (string.IsNullOrWhiteSpace(heard) || heard.Length > MaxHeard || heardTo.Length is 0 or > 40)
                 {
-                    error = $"ignored is a sentence of at most {MaxIgnored} characters";
+                    error = $"heard is {{\"text\": a sentence of at most {MaxHeard} characters, \"to\": for whom}}";
                     return null;
                 }
             }
@@ -336,13 +340,13 @@ internal sealed class Link(Func<double> clock)
 
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && ignored is null && pairing is null && lease is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds, lease);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -392,7 +396,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds, lease);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease);
         }
         catch (JsonException ex)
         {
@@ -477,10 +481,12 @@ internal sealed class Link(Func<double> clock)
         Check(Parse("""{"language":"de"}""", out _) is null, "an unknown language is refused");
         Check(Parse("""{"hearts":true,"mood":"joy"}""", out _) is { State: null, Hearts: true, Mood: "joy" }, "hearts and a smile");
         Check(Parse("""{"hearts":"yes"}""", out _) is null, "hearts is a boolean");
-        Check(Parse("""{"ignored":"Tu peux danser ?"}""", out _) is { State: null, Ignored: "Tu peux danser ?" }, "a sentence Delta let pass");
-        Check(Parse("""{"ignored":" "}""", out _) is null && Parse("""{"ignored":3}""", out _) is null &&
-            Parse($$"""{"ignored":"{{new string('a', MaxIgnored + 1)}}"}""", out _) is null, "ignored is a short sentence");
-        Check(Parse($$"""{"ignored":"{{string.Concat(Enumerable.Repeat("😀", 200))}}"}""", out _) is { Ignored.Length: 400 }, "200 characters as the brain counts them, emoji included");
+        Check(Parse("""{"heard":{"text":"Tu peux danser ?","to":"wake"}}""", out _) is { State: null, Heard: "Tu peux danser ?", HeardTo: "wake" }, "a sentence Delta let pass");
+        Check(Parse("""{"heard":{"text":"Lance les tests.","to":"claude"}}""", out _) is { Heard: "Lance les tests.", HeardTo: "claude" }, "a sentence for Claude");
+        Check(Parse("""{"heard":{"text":" ","to":"wake"}}""", out _) is null && Parse("""{"heard":"Tu peux danser ?"}""", out _) is null &&
+            Parse("""{"heard":{"text":"Tu peux danser ?"}}""", out _) is null &&
+            Parse($$$"""{"heard":{"text":"{{{new string('a', MaxHeard + 1)}}}","to":"wake"}}""", out _) is null, "heard is a sentence and for whom");
+        Check(Parse($$$"""{"heard":{"text":"{{{string.Concat(Enumerable.Repeat("😀", 400))}}}","to":"claude"}}""", out _) is { Heard.Length: 800 }, "400 characters as the brain counts them, emoji included");
         Words.Language = "fr";
         var french = Words.Say("Folder", "Dossier");
         Words.Language = "de";
@@ -508,13 +514,14 @@ internal sealed class Link(Func<double> clock)
         Check(link.Read(12.5).Hearts == -1f, "no hearts until asked");
         link.Apply(new Change(null, [], "", null, null, Hearts: true), 20.0);
         Check(Math.Abs(link.Read(21.0).Hearts - 1f) < 1e-4 && link.Read(20.0 + HeartSeconds + 0.1).Hearts == -1f, "hearts rise for a few seconds");
-        Check(link.Read(29.0) is { Ignored: "", IgnoredAge: -1f, IgnoredId: 0 }, "no caption until a sentence is let pass");
-        link.Apply(new Change(null, [], "", null, null, Ignored: "Tu peux danser ?"), 30.0);
+        Check(link.Read(29.0) is { Heard: "", HeardAge: -1f, HeardId: 0 }, "no caption until a sentence is heard");
+        link.Apply(new Change(null, [], "", null, null, Heard: "Tu peux danser ?", HeardTo: "wake"), 30.0);
         var caption = link.Read(31.0);
-        Check(caption is { Ignored: "Tu peux danser ?", IgnoredId: 1 } && Math.Abs(caption.IgnoredAge - 1f) < 1e-4 &&
-            link.Read(30.0 + IgnoredSeconds + 0.1) is { Ignored: "", IgnoredAge: -1f, IgnoredId: 1 }, "the caption shows for a few seconds");
-        link.Apply(new Change(null, [], "", null, null, Ignored: "Tu peux danser ?"), 40.0);
-        Check(link.Read(40.5) is { IgnoredId: 2 }, "the same sentence again is another caption");
+        Check(caption is { Heard: "Tu peux danser ?", HeardTo: "wake", HeardId: 1 } && Math.Abs(caption.HeardAge - 1f) < 1e-4 &&
+            link.Read(30.0 + HeardSeconds("Tu peux danser ?") + 0.1) is { Heard: "", HeardTo: "", HeardAge: -1f, HeardId: 1 }, "the caption shows for a few seconds");
+        link.Apply(new Change(null, [], "", null, null, Heard: "Tu peux danser ?", HeardTo: "wake"), 40.0);
+        Check(link.Read(40.5) is { HeardId: 2 }, "the same sentence again is another caption");
+        Check(HeardSeconds("Oui.") == 5.0 && HeardSeconds(new string('a', 90)) == 9.0 && HeardSeconds(new string('a', 400)) == 12.0, "a long sentence shows longer, up to twelve seconds");
         string PairingLine(IEnumerable<string> rows, string seconds) => $$$"""{"pairing":{"rows":[{{{string.Join(",", rows.Select(r => $"\"{r}\""))}}}],"seconds":{{{seconds}}}}}""";
         Check(Parse(PairingLine(DemoPairing, "120"), out _) is { State: null, Pairing.Length: 29, PairingSeconds: 120 }, "a pairing link's QR code");
         Check(Parse(PairingLine(DemoPairing.Take(28), "120"), out _) is null && Parse(PairingLine(["0101"], "120"), out _) is null &&
@@ -562,11 +569,12 @@ internal sealed class Link(Func<double> clock)
                 pairingId++;
             }
 
-            if (change.Ignored is { } words)
+            if (change.Heard is { } words)
             {
-                ignored = words;
-                ignoredSince = at;
-                ignoredId++;
+                heardText = words;
+                heardTo = change.HeardTo;
+                heardSince = at;
+                heardId++;
             }
 
             if (change.Mood is { } face)
@@ -626,9 +634,9 @@ internal sealed class Link(Func<double> clock)
             Console.WriteLine($"SCENE hearts at {at:F2} s");
         }
 
-        if (change.Ignored is { } letPass)
+        if (change.Heard is { } sentence)
         {
-            Console.WriteLine($"SCENE ignored a sentence of {letPass.Length} characters at {at:F2} s");
+            Console.WriteLine($"SCENE heard a sentence of {sentence.Length} characters for {change.HeardTo} at {at:F2} s");
         }
 
         if (change.Pairing is not null)

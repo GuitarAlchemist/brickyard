@@ -469,25 +469,43 @@ func TestAnAcknowledgementGivesWayToTheAnswer(t *testing.T) {
 
 // A sentence the wake gate let pass for want of « Delta » shows in the window, so that the user knows it was heard;
 // without bringing a closed window back, and not a filler, nor a sentence for another session.
-func TestTheWindowShowsWhatDeltaIgnored(t *testing.T) {
+// The window shows each sentence Delta heard, whole, and where it went: to Claude, to Delta itself, to no one for want
+// of « Delta », or to whom it named. Fillers, and copies of a sentence the other device heard, are not shown.
+func TestTheWindowShowsWhatDeltaHeardAndWhereItWent(t *testing.T) {
 	var told, shown []map[string]any
 	m, _, out := startServer(t, func(m *mcpServer) {
-		m.tell = func(line map[string]any) { told = append(told, line) }
+		m.tell = func(line map[string]any) {
+			if heard, ok := line["heard"].(map[string]any); ok {
+				told = append(told, heard)
+			}
+		}
 		m.show = func(line map[string]any) { shown = append(shown, line) }
 	})
 	now := time.Now().Add(time.Hour)
-	for _, text := range []string{"Est-ce que tu peux danser ?", "Euh...", "Gaïa, lance le watcher."} {
+	for text, want := range map[string]string{
+		"Est-ce que tu peux danser ?": "wake",
+		"Euh...":                      "",
+		"Gaïa, lance le watcher.":     "Gaïa",
+	} {
+		told = nil
 		if where := m.hear(utterance{text: text}, now); where != "ignored" {
 			t.Fatalf("%q went to %s", text, where)
 		}
+		if want == "" && len(told) != 0 || want != "" && (len(told) != 1 || told[0]["text"] != text || told[0]["to"] != want) {
+			t.Fatalf("%q: told %v", text, told)
+		}
 	}
 	silent(t, out)
-	if len(told) != 1 || told[0]["ignored"] != "Est-ce que tu peux danser ?" || len(shown) != 0 {
+	told = nil
+	m.hear(utterance{text: "Delta, lance les tests."}, now)
+	next(t, out)
+	if len(told) != 1 || told[0]["to"] != "claude" || len(shown) != 0 {
 		t.Fatalf("told %v, shown %v", told, shown)
 	}
-	long := strings.Repeat("blabla ", 60)
+	long := strings.Repeat("blabla ", 120)
 	m.hear(utterance{text: long}, now)
-	if got := told[1]["ignored"].(string); len([]rune(got)) > 200 || !strings.HasSuffix(got, "…") {
+	next(t, out)
+	if got := told[1]["text"].(string); len([]rune(got)) > 400 || !strings.HasSuffix(got, "…") {
 		t.Fatalf("a long sentence is cut: %d runes", len([]rune(got)))
 	}
 }
