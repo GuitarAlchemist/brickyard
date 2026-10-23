@@ -215,6 +215,10 @@ func TestARemoteDeviceHearsEachSentenceAsItStarts(t *testing.T) {
 		event.Utterance == nil || *event.Utterance != "4" || event.By != "claude" {
 		t.Fatalf("%+v", event)
 	}
+	r.publish(3, "Bonne journée.", w, path) // the say call's next sentence answers the same question
+	if event := nextSaid(t, lines); event.SayID != 3 || event.Utterance == nil || *event.Utterance != "4" || event.By != "claude" {
+		t.Fatalf("the second sentence: say %d, by %q, utterance %v", event.SayID, event.By, event.Utterance)
+	}
 	r.attribute(map[string]any{"say_id": 5, "utterance_id": "", "text": "Bonsoir.", "by": "local"})
 	r.publish(5, "Bonsoir.", w, path)
 	r.publish(6, "Hum.", w, path)
