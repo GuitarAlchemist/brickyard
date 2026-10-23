@@ -14,6 +14,9 @@ type qrVersion struct{ codewords, ec, blocks int } // all codewords, error corre
 
 func (v qrVersion) data() int { return v.codewords - v.ec*v.blocks }
 
+// qrMaxBytes is what version 6 holds at level M.
+const qrMaxBytes = 106
+
 // qrVersions are versions 1 to 6 at level M.
 var qrVersions = []qrVersion{{26, 10, 1}, {44, 16, 1}, {70, 26, 1}, {100, 18, 2}, {134, 24, 2}, {172, 16, 4}}
 

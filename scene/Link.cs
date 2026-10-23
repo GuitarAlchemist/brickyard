@@ -13,7 +13,9 @@ using System.Text.Json;
 // "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs; and "language", "en" or
 // "fr", the shelf's labels (Words), which the brain sends first on each connection; and "hearts", true, a burst of
 // hearts that rise from the robot for HeartSeconds; and "ignored", a sentence Delta heard and let pass for want of its
-// name, which a caption under the robot shows for IgnoredSeconds. Each changes only what it names.
+// name, which a caption under the robot shows for IgnoredSeconds; and "pairing", {"rows", "seconds"}, the QR code of the
+// link a phone opens to pair with Delta's gateway, one string of 0 and 1 per row, and how long its code lives, which
+// the phone icon's card shows on a click. Each changes only what it names.
 internal sealed class Link(Func<double> clock)
 {
     private const int MaxLine = 256 * 1024;
@@ -37,6 +39,10 @@ internal sealed class Link(Func<double> clock)
     private double ignoredSince = double.NegativeInfinity;
     private int ignoredId; // counts the sentences let pass, so that the caption is drawn again for each
     private int demoIgnored = -1; // the demo's last loop that showed the caption
+    private string[]? pairing; // the QR code of the last pairing link, a credential while its code lives
+    private double pairingUntil = double.NegativeInfinity;
+    private int pairingId; // counts the links, so that the card is drawn again for each
+    private int demoPairing = -1; // the demo's last loop that brought a link
 
     // The expressions the face knows; "neutral" ends the one shown.
     public static readonly string[] Moods = ["neutral", "joy", "surprise", "doubt", "sorry", "proud", "wink", "focus", "sleepy"];
@@ -51,7 +57,7 @@ internal sealed class Link(Func<double> clock)
     public const double IgnoredSeconds = 5.0;
 
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Ignored = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Ignored = null, string[]? Pairing = null, double PairingSeconds = 0);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -66,8 +72,10 @@ internal sealed class Link(Func<double> clock)
     // fraction of where it is compacted (-1 when unknown), whether it is being compacted, the expression the face holds
     // ("neutral" for none), how long ago the brain last said anything, in seconds, how long ago a burst of hearts
     // began (-1 when none is rising), and the sentence Delta last let pass while its caption shows ("" otherwise), how
-    // long ago it came (-1 when none shows) and its number, which changes with each sentence.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Ignored = "", float IgnoredAge = -1f, int IgnoredId = 0);
+    // long ago it came (-1 when none shows) and its number, which changes with each sentence; and the pairing QR code's
+    // rows while its code lives (null otherwise), the seconds it still lives (0 once it expired, -1 before any came) and
+    // the link's number.
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Ignored = "", float IgnoredAge = -1f, int IgnoredId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -103,13 +111,15 @@ internal sealed class Link(Func<double> clock)
             var quiet = double.IsNegativeInfinity(heard) ? 0f : (float)Math.Max(0, now - heard);
             var hearts = now - heartsSince is >= 0 and < HeartSeconds ? (float)(now - heartsSince) : -1f;
             var age = now - ignoredSince is >= 0 and < IgnoredSeconds ? (float)(now - ignoredSince) : -1f;
-            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? ignored : "", age, ignoredId);
+            var left = pairingId == 0 ? -1f : (float)Math.Max(0, pairingUntil - now);
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? ignored : "", age, ignoredId, left > 0f ? pairing : null, left, pairingId);
         }
     }
 
     // --demo: idle, listening and thinking for 1.5 s each, then 3.5 s of speech-like loudness, 0.5 s idle again and
     // 2.5 s of compaction, while the context fills from empty to full and starts again after the compaction; then each
-    // expression for 1 s, and the caption of a sentence let pass, which lasts into the next loop.
+    // expression for 1 s, and the caption of a sentence let pass, which lasts into the next loop; a pairing link comes at
+    // the start of each loop, its code living for the loop.
     public const double DemoSeconds = 21.0;
 
     public void Demo(double now)
@@ -118,6 +128,7 @@ internal sealed class Link(Func<double> clock)
         var want = t < 1.5 ? "idle" : t < 3.0 ? "listening" : t < 4.5 ? "thinking" : t < 8.0 ? "speaking" : "idle";
         bool changed;
         bool caption;
+        bool link;
         lock (gate)
         {
             changed = want != state;
@@ -131,6 +142,17 @@ internal sealed class Link(Func<double> clock)
             {
                 demoIgnored = loop;
             }
+
+            link = demoPairing != loop;
+            if (link)
+            {
+                demoPairing = loop;
+            }
+        }
+
+        if (link)
+        {
+            Apply(new Change(null, [], "", null, null, Pairing: DemoPairing, PairingSeconds: DemoSeconds - t), now);
         }
 
         if (changed)
@@ -143,6 +165,40 @@ internal sealed class Link(Func<double> clock)
             Apply(new Change(null, [], "", null, null, Ignored: Words.Say("Can you dance?", "Est-ce que tu peux danser ?")), now);
         }
     }
+
+    // The demo's pairing link, https://192.168.1.20:8810/#code=ABCD-EFGH, as the brain encodes it (brain/qr.go).
+    internal static readonly string[] DemoPairing =
+    [
+        "11111110001101000101001111111",
+        "10000010010100110010001000001",
+        "10111010101000111010001011101",
+        "10111010110110110111101011101",
+        "10111010101010011001001011101",
+        "10000010111000111010001000001",
+        "11111110101010101010101111111",
+        "00000000100110100001000000000",
+        "10111110000010110111101111100",
+        "01110100010000011001001010001",
+        "00001110001001110010010000000",
+        "01010100000010000010000101010",
+        "10110011000000110110110001100",
+        "00101100110100011111001010001",
+        "10111011111011111100000001100",
+        "00100000010100110001011010010",
+        "11011011100110110110110101100",
+        "10100100111001011011001010101",
+        "10100110101010011110011110100",
+        "10101001101010011001110000010",
+        "10111110100000001101111110111",
+        "00000000111101000010100011111",
+        "11111110010111111111101011100",
+        "10000010100101011000100010000",
+        "10111010100110110100111110111",
+        "10111010110110001111010101111",
+        "10111010101000010100011011110",
+        "10000010010000011001101110010",
+        "11111110111110010100011011100",
+    ];
 
     // A line from the brain, or null and why it was refused.
     internal static Change? Parse(string line, out string? error)
@@ -250,15 +306,23 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
+            string[]? pairing = null;
+            var pairingSeconds = 0.0;
+            if (root.TryGetProperty("pairing"u8, out var pa) && !ParsePairing(pa, out pairing, out pairingSeconds))
+            {
+                error = "pairing is {\"rows\": a QR code's rows of 0 and 1, \"seconds\": how long its code lives}";
+                return null;
+            }
+
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && ignored is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && ignored is null && pairing is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, ignored);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -308,13 +372,47 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, ignored);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds);
         }
         catch (JsonException ex)
         {
             error = ex.Message;
             return null;
         }
+    }
+
+    // A pairing line's QR code: square, 21 to 177 modules wide by steps of 4, of 0 and 1, with its code's lifetime.
+    private static bool ParsePairing(JsonElement p, out string[]? rows, out double seconds)
+    {
+        rows = null;
+        seconds = 0;
+        if (p.ValueKind != JsonValueKind.Object || !p.TryGetProperty("rows"u8, out var r) || r.ValueKind != JsonValueKind.Array ||
+            !p.TryGetProperty("seconds"u8, out var t) || t.ValueKind != JsonValueKind.Number)
+        {
+            return false;
+        }
+
+        seconds = t.GetDouble();
+        var n = r.GetArrayLength();
+        if (seconds is <= 0 or > 3600 || n < 21 || n > 177 || (n - 17) % 4 != 0)
+        {
+            return false;
+        }
+
+        var all = new string[n];
+        var i = 0;
+        foreach (var row in r.EnumerateArray())
+        {
+            if (row.ValueKind != JsonValueKind.String || row.GetString() is not { } text || text.Length != n || text.Any(c => c is not ('0' or '1')))
+            {
+                return false;
+            }
+
+            all[i++] = text;
+        }
+
+        rows = all;
+        return true;
     }
 
     // --selftest: the parsing, the mouth's loudness and the reading of transcripts, without a window.
@@ -397,6 +495,18 @@ internal sealed class Link(Func<double> clock)
             link.Read(30.0 + IgnoredSeconds + 0.1) is { Ignored: "", IgnoredAge: -1f, IgnoredId: 1 }, "the caption shows for a few seconds");
         link.Apply(new Change(null, [], "", null, null, Ignored: "Tu peux danser ?"), 40.0);
         Check(link.Read(40.5) is { IgnoredId: 2 }, "the same sentence again is another caption");
+        string PairingLine(IEnumerable<string> rows, string seconds) => $$$"""{"pairing":{"rows":[{{{string.Join(",", rows.Select(r => $"\"{r}\""))}}}],"seconds":{{{seconds}}}}}""";
+        Check(Parse(PairingLine(DemoPairing, "120"), out _) is { State: null, Pairing.Length: 29, PairingSeconds: 120 }, "a pairing link's QR code");
+        Check(Parse(PairingLine(DemoPairing.Take(28), "120"), out _) is null && Parse(PairingLine(["0101"], "120"), out _) is null &&
+            Parse(PairingLine(DemoPairing.Select((r, i) => i == 3 ? r[..^1] + "2" : r), "120"), out _) is null &&
+            Parse(PairingLine(DemoPairing.Select((r, i) => i == 3 ? r[..^1] : r), "120"), out _) is null, "a pairing code is a square of 0 and 1");
+        Check(Parse(PairingLine(DemoPairing, "0"), out _) is null && Parse("""{"pairing":{"rows":[]}}""", out _) is null &&
+            Parse("""{"pairing":"https://192.168.1.20:8810/#code=ABCD-EFGH"}""", out var noLink) is null && !noLink!.Contains("ABCD"), "a pairing code lives a while, and a link alone is refused unrepeated");
+        Check(link.Read(49.0) is { Pairing: null, PairingLeft: -1f, PairingId: 0 }, "no pairing code until a link comes");
+        link.Apply(new Change(null, [], "", null, null, Pairing: DemoPairing, PairingSeconds: 120), 50.0);
+        var paired = link.Read(60.0);
+        Check(paired is { Pairing.Length: 29, PairingId: 1 } && Math.Abs(paired.PairingLeft - 110f) < 1e-3, "the code shows while it lives");
+        Check(link.Read(170.5) is { Pairing: null, PairingLeft: 0f, PairingId: 1 }, "an expired code is no longer shown");
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
     }
@@ -409,6 +519,13 @@ internal sealed class Link(Func<double> clock)
             if (change.Hearts)
             {
                 heartsSince = at;
+            }
+
+            if (change.Pairing is { } code)
+            {
+                pairing = code;
+                pairingUntil = at + change.PairingSeconds;
+                pairingId++;
             }
 
             if (change.Ignored is { } words)
@@ -478,6 +595,11 @@ internal sealed class Link(Func<double> clock)
         if (change.Ignored is { } letPass)
         {
             Console.WriteLine($"SCENE ignored a sentence of {letPass.Length} characters at {at:F2} s");
+        }
+
+        if (change.Pairing is not null)
+        {
+            Console.WriteLine($"SCENE pairing code for {change.PairingSeconds:F0} s at {at:F2} s"); // never the code
         }
     }
 

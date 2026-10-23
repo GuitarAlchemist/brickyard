@@ -52,6 +52,9 @@ Ce que Delta transmet par le canal :
 Une phrase qu'il laisse passer faute de « Delta » s'affiche cinq secondes sous le robot, avec la façon de l'appeler :
 vous savez ainsi qu'il l'a entendue.
 
+Un clic sur l'icône de téléphone, en haut à droite de la fenêtre, ou la touche P, montre le code QR qui jumelle un
+téléphone, quand une passerelle comme celle d'IX vient d'en créer un : il vit deux minutes.
+
 Il ignore une phrase qui dit « je ne te parle pas », ou qui appelle d'abord une autre session de l'auteur : Brutal,
 Gaïa, Indigo, Amber, Codex ou IX. La conversation s'arrête alors.
 

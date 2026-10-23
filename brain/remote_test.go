@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -295,5 +297,46 @@ func TestTheSecretIsWrittenForTheUserAlone(t *testing.T) {
 	again, _, _ := newRemoteSecret()
 	if again == secret {
 		t.Fatal("the same secret twice")
+	}
+}
+
+// A gateway posts the link a phone opens to pair with it, and Delta's window gets the link's QR code; no answer of the
+// brain repeats the link, a credential while its code lives.
+func TestAGatewaysPairingLinkReachesTheWindowAsAQRCode(t *testing.T) {
+	var shown [][]string
+	r := &remote{secret: "s3cret", pair: func(rows []string) { shown = append(shown, rows) }}
+	srv := remoteServer(t, r)
+	post := func(body, secret string) (int, string) {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/link", strings.NewReader(body))
+		req.Header.Set(hookHeader, "1")
+		req.Header.Set(remoteHeader, secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		answer, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(answer)
+	}
+	link := "https://192.168.1.20:8810/#code=ABCD-EFGH"
+	if code, _ := post(`{"url":"`+link+`"}`, "guess"); code != http.StatusForbidden {
+		t.Fatalf("with a wrong secret: %d", code)
+	}
+	for _, bad := range []string{`{"url":"http://192.168.1.20:8810/#code=ABCD-EFGH"}`, `{"url":"https:///#code=ABCD-EFGH"}`,
+		`{"url":"https://192.168.1.20:8810/#code=` + strings.Repeat("A", 80) + `"}`, `{"url":"https://a b/#code=ABCD-EFGH"}`,
+		`code=ABCD-EFGH`} {
+		if code, answer := post(bad, "s3cret"); code != http.StatusBadRequest || strings.Contains(answer, "ABCD") {
+			t.Fatalf("%s: %d %q", bad, code, answer)
+		}
+	}
+	if len(shown) != 0 {
+		t.Fatalf("a bad link reached the window: %q", shown)
+	}
+	if code, answer := post(`{"url":"`+link+`"}`, "s3cret"); code != http.StatusNoContent || answer != "" {
+		t.Fatalf("%d %q", code, answer)
+	}
+	want, _ := qrEncode(link)
+	if len(shown) != 1 || !slices.Equal(shown[0], want) {
+		t.Fatalf("the window got %q", shown)
 	}
 }

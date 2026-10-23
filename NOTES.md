@@ -536,6 +536,20 @@ hears the sentence with the next. Two more cases from the same review: a sentenc
 was bringing the next server now waits for it and is heard, rather than lost; and the `ears` note names each server
 with its own failure, where a chain of servers that could not start gave the first the last one's error.
 
+## The phone's pairing QR (2026-10-23)
+
+The user asked for the phone's pairing link in Delta's window, behind an icon: « une icône et hop ça apparaît ». IX's
+gateway posts the link it makes at each start, `{"url":"https://<lan-ip>:8810/#code=XXXX-XXXX"}`, to the brain's new
+`POST /link`, with `/hear`'s header and secret. An https link of at most 106 bytes gets 204; anything else gets 400,
+without the link repeated. The brain draws its QR code with its own encoder (`brain/qr.go`: byte mode, level M,
+versions 1 to 6, the standard library only) and sends the window `{"pairing":{"rows":[…],"seconds":120}}`. The window
+shows a phone icon in its top right corner, lit green while the code lives. A click on it, or P, opens a card with the
+code black on white, in whole pixels per module within its quiet zone, and how long the code still lives; once it has
+expired, the card says so. The code is a credential for those two minutes: the card shows only when asked, since the
+window may be shared, and the link reaches no log, nor the journal, whose `pairing` line holds only the seconds.
+OpenCV's QR detector read back every mask of versions 3, 4 and 6, a symbol of each version, and the scene's own
+`pairing` shot, which `--shots` now saves.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -546,6 +560,10 @@ with its own failure, where a chain of servers that could not start gave the fir
   for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
 - The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
   streamed, other people's words would show too. There is no switch to turn it off yet.
+- IX's gateway makes a pairing code only when it starts, so two minutes later the card can only say that the code
+  expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user has not decided.
+- A window that starts after the gateway posted its link never gets it: the brain keeps no pairing for a new
+  connection.
 - The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
   second, and there is one per workspace.
 
@@ -565,3 +583,4 @@ with its own failure, where a chain of servers that could not start gave the fir
 - English for the local window and shelf commands, the triage and the compaction sentence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
+- The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
