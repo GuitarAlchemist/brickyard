@@ -600,6 +600,10 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
 
 ## Known problems
 
+- With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
+  writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
+  one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two
+  acknowledgements, and at times two answers, one on each device. The user asked that one device be heard at a time.
 - Talk to people in the room without « Delta » keeps a conversation open and goes to Claude, 30 s at a time; the ring
   shows it, and a sentence for someone else, Brutal or Gaïa among them, ends it.
 - A phone reloaded while one of its answers is on the way has forgotten its question and has no sound yet: it shows
