@@ -1,6 +1,6 @@
 // The shelf's picture: one level at a time on a dark translucent card at the window's left edge, its path as the title,
-// a few rows around the selected one, and the keys at the bottom. Drawn with GDI's text into RGBA, then sampled like
-// the splash.
+// a few rows around the selected one, and the keys at the bottom; and the caption under the robot, for a sentence Delta
+// let pass. Drawn with GDI's text into RGBA, then sampled like the splash.
 internal static class Panel
 {
     private const int Pad = 14;
@@ -69,6 +69,29 @@ internal static class Panel
 
         Text(rgba, width, height, Words.Say("↑↓ choose   Enter open   ← back   Esc close", "↑↓ choisir   Entrée ouvrir   ← retour   Échap fermer"), Px(12), false, Px(Pad), height - Px(24), (110, 122, 134));
         return new Card(rgba, width, height, [.. drawn]);
+    }
+
+    // The caption for a sentence Delta heard and let pass for want of its name: how to call Delta, then the sentence in
+    // quotes, on a card no wider than the window.
+    public static Card Caption(string heard, int windowWidth, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var room = Math.Min(Px(560), windowWidth - (2 * Px(12))) - (2 * Px(Pad));
+        var hint = Fit(Words.Say("Not for me? Say “Delta” first.", "Pas pour moi ? Dis « Delta » d'abord."), Px(16), true, room);
+        var (open, close) = Words.Language == "fr" ? ("« ", " »") : ("“", "”");
+        Splash.Text(close, Px(14), out var closeWidth, out _);
+        var quote = open + Fit(heard, Px(14), false, room - closeWidth - Px(14)) + close;
+        Splash.Text(hint, Px(16), out var hintWidth, out _, true);
+        Splash.Text(quote, Px(14), out var quoteWidth, out _);
+        var width = Math.Max(hintWidth, quoteWidth) + (2 * Px(Pad));
+        var height = Px(Pad) + Px(22) + Px(4) + Px(20) + Px(Pad);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 205);
+        Fill(rgba, width, 0, 0, Px(3), height, (255, 184, 77), 255); // amber, as a word to take note of
+        Text(rgba, width, height, hint, Px(16), true, Px(Pad), Px(Pad), (240, 236, 228));
+        Text(rgba, width, height, quote, Px(14), false, Px(Pad), Px(Pad) + Px(26), (150, 160, 170));
+        return new Card(rgba, width, height, []);
     }
 
     // Shortens text with an ellipsis until it fits in width pixels.

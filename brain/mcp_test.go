@@ -461,3 +461,28 @@ func TestAnAcknowledgementGivesWayToTheAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A sentence the wake gate let pass for want of « Delta » shows in the window, so that the user knows it was heard;
+// without bringing a closed window back, and not a filler, nor a sentence for another session.
+func TestTheWindowShowsWhatDeltaIgnored(t *testing.T) {
+	var told, shown []map[string]any
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.tell = func(line map[string]any) { told = append(told, line) }
+		m.show = func(line map[string]any) { shown = append(shown, line) }
+	})
+	now := time.Now().Add(time.Hour)
+	for _, text := range []string{"Est-ce que tu peux danser ?", "Euh...", "Gaïa, lance le watcher."} {
+		if where := m.hear(utterance{text: text}, now); where != "ignored" {
+			t.Fatalf("%q went to %s", text, where)
+		}
+	}
+	silent(t, out)
+	if len(told) != 1 || told[0]["ignored"] != "Est-ce que tu peux danser ?" || len(shown) != 0 {
+		t.Fatalf("told %v, shown %v", told, shown)
+	}
+	long := strings.Repeat("blabla ", 60)
+	m.hear(utterance{text: long}, now)
+	if got := told[1]["ignored"].(string); len([]rune(got)) > 200 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("a long sentence is cut: %d runes", len([]rune(got)))
+	}
+}

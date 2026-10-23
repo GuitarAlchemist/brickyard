@@ -507,6 +507,15 @@ Measured before writing it, with qwen3:8b warm and the same prompt and schema, o
 Tokyo, reviewing a pull request, writing the time into a file, and what was done today. The end-to-end time, from the
 end of speech to the first sound, is still to measure live.
 
+## What Delta let pass, on screen (2026-10-22, night)
+
+A sentence the wake gate let pass for want of « Delta » left no trace but the journal, so that a user who forgot the
+name could not tell a deaf Delta from one that ignored them. The brain now sends the window `{"ignored": sentence}`,
+cut to 200 characters, and the scene shows it for five seconds in a caption centred under the robot: « Pas pour moi ?
+Dis « Delta » d'abord. » in bold, then the sentence in quotes, on a dark card with an amber edge, coming in over 0.2 s
+and fading over the last 0.8 s. Only for that reason: not a filler, nor a sentence that calls another session, and it
+does not bring back a window the user closed. `--demo` ends with the caption, and `--shots` saves `ignored`.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -531,3 +540,4 @@ end of speech to the first sound, is still to measure live.
 - A live English session with a human voice: the wake word, "Delter", and the latency.
 - English for the local window and shelf commands, the triage and the compaction sentence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
+- The caption of a sentence let pass, live: whether five seconds is enough to read it.
