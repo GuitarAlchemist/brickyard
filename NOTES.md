@@ -609,7 +609,12 @@ unheard, among them requests, because the conversation had ended without a sign.
 renewed each time they talk to Delta, and visible. The wake gate's follow-up and answer windows are now 30 s each,
 where they were 15 and 20, and a sentence let through in the conversation renews it too, where before only « Delta »
 or Delta's own words did. The brain sends the window `{"lease": seconds}` at each change, and the window shows a green
-ring in its bottom left corner, « Je t'écoute · 24 s », that empties until Delta needs its name again. A sentence for
+ring in its bottom left corner: « Je t'écoute » beside twelve green dots that go out one by one, clockwise, until
+Delta needs its name again. A first ring, drawn again four times a second with its seconds, stalled the frames: p99
+27 ms and max 55 ms at 60 fps, against 18 and 22 without it, since each upload waits for the GPU. brutal asked for p99
+within 2 ms of the ring-less build and max under 33 ms. The card is now drawn once for the window's size and language,
+and the dots are one small texture drawn twelve times, tinted lit or dim each frame: in alternating 20 s runs, p99
+17.3 to 17.6 ms and max 20.0 to 20.4 with the ring, against 17.3 to 17.9 and 19.9 to 21.9 without. A sentence for
 someone else, Brutal or Gaïa among them, still ends the conversation at once, and the ring with it. The cost is the
 one the old rule avoided: talk that goes on and on goes on to Claude, now in sight.
 

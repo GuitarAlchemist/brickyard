@@ -522,8 +522,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 7, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card and the ring
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 7 }], // one image each
+            MaxSets = 8, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 8 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -607,12 +607,15 @@ internal static unsafe class Stage
         var pairingDrawn = (Id: -1, Left: -1, Width: 0, Height: 0, Language: "");
         var pairingShown = false;
         (int X, int Y) PhoneAt() => (extent.Width - Panel.PhoneSize(extent.Height) - CardMargin(), CardMargin());
-        // The ring in the bottom left corner while Delta listens without its name (Panel.Lease), drawn again four times a
-        // second as it empties.
+        // The ring in the bottom left corner while Delta listens without its name: its card (Panel.Lease), drawn once for
+        // the window's size, and one dot (Panel.Dot) drawn LeaseDots times over it, tinted lit or dim as it empties.
         var leaseSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? leaseTexture = null;
         Panel.Card? leaseCard = null;
-        var leaseDrawn = (Step: -1, Height: 0, Language: "");
+        var leaseDotSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? leaseDotTexture = null;
+        Panel.Card? leaseDot = null;
+        var leaseDrawn = (Height: 0, Language: "");
         (int X, int Y) PairingAt() => pairingCard is null ? (0, 0) : ((extent.Width - pairingCard.Width) / 2, (extent.Height - pairingCard.Height) / 2);
 
         // Uploads a drawn card into a new texture that set samples, once no frame in flight reads the old one.
@@ -878,12 +881,13 @@ internal static unsafe class Stage
                 phoneTexture = Upload(phone, phoneSet, phoneTexture);
             }
 
-            var leaseStep = (int)MathF.Ceiling(moment.Lease * 4f);
-            if (moment.Lease > 0f && !splashing && leaseDrawn != (leaseStep, extent.Height, Words.Language))
+            if (moment.Lease > 0f && !splashing && leaseDrawn != (extent.Height, Words.Language))
             {
-                leaseDrawn = (leaseStep, extent.Height, Words.Language);
-                leaseCard = Panel.Lease(moment.Lease, moment.LeaseLength, extent.Height);
+                leaseDrawn = (extent.Height, Words.Language);
+                leaseCard = Panel.Lease(extent.Height);
                 leaseTexture = Upload(leaseCard, leaseSet, leaseTexture);
+                leaseDot = Panel.Dot(extent.Height);
+                leaseDotTexture = Upload(leaseDot, leaseDotSet, leaseDotTexture);
             }
 
             var secondsLeft = (int)Math.Ceiling(moment.PairingLeft);
@@ -973,13 +977,24 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (moment.Lease > 0f && leaseCard is not null && leaseTexture is not null)
+                if (moment.Lease > 0f && leaseCard is not null && leaseTexture is not null && leaseDot is not null && leaseDotTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
-                    var push = new SplashPush(Rect(CardMargin(), extent.Height - leaseCard.Height - CardMargin(), leaseCard.Width, leaseCard.Height), SN.Vector4.One);
+                    var (left, top) = (CardMargin(), extent.Height - leaseCard.Height - CardMargin());
+                    var push = new SplashPush(Rect(left, top, leaseCard.Width, leaseCard.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [leaseSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
+                    var lit = (int)MathF.Ceiling(Panel.LeaseDots * Math.Clamp(moment.LeaseLength > 0f ? moment.Lease / moment.LeaseLength : 0f, 0f, 1f));
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [leaseDotSet], []);
+                    for (var i = 0; i < Panel.LeaseDots; i++)
+                    {
+                        var (x, y) = Panel.LeaseDot(i, extent.Height);
+                        var tint = i >= Panel.LeaseDots - lit ? new SN.Vector4(0.353f, 0.863f, 0.51f, 1f) : new SN.Vector4(0.235f, 0.259f, 0.282f, 1f);
+                        var dot = new SplashPush(Rect(left + (int)MathF.Round(x - (leaseDot.Width / 2f)), top + (int)MathF.Round(y - (leaseDot.Height / 2f)), leaseDot.Width, leaseDot.Height), tint);
+                        cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&dot, sizeof(SplashPush)));
+                        cb.Draw(6, 1, 0, 0);
+                    }
                 }
 
                 if (phone is not null && phoneTexture is not null)
@@ -1149,6 +1164,7 @@ internal static unsafe class Stage
         phoneTexture?.Dispose();
         pairingTexture?.Dispose();
         leaseTexture?.Dispose();
+        leaseDotTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);
 
         device.DestroyDescriptorPool(descriptorPool, null);

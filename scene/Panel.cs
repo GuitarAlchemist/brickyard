@@ -221,43 +221,60 @@ internal static class Panel
         return new Card(rgba, width, height, []);
     }
 
-    // While Delta listens without its name: a green ring that empties over the conversation's last seconds, and the
-    // seconds left.
-    public static Card Lease(float left, float length, int windowHeight)
+    // While Delta listens without its name: a card in the bottom left corner, « Je t'écoute » beside a ring of LeaseDots
+    // dots. The card is drawn once for the window's size; the window lays the dots over it (LeaseDot, Dot), lit for the
+    // seconds left, so that the ring empties without a texture drawn again, which would stall a frame.
+    public const int LeaseDots = 12;
+
+    public static Card Lease(int windowHeight)
     {
-        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        var scale = LeaseScale(windowHeight);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var label = Words.Say($"Listening · {MathF.Ceiling(left):0} s", $"Je t'écoute · {MathF.Ceiling(left):0} s");
+        var label = Words.Say("Listening", "Je t'écoute");
         int Wide(string text) => Splash.Text(text, Px(14), out var w, out _, true) is null ? 0 : w;
         var ring = Px(30);
         var width = Px(Pad) + ring + Px(10) + Wide(label) + Px(Pad);
         var height = ring + (2 * Px(10));
         var rgba = new byte[width * height * 4];
         Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 205);
-        var (cx, cy) = (Px(Pad) + (ring / 2f), height / 2f);
-        var (outer, inner) = (ring / 2f, (ring / 2f) - Px(4));
-        var full = Math.Clamp(length > 0f ? left / length : 0f, 0f, 1f);
-        for (var y = 0; y < height; y++)
-        {
-            for (var x = 0; x < width; x++)
-            {
-                var (dx, dy) = (x + 0.5f - cx, y + 0.5f - cy);
-                var d = MathF.Sqrt((dx * dx) + (dy * dy));
-                var cover = Math.Clamp(outer + 0.5f - d, 0f, 1f) * Math.Clamp(d - inner + 0.5f, 0f, 1f);
-                if (cover <= 0f)
-                {
-                    continue;
-                }
-
-                var turn = (MathF.Atan2(dx, -dy) / (2f * MathF.PI)) + 0.5f; // 0 at the top, clockwise
-                var lit = turn >= 1f - full;
-                Over(rgba, width, height, x, y, lit ? (90, 220, 130) : (60, 66, 72), (int)(cover * 255));
-            }
-        }
-
         Text(rgba, width, height, label, Px(14), true, Px(Pad) + ring + Px(10), (height - Px(18)) / 2, (230, 236, 242));
         return new Card(rgba, width, height, []);
     }
+
+    // The centre of the ring's dot i in the lease card, clockwise from the top.
+    public static (float X, float Y) LeaseDot(int i, int windowHeight)
+    {
+        var scale = LeaseScale(windowHeight);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var ring = Px(30);
+        var (cx, cy) = (Px(Pad) + (ring / 2f), (ring + (2 * Px(10))) / 2f);
+        var radius = (ring - DotSize(windowHeight)) / 2f;
+        var turn = 2f * MathF.PI * i / LeaseDots;
+        return (cx + (radius * MathF.Sin(turn)), cy - (radius * MathF.Cos(turn)));
+    }
+
+    // A white disc the size of the ring's dots, which the window tints lit or dim.
+    public static Card Dot(int windowHeight)
+    {
+        var size = DotSize(windowHeight);
+        var rgba = new byte[size * size * 4];
+        var r = size / 2f;
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var (dx, dy) = (x + 0.5f - r, y + 0.5f - r);
+                var cover = Math.Clamp(r + 0.5f - MathF.Sqrt((dx * dx) + (dy * dy)), 0f, 1f);
+                Over(rgba, size, size, x, y, (255, 255, 255), (int)(cover * 255));
+            }
+        }
+
+        return new Card(rgba, size, size, []);
+    }
+
+    private static float LeaseScale(int windowHeight) => Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+
+    private static int DotSize(int windowHeight) => Math.Max(3, (int)MathF.Round(5f * LeaseScale(windowHeight)));
 
     // Shortens text with an ellipsis until it fits in width pixels.
     private static string Fit(string text, int pixels, bool bold, int width)
