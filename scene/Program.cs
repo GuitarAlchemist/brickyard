@@ -522,8 +522,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 6, // the logo, the notice, the shelf's card, the caption, the phone icon and its pairing card
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 6 }], // one image each
+            MaxSets = 7, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card and the ring
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 7 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -607,6 +607,12 @@ internal static unsafe class Stage
         var pairingDrawn = (Id: -1, Left: -1, Width: 0, Height: 0, Language: "");
         var pairingShown = false;
         (int X, int Y) PhoneAt() => (extent.Width - Panel.PhoneSize(extent.Height) - CardMargin(), CardMargin());
+        // The ring in the bottom left corner while Delta listens without its name (Panel.Lease), drawn again four times a
+        // second as it empties.
+        var leaseSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? leaseTexture = null;
+        Panel.Card? leaseCard = null;
+        var leaseDrawn = (Step: -1, Height: 0, Language: "");
         (int X, int Y) PairingAt() => pairingCard is null ? (0, 0) : ((extent.Width - pairingCard.Width) / 2, (extent.Height - pairingCard.Height) / 2);
 
         // Uploads a drawn card into a new texture that set samples, once no frame in flight reads the old one.
@@ -872,6 +878,14 @@ internal static unsafe class Stage
                 phoneTexture = Upload(phone, phoneSet, phoneTexture);
             }
 
+            var leaseStep = (int)MathF.Ceiling(moment.Lease * 4f);
+            if (moment.Lease > 0f && !splashing && leaseDrawn != (leaseStep, extent.Height, Words.Language))
+            {
+                leaseDrawn = (leaseStep, extent.Height, Words.Language);
+                leaseCard = Panel.Lease(moment.Lease, moment.LeaseLength, extent.Height);
+                leaseTexture = Upload(leaseCard, leaseSet, leaseTexture);
+            }
+
             var secondsLeft = (int)Math.Ceiling(moment.PairingLeft);
             if (pairingShown && !splashing && pairingDrawn != (moment.PairingId, secondsLeft, extent.Width, extent.Height, Words.Language))
             {
@@ -955,6 +969,15 @@ internal static unsafe class Stage
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var push = new SplashPush(Rect((extent.Width - caption.Width) / 2, extent.Height - caption.Height - CardMargin(), caption.Width, caption.Height), new SN.Vector4(1f, 1f, 1f, fade));
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [captionSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (moment.Lease > 0f && leaseCard is not null && leaseTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var push = new SplashPush(Rect(CardMargin(), extent.Height - leaseCard.Height - CardMargin(), leaseCard.Width, leaseCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [leaseSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -1125,6 +1148,7 @@ internal static unsafe class Stage
         captionTexture?.Dispose();
         phoneTexture?.Dispose();
         pairingTexture?.Dispose();
+        leaseTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);
 
         device.DestroyDescriptorPool(descriptorPool, null);

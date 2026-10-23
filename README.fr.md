@@ -46,8 +46,8 @@ choisissez **delta**, puis **Reconnect**, ou redémarrez Claude Code.
 
 Ce que Delta transmet par le canal :
 - les phrases qui commencent par l'appeler, « Delta, … », ou par appeler son cerveau, « Claude, … » ;
-- les phrases suivantes, pendant 15 secondes ;
-- votre réponse, dans les 20 secondes après ses dernières paroles.
+- la suite, tant que la conversation continue : chaque phrase pour Delta et chacune de ses réponses la prolongent de
+  30 secondes, qu'un anneau en bas à gauche de sa fenêtre décompte.
 
 Une phrase qu'il laisse passer faute de « Delta » s'affiche cinq secondes sous le robot, avec la façon de l'appeler :
 vous savez ainsi qu'il l'a entendue.

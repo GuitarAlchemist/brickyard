@@ -53,8 +53,8 @@ Delta's window opens when Claude Code starts the plugin's MCP server.
 Which speech Delta passes on:
 - **Through the channel**:
   - sentences that start by calling it, "Delta, …", or its brain, "Claude, …";
-  - the next sentences within 15 seconds;
-  - your answer within 20 seconds of its last words.
+  - what follows, for as long as the conversation goes on: each sentence for Delta and each of its answers keep it
+    open 30 seconds more, which a ring in the bottom left corner of its window counts down.
 
   It drops a sentence that says "I'm not talking to you" or « je ne te parle pas », or that calls one of the author's
   other sessions first: Brutal, Gaïa, Indigo, Amber, Codex or IX. That also ends the conversation.

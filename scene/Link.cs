@@ -15,7 +15,8 @@ using System.Text.Json;
 // hearts that rise from the robot for HeartSeconds; and "ignored", a sentence Delta heard and let pass for want of its
 // name, which a caption under the robot shows for IgnoredSeconds; and "pairing", {"rows", "seconds"}, the QR code of the
 // link a phone opens to pair with Delta's gateway, one string of 0 and 1 per row, and how long its code lives, which
-// the phone icon's card shows on a click. Each changes only what it names.
+// the phone icon's card shows on a click; and "lease", for how many seconds Delta listens without hearing its name,
+// which a ring that empties shows. Each changes only what it names.
 internal sealed class Link(Func<double> clock)
 {
     private const int MaxLine = 256 * 1024;
@@ -43,6 +44,8 @@ internal sealed class Link(Func<double> clock)
     private double pairingUntil = double.NegativeInfinity;
     private int pairingId; // counts the links, so that the card is drawn again for each
     private int demoPairing = -1; // the demo's last loop that brought a link
+    private double leaseUntil = double.NegativeInfinity; // until when Delta listens without its name
+    private double leaseLength; // how long that was when it began, for the ring
 
     // The expressions the face knows; "neutral" ends the one shown.
     public static readonly string[] Moods = ["neutral", "joy", "surprise", "doubt", "sorry", "proud", "wink", "focus", "sleepy"];
@@ -57,7 +60,7 @@ internal sealed class Link(Func<double> clock)
     public const double IgnoredSeconds = 5.0;
 
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Ignored = null, string[]? Pairing = null, double PairingSeconds = 0);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Ignored = null, string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -74,8 +77,8 @@ internal sealed class Link(Func<double> clock)
     // began (-1 when none is rising), and the sentence Delta last let pass while its caption shows ("" otherwise), how
     // long ago it came (-1 when none shows) and its number, which changes with each sentence; and the pairing QR code's
     // rows while its code lives (null otherwise), the seconds it still lives (0 once it expired, -1 before any came) and
-    // the link's number.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Ignored = "", float IgnoredAge = -1f, int IgnoredId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0);
+    // the link's number; and for how many seconds more Delta listens without its name (0 when it needs it), of how many.
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Ignored = "", float IgnoredAge = -1f, int IgnoredId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -112,14 +115,15 @@ internal sealed class Link(Func<double> clock)
             var hearts = now - heartsSince is >= 0 and < HeartSeconds ? (float)(now - heartsSince) : -1f;
             var age = now - ignoredSince is >= 0 and < IgnoredSeconds ? (float)(now - ignoredSince) : -1f;
             var left = pairingId == 0 ? -1f : (float)Math.Max(0, pairingUntil - now);
-            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? ignored : "", age, ignoredId, left > 0f ? pairing : null, left, pairingId);
+            var lease = (float)Math.Max(0, leaseUntil - now);
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? ignored : "", age, ignoredId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f);
         }
     }
 
     // --demo: idle, listening and thinking for 1.5 s each, then 3.5 s of speech-like loudness, 0.5 s idle again and
     // 2.5 s of compaction, while the context fills from empty to full and starts again after the compaction; then each
     // expression for 1 s, and the caption of a sentence let pass, which lasts into the next loop; a pairing link comes at
-    // the start of each loop, its code living for the loop.
+    // the start of each loop, its code living for the loop, and Delta listens without its name for 10 s after speaking.
     public const double DemoSeconds = 21.0;
 
     public void Demo(double now)
@@ -158,6 +162,10 @@ internal sealed class Link(Func<double> clock)
         if (changed)
         {
             Apply(new Change(want, want == "speaking" ? DemoEnvelope() : [], want is "thinking" or "speaking" ? "paid" : "", null, null), now);
+            if (want == "idle" && t >= 8.0)
+            {
+                Apply(new Change(null, [], "", null, null, Lease: 10.0), now);
+            }
         }
 
         if (caption)
@@ -314,15 +322,27 @@ internal sealed class Link(Func<double> clock)
                 return null;
             }
 
+            double? lease = null;
+            if (root.TryGetProperty("lease"u8, out var le))
+            {
+                if (le.ValueKind != JsonValueKind.Number || le.GetDouble() is < 0 or > 3600)
+                {
+                    error = "lease is a number of seconds, from 0 to 3600";
+                    return null;
+                }
+
+                lease = le.GetDouble();
+            }
+
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && ignored is null && pairing is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && ignored is null && pairing is null && lease is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds, lease);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -372,7 +392,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, ignored, pairing, pairingSeconds, lease);
         }
         catch (JsonException ex)
         {
@@ -507,6 +527,14 @@ internal sealed class Link(Func<double> clock)
         var paired = link.Read(60.0);
         Check(paired is { Pairing.Length: 29, PairingId: 1 } && Math.Abs(paired.PairingLeft - 110f) < 1e-3, "the code shows while it lives");
         Check(link.Read(170.5) is { Pairing: null, PairingLeft: 0f, PairingId: 1 }, "an expired code is no longer shown");
+        Check(Parse("""{"lease":30}""", out _) is { State: null, Lease: 30.0 } && Parse("""{"lease":0}""", out _) is { Lease: 0.0 }, "how long Delta listens without its name");
+        Check(Parse("""{"lease":-1}""", out _) is null && Parse("""{"lease":"30"}""", out _) is null, "a lease is a number of seconds");
+        Check(link.Read(179.0) is { Lease: 0f, LeaseLength: 0f }, "Delta needs its name until a conversation begins");
+        link.Apply(new Change(null, [], "", null, null, Lease: 30), 180.0);
+        var listening = link.Read(190.0);
+        Check(Math.Abs(listening.Lease - 20f) < 1e-3 && listening.LeaseLength == 30f && link.Read(210.5) is { Lease: 0f, LeaseLength: 0f }, "the ring empties in 30 s");
+        link.Apply(new Change(null, [], "", null, null, Lease: 0), 195.0);
+        Check(link.Read(196.0) is { Lease: 0f }, "a sentence for someone else ends the conversation at once");
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
     }
@@ -519,6 +547,12 @@ internal sealed class Link(Func<double> clock)
             if (change.Hearts)
             {
                 heartsSince = at;
+            }
+
+            if (change.Lease is { } seconds)
+            {
+                leaseUntil = at + seconds;
+                leaseLength = seconds;
             }
 
             if (change.Pairing is { } code)

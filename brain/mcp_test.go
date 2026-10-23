@@ -269,8 +269,13 @@ func TestMCPChannelNeedsTheWakeWordToStartAConversation(t *testing.T) {
 		t.Fatalf("went to %s", where)
 	}
 	next(t, out)
-	// That sentence does not keep the conversation open: talk that goes on and on is not all for Delta.
-	if where := m.hear(utterance{text: "et la doc"}, now.Add(40*time.Second)); where != "ignored" {
+	// Each sentence for Delta keeps the conversation open for as long again, as the window shows.
+	if where := m.hear(utterance{text: "et la doc"}, now.Add(20*time.Second)); where != "channel" {
+		t.Fatalf("went to %s in a conversation that went on", where)
+	}
+	next(t, out)
+	// Silence ends it.
+	if where := m.hear(utterance{text: "et la météo"}, now.Add(40*time.Second)); where != "ignored" {
 		t.Fatalf("went to %s after the follow-up window", where)
 	}
 	// After Delta speaks, the user may answer it without naming it.
@@ -287,8 +292,8 @@ func TestMCPChannelNeedsTheWakeWordToStartAConversation(t *testing.T) {
 		t.Fatalf("went to %s after the user turned to someone else", where)
 	}
 	silent(t, out)
-	if thoughtful != 3 {
-		t.Fatalf("Delta looked thoughtful %d times, not 3", thoughtful)
+	if thoughtful != 4 {
+		t.Fatalf("Delta looked thoughtful %d times, not 4", thoughtful)
 	}
 }
 
@@ -559,5 +564,19 @@ func TestTheJournalSaysWhenWhisperRepeatedASentence(t *testing.T) {
 	}
 	if r := <-records; r["repeats_collapsed"] != 3 || r["text"] != "Delta, quel est le dépôt IX ? Parfait. Merci. C'est bon pour moi." {
 		t.Fatalf("%v", r)
+	}
+}
+
+// The window shows until when Delta listens without its name: each change of the conversation's end goes to it.
+func TestTheWindowShowsHowLongDeltaListens(t *testing.T) {
+	var ends []time.Time
+	m, _, _ := startServer(t, func(m *mcpServer) { m.gate.changed = func(until time.Time) { ends = append(ends, until) } })
+	now := time.Now()
+	m.hear(utterance{text: "Delta, lance les tests."}, now)
+	m.gate.open(now.Add(5 * time.Second)) // Delta answers
+	m.hear(utterance{text: "Gaïa, note ça."}, now.Add(6*time.Second))
+	m.hear(utterance{text: "et la météo"}, now.Add(7*time.Second))
+	if len(ends) != 3 || !ends[0].Equal(now.Add(15*time.Second)) || !ends[1].Equal(now.Add(25*time.Second)) || !ends[2].IsZero() {
+		t.Fatalf("%v", ends)
 	}
 }
