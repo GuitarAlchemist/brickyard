@@ -139,17 +139,29 @@ func TestARemoteDeviceSpeaksToDeltaWithTheSecret(t *testing.T) {
 	}
 }
 
-func TestARemoteDeviceHearsEachSentenceAsItStarts(t *testing.T) {
-	r := &remote{secret: "s3cret"}
+// saidEvent is one sentence from /said; the utterance is a pointer, so that a test tells "" from absent.
+type saidEvent struct {
+	SayID     int     `json:"say_id"`
+	Utterance *string `json:"utterance_id"`
+	By        string  `json:"by"`
+	Text      string  `json:"text"`
+	Seconds   float64 `json:"seconds"`
+	TMs       int64   `json:"t_ms"`
+	Wav       string  `json:"wav_b64"`
+}
+
+// subscribeSaid opens /said as a device does, and waits until the brain counts it.
+func subscribeSaid(t *testing.T, r *remote) *bufio.Scanner {
+	t.Helper()
 	srv := remoteServer(t, r)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/said", nil)
 	req.Header.Set(hookHeader, "1")
-	req.Header.Set(remoteHeader, "s3cret")
+	req.Header.Set(remoteHeader, r.secret)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	t.Cleanup(func() { resp.Body.Close() })
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("%d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
@@ -160,37 +172,64 @@ func TestARemoteDeviceHearsEachSentenceAsItStarts(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	path := filepath.Join(t.TempDir(), "s.wav")
-	if err := writeWav(path, 22050, make([]float32, 2205)); err != nil {
-		t.Fatal(err)
-	}
-	w, _ := readWav(path)
-	r.publish(3, "Il est midi.", w, path)
 	lines := bufio.NewScanner(resp.Body)
 	lines.Buffer(make([]byte, 1<<20), 1<<20)
+	return lines
+}
+
+func nextSaid(t *testing.T, lines *bufio.Scanner) saidEvent {
+	t.Helper()
 	for lines.Scan() {
 		line := lines.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		var event struct {
-			SayID   int     `json:"say_id"`
-			Text    string  `json:"text"`
-			Seconds float64 `json:"seconds"`
-			TMs     int64   `json:"t_ms"`
-			Wav     string  `json:"wav_b64"`
-		}
+		var event saidEvent
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err != nil {
 			t.Fatal(err)
 		}
-		sound, _ := base64.StdEncoding.DecodeString(event.Wav)
-		file, _ := os.ReadFile(path)
-		if event.SayID != 3 || event.Text != "Il est midi." || event.Seconds != 0.1 || event.TMs == 0 || !bytes.Equal(sound, file) {
-			t.Fatalf("%+v", event)
-		}
-		return
+		return event
 	}
 	t.Fatalf("no event: %v", lines.Err())
+	return saidEvent{}
+}
+
+// Each sentence reaches the device as it starts, with its sound and the utterance it answers, as its say note gives
+// them, so that a device matches an answer to its question; "" when it answers none, or when no note came.
+func TestARemoteDeviceHearsEachSentenceAsItStarts(t *testing.T) {
+	r := &remote{secret: "s3cret"}
+	lines := subscribeSaid(t, r)
+	path := filepath.Join(t.TempDir(), "s.wav")
+	if err := writeWav(path, 22050, make([]float32, 2205)); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := readWav(path)
+	r.attribute(map[string]any{"say_id": 3, "utterance_id": "4", "text": "Il est midi.", "by": "claude"})
+	r.publish(3, "Il est midi.", w, path)
+	event := nextSaid(t, lines)
+	sound, _ := base64.StdEncoding.DecodeString(event.Wav)
+	file, _ := os.ReadFile(path)
+	if event.SayID != 3 || event.Text != "Il est midi." || event.Seconds != 0.1 || event.TMs == 0 || !bytes.Equal(sound, file) ||
+		event.Utterance == nil || *event.Utterance != "4" || event.By != "claude" {
+		t.Fatalf("%+v", event)
+	}
+	r.attribute(map[string]any{"say_id": 5, "utterance_id": "", "text": "Bonsoir.", "by": "local"})
+	r.publish(5, "Bonsoir.", w, path)
+	r.publish(6, "Hum.", w, path)
+	for _, want := range []struct {
+		say int
+		by  string
+	}{{5, "local"}, {6, ""}} {
+		if event := nextSaid(t, lines); event.SayID != want.say || event.Utterance == nil || *event.Utterance != "" || event.By != want.by {
+			t.Fatalf("%+v", event)
+		}
+	}
+	for id := 7; id < 300; id++ { // sentences never said, such as the acknowledgements the mouth drops
+		r.attribute(map[string]any{"say_id": id, "utterance_id": "9", "by": "ack"})
+	}
+	if len(r.answers) > 64 {
+		t.Fatalf("the brain keeps %d sentences that were never said", len(r.answers))
+	}
 }
 
 func TestARemoteSentenceNeedsNoWakeWordAndSaysWhereItCameFrom(t *testing.T) {

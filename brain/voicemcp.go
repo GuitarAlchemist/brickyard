@@ -209,6 +209,7 @@ func runMCP(c mcpConfig) {
 	}
 	h.remote = rm
 	mo.onClip = rm.publish
+	m.attribute = rm.attribute
 	if c.hooks != "" {
 		go h.serve(c.hooks)
 	}

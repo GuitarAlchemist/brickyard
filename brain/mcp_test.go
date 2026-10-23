@@ -486,3 +486,18 @@ func TestTheWindowShowsWhatDeltaIgnored(t *testing.T) {
 		t.Fatalf("a long sentence is cut: %d runes", len([]rune(got)))
 	}
 }
+
+// The remote learns whom each sentence answers from its say note, journal or not (remote.go).
+func TestTheSayNoteTellsTheRemoteWhomASentenceAnswers(t *testing.T) {
+	var s spoken
+	var told []map[string]any
+	_, in, out := startServer(t, func(m *mcpServer) {
+		m.speak = s.speak
+		m.attribute = func(say map[string]any) { told = append(told, say) }
+	})
+	call(in, 1, "say", `{"text":"Il est midi.","utterance_id":"4"}`)
+	next(t, out)
+	if len(told) != 1 || told[0]["say_id"] != 1 || told[0]["utterance_id"] != "4" || told[0]["by"] != "claude" {
+		t.Fatalf("%v", told)
+	}
+}
