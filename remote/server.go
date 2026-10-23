@@ -230,12 +230,12 @@ func (s *server) said(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.brain.said(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		comeBack(w)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Delta's brain answered "+resp.Status, http.StatusBadGateway)
+		comeBack(w)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -257,6 +257,18 @@ func (s *server) said(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// saidRetry is how soon the page asks /said again while the brain is away, as while it restarts.
+const saidRetry = 2 * time.Second
+
+// comeBack answers /said while the brain is away. An EventSource gives up for good on an error status, but asks again
+// after an event stream that ends, in the retry it names: so the page hears Delta again once the brain is back.
+func comeBack(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "retry: %d\n\n", saidRetry.Milliseconds())
 }
 
 func (s *server) offer(w http.ResponseWriter, r *http.Request) {

@@ -208,6 +208,43 @@ func TestDeltasSentencesReachThePairedDevice(t *testing.T) {
 	}
 }
 
+// A browser's EventSource gives up for good on an answer other than a 200 event stream, so while the brain is away
+// /said tells the page to come back later: the page hears Delta again once the brain restarts, without a reload.
+func TestThePageComesBackForDeltasSentencesWhileTheBrainIsAway(t *testing.T) {
+	for _, away := range []struct {
+		name  string
+		brain func(t *testing.T, g *testGateway, b *fakeBrain)
+	}{
+		{"stopped", func(t *testing.T, g *testGateway, b *fakeBrain) { b.Close() }},
+		{"refusing", func(t *testing.T, g *testGateway, b *fakeBrain) {
+			wrong := filepath.Join(t.TempDir(), "remote.secret")
+			os.WriteFile(wrong, []byte(strings.Repeat("0", 64)), 0o600)
+			g.s.brain = newBrain(b.URL, wrong)
+		}},
+	} {
+		t.Run(away.name, func(t *testing.T) {
+			b := newFakeBrain(t)
+			g, cookie := voiceGateway(t, b)
+			away.brain(t, g, b)
+			req, _ := http.NewRequest(http.MethodGet, g.ts.URL+"/said", nil)
+			req.Header.Set("Cookie", cookie)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			ct := resp.Header.Get("Content-Type")
+			if resp.StatusCode != http.StatusOK || !strings.HasPrefix(ct, "text/event-stream") {
+				t.Fatalf("status %d, %q: want a 200 event stream, which the browser asks again", resp.StatusCode, ct)
+			}
+			if !strings.HasPrefix(string(body), "retry: ") {
+				t.Errorf("body %q: want a retry line, so that the page asks again soon", body)
+			}
+		})
+	}
+}
+
 // Delta's window always has a QR that works: a code used by a device, or 100 s old, is replaced at once by a new one,
 // so a scan pairs the next device in one step.
 func TestDeltasWindowAlwaysHoldsAFreshPairingLink(t *testing.T) {

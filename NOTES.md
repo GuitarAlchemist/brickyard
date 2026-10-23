@@ -562,7 +562,24 @@ first; mutation witnesses: four for `talk.js`, two for the QR's renewal, one for
 fake brain, a fake microphone and headless Chrome at phone size, passed the eleven expectations written before the
 run. IX deployed this gateway from the working tree on 2026-10-23 at 14:41, on the author's go, for a demo of the QR.
 
+## The phone after a brain restart (2026-10-23)
+
+The brain was away from 14:58 to 15:03, and afterwards the gateway had no `/said` stream to it: the phone's page no
+longer heard Delta, and the brain, with no listener sending `X-Delta-Plays: own`, played the phone's answers at the
+computer. While the brain was away the gateway answered `/said` with 503, and an EventSource gives up for good on an
+error status. Measured with headless Chrome against a stub, over 5 s: after a 503 it asked `/said` once; after a 200
+event stream holding `retry: 300` and then ending, 15 times. The gateway now answers `/said` that way, with
+`retry: 2000`, while the brain cannot be reached or refuses it, so the page asks again until the brain is back. The
+test went red first, with 503 for a stopped brain and 502 for one that refuses the secret.
+
 ## Known problems
+
+- The computer's microphone and the phone both feed one conversation. In the author's session of 2026-10-23,
+  14:49–14:58, six sentences reached the brain twice, 0.1–0.5 s apart, transcribed differently by the two
+  microphones, such as « Delta, on fait quoi ensuite ? » and « Aïta, on ne sait quoi ensuite ? »; 0.6.0's duplicate
+  rule, on words in common, caught none. Only the copy routed first got an acknowledgement, which played where that
+  copy came from: « des fois c'est le téléphone qui me répond, des fois c'est le desktop ». A rule on time and source,
+  such as ignoring the other device while one holds the conversation, is delta-live's for 0.6.1.
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
   the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
