@@ -27,7 +27,8 @@ import (
 //	GET  /said  server-sent events, one per sentence as it starts playing: {"say_id","text","seconds","t_ms","wav_b64"}
 //
 // A sentence from /hear is routed as one addressed to Delta, since holding the device's button addressed it. Its heard
-// line and channel event carry source "remote", and a chime tells the room, unless Delta is speaking.
+// line and channel event carry source "remote". A chime tells the room when Delta says nothing back at once, nor is
+// speaking: a sentence for Claude gets Delta's acknowledgement instead, and small talk its answer.
 
 const remoteHeader = "X-Delta-Remote"
 
@@ -101,10 +102,10 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote"}
 	id, where := 0, "nothing"
 	if u.text != "" {
-		if r.chime != nil {
+		id, where = r.route(u)
+		if r.chime != nil && where != "channel" && where != "local" {
 			r.chime()
 		}
-		id, where = r.route(u)
 	}
 	answer := map[string]any{"utterance_id": "", "text": u.text, "route": where}
 	if id > 0 {

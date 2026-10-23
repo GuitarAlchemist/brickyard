@@ -483,6 +483,16 @@ The journal gets an `ears` line with the server that hears and, if any, why anot
 servers, from the test binary itself: one that stops at once, as a GPU build without its libraries, one that dies after
 its warm-up, and one that hears. Not switched on yet: that is the author's call.
 
+## A word at once (2026-10-22, night)
+
+With Whisper on the GPU (216 ms) and the triage warm (about 250 ms), Claude's turn is almost all of the wait: 7.5 s
+from the phone's test sentence to « Test reçu. ». The author approved, through brutal, a spoken acknowledgement. A
+sentence that goes to Claude now gets one of four short words in Delta's language, in turn (« Je regarde. », « Une
+seconde. », « Voyons voir. », « Je réfléchis. »), spoken at no cost. Not while Delta speaks, nor after the compaction
+notice. The mouth drops it, with an `unsaid` line, when something waits behind it by the time its turn comes, or when
+it would start more than 1.5 s late. From the phone, it replaces the chime, which now plays only when Delta answers
+nothing at once. The heard line's `ack` ties the sentence to the word; their `speaking` line times the first sound.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

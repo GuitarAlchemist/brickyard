@@ -108,10 +108,12 @@ type mcpServer struct {
 	listenMin time.Duration
 	listenMax time.Duration
 	gate      wakeGate
-	triage    triage        // sorts what the wake gate lets through before Claude sees it, if set
-	about     string        // appended to the instructions: what only the running brain knows, such as its journal
-	triageMax time.Duration // after which a transcript goes to Claude without the triage's verdict
-	rewarm    func()        // loads the triage's model again after it failed, if set
+	triage    triage                       // sorts what the wake gate lets through before Claude sees it, if set
+	about     string                       // appended to the instructions: what only the running brain knows, such as its journal
+	triageMax time.Duration                // after which a transcript goes to Claude without the triage's verdict
+	rewarm    func()                       // loads the triage's model again after it failed, if set
+	ack       func(text string, sayID int) // says a word at once, which the mouth drops if Claude's answer comes first
+	quiet     func() bool                  // Delta has nothing left to say
 
 	outMu sync.Mutex
 	out   io.Writer
@@ -121,6 +123,7 @@ type mcpServer struct {
 	cancels map[string]chan struct{} // by request id
 	heard   int
 	said    int
+	acked   int       // acknowledgements said, which picks the next one
 	recent  []string  // the conversation's last lines, for the triage
 	local   []string  // the lines the triage handled since the last channel event, for Claude to know
 	asked   bool      // Claude's last words asked the user something: the answer goes to Claude untriaged
@@ -418,8 +421,10 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	if m.pushed != nil {
 		m.pushed()
 	}
+	noticed := false
 	if m.busy != nil {
 		if notice := m.busy(); notice != "" { // Claude Code is compacting: Claude will answer, but late
+			noticed = true
 			m.mu.Lock()
 			m.said++
 			sayID := m.said
@@ -431,7 +436,29 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 			}
 		}
 	}
+	if !noticed {
+		m.acknowledge(fields)
+	}
 	return id, route
+}
+
+// acknowledge says a short word at once when a sentence goes to Claude, whose answer takes seconds, so that the first
+// sound comes in under a second: one of the language's acks, in turn. Not while Delta speaks, and the mouth drops it if
+// Claude's answer comes first. The heard line's ack is the say_id of its say line, whose speaking line times the
+// first sound.
+func (m *mcpServer) acknowledge(fields map[string]any) {
+	if m.ack == nil || m.quiet == nil || !m.quiet() || len(m.lang.acks) == 0 {
+		return
+	}
+	m.mu.Lock()
+	m.said++
+	sayID := m.said
+	word := m.lang.acks[m.acked%len(m.lang.acks)]
+	m.acked++
+	m.mu.Unlock()
+	m.note("say", map[string]any{"say_id": sayID, "utterance_id": fields["utterance_id"], "text": word, "by": "ack"})
+	fields["ack"] = sayID
+	m.ack(word, sayID)
 }
 
 // sort asks the triage what to do with a transcript the wake gate let through, after rules that need no model: a

@@ -74,9 +74,9 @@ func wavBytes(t *testing.T, rate int, seconds float64) []byte {
 
 func TestARemoteDeviceSpeaksToDeltaWithTheSecret(t *testing.T) {
 	var routed []utterance
-	chimes := 0
+	chimes, where := 0, "channel"
 	r := &remote{secret: "s3cret",
-		route: func(u utterance) (int, string) { routed = append(routed, u); return 7, "channel" },
+		route: func(u utterance) (int, string) { routed = append(routed, u); return 7, where },
 		chime: func() { chimes++ }}
 	srv := remoteServer(t, r)
 	post := func(body []byte, secret string) (int, map[string]any) {
@@ -116,8 +116,12 @@ func TestARemoteDeviceSpeaksToDeltaWithTheSecret(t *testing.T) {
 	if code != http.StatusAccepted || out["utterance_id"] != "7" || out["text"] != "Delta, quelle heure est-il ?" || out["route"] != "channel" {
 		t.Fatalf("%d %v", code, out)
 	}
-	if len(routed) != 1 || routed[0].source != "remote" || routed[0].text != "Delta, quelle heure est-il ?" || chimes != 1 {
-		t.Fatalf("routed %+v, %d chimes", routed, chimes)
+	if len(routed) != 1 || routed[0].source != "remote" || routed[0].text != "Delta, quelle heure est-il ?" || chimes != 0 {
+		t.Fatalf("routed %+v, %d chimes: Delta's acknowledgement tells the room", routed, chimes)
+	}
+	where = "dropped"
+	if post(speech, "s3cret"); chimes != 1 {
+		t.Fatalf("a sentence Delta does not answer at once: %d chimes", chimes)
 	}
 
 	// a brain without a secret refuses everyone, an empty header included

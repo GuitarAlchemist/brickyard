@@ -153,6 +153,7 @@ func runMCP(c mcpConfig) {
 		mo.fx = fx
 	}
 	m.speak = mo.speak
+	m.ack, m.quiet = mo.ack, mo.quiet
 	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
 		m.show = func(line map[string]any) { // a request for the window or its shelf brings back a window the user closed
 			s.summon()
@@ -421,6 +422,33 @@ type said struct {
 	id   int
 	cost string
 	mood string
+	ack  bool      // an acknowledgement, which gives way to what follows
+	at   time.Time // when it was queued
+}
+
+// ackLate is how long an acknowledgement may wait for the mouth: any later, it would not come at once.
+const ackLate = 1500 * time.Millisecond
+
+// ack queues a word to say at once. The mouth drops it if something waits behind it by then, such as Claude's answer.
+func (mo *mouth) ack(text string, id int) {
+	select {
+	case mo.queue <- said{text: text, id: id, cost: free, ack: true, at: time.Now()}:
+	default:
+	}
+}
+
+// unsaid says why the mouth drops what it was about to say, or "": only an acknowledgement is dropped, when something
+// waits behind it or when it comes too late.
+func unsaid(s said, waiting int, now time.Time) string {
+	switch {
+	case !s.ack:
+		return ""
+	case waiting > 0:
+		return "something else waits to be said"
+	case now.Sub(s.at) > ackLate:
+		return "too late"
+	}
+	return ""
 }
 
 func (mo *mouth) speak(text string, id int, cost, mood string) (string, error) {
@@ -431,7 +459,7 @@ func (mo *mouth) speak(text string, id int, cost, mood string) (string, error) {
 		return "", failed
 	}
 	select {
-	case mo.queue <- said{text, id, cost, mood}:
+	case mo.queue <- said{text: text, id: id, cost: cost, mood: mood}:
 	default:
 		return "", errors.New("Delta already has 32 things to say: wait until it has said them")
 	}
@@ -455,6 +483,10 @@ func (mo *mouth) run(v *voice) {
 	clips := make(chan clip, 8)
 	go func() {
 		for s := range mo.queue {
+			if why := unsaid(s, len(mo.queue), time.Now()); why != "" {
+				mo.record("unsaid", map[string]any{"say_id": s.id, "why": why})
+				continue
+			}
 			var cut sentences
 			parts := cut.feed(s.text)
 			if rest := cut.flush(); rest != "" {
