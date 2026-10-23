@@ -216,6 +216,48 @@ func (e *ears) stop() {
 	}
 }
 
+// collapseRepeats keeps one copy of a sentence that Whisper wrote three times in a row or more, as it can over a
+// button held on silence, and says how many copies it removed. A sentence ends with . ! ? or …, and two copies stay,
+// since people repeat themselves.
+func collapseRepeats(text string) (string, int) {
+	var parts []string
+	runes := []rune(text)
+	start := 0
+	for i := 0; i < len(runes); i++ {
+		if strings.ContainsRune(".!?…", runes[i]) {
+			j := i + 1
+			for j < len(runes) && strings.ContainsRune(".!?…", runes[j]) {
+				j++
+			}
+			parts = append(parts, strings.TrimSpace(string(runes[start:j])))
+			start, i = j, j-1
+		}
+	}
+	if rest := strings.TrimSpace(string(runes[start:])); rest != "" {
+		parts = append(parts, rest)
+	}
+	var kept []string
+	removed := 0
+	for i := 0; i < len(parts); {
+		key := strings.Join(sentenceWords(parts[i]), " ")
+		j := i + 1
+		for j < len(parts) && strings.Join(sentenceWords(parts[j]), " ") == key {
+			j++
+		}
+		if j-i >= 3 && key != "" {
+			kept = append(kept, parts[i])
+			removed += j - i - 1
+		} else {
+			kept = append(kept, parts[i:j]...)
+		}
+		i = j
+	}
+	if removed == 0 {
+		return text, 0
+	}
+	return strings.Join(kept, " "), removed
+}
+
 // cleanHeard folds the transcript's spaces and drops what Whisper writes over silence or noise: a sound in brackets
 // ("[Musique]", "[Music]") and the subtitle credits and sign-offs its training data was full of.
 func cleanHeard(text string) string {

@@ -568,6 +568,16 @@ Writing the first half showed a bug in `/said` since 0.5.0: only the first sente
 `utterance_id` and `by`, and the next ones came as if Delta spoke unprompted. The remote now keeps the attribution for
 the whole say call.
 
+## Whisper's repetition loop (2026-10-23)
+
+Utterance 24 came from the phone as one question followed by eight copies of « Parfait, il y a un peu plus de
+temps. », and utterance 76 with four copies of a sentence: Whisper's decoder loops, as over a button held on silence,
+and `-nf` (ears.go) turns off whisper.cpp's temperature fallback, its own guard against loops, because it cost 31.6 s
+on a mumble with the CPU build. brutal found it. The router now keeps one copy of a sentence written three times in a
+row or more, the same words whatever the punctuation, and the `heard` line says `repeats_collapsed`. `/hear` answers
+the same text. Two copies stay, since people repeat themselves. Left to measure: the fallback back on with the CUDA
+build only, on a mumble and a long silence.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

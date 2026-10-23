@@ -140,7 +140,8 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 			r.chime()
 		}
 	}
-	answer := map[string]any{"utterance_id": "", "text": u.text, "route": where}
+	shown, _ := collapseRepeats(u.text) // as the session gets it
+	answer := map[string]any{"utterance_id": "", "text": shown, "route": where}
 	if id > 0 {
 		answer["utterance_id"] = strconv.Itoa(id)
 		r.mu.Lock()

@@ -218,3 +218,25 @@ func TestResampleAndWavRoundTrip(t *testing.T) {
 		t.Fatalf("%v: rate %d, %d samples", err, w.rate, len(w.samples))
 	}
 }
+
+// Whisper sometimes writes one sentence over and over, as over a button held on silence: three copies in a row or more
+// are one. Two are kept, since people repeat themselves.
+func TestASentenceWhisperRepeatsIsHeardOnce(t *testing.T) {
+	for _, c := range []struct {
+		in, want string
+		removed  int
+	}{
+		{"Voilà, quel est le dépôt ICT? " + strings.Repeat("Parfait, il y a un peu plus de temps. ", 8),
+			"Voilà, quel est le dépôt ICT? Parfait, il y a un peu plus de temps.", 7},
+		{"Et puis, on voit un compteur. Et puis on voit un compteur ! Et puis, on voit un compteur. Fin.",
+			"Et puis, on voit un compteur. Fin.", 2},
+		{"Je veux un chat. Le chat est pourri. Je veux un chat. Le chat est pourri.",
+			"Je veux un chat. Le chat est pourri. Je veux un chat. Le chat est pourri.", 0},
+		{"Delta. Delta.", "Delta. Delta.", 0},
+		{"Oui oui oui", "Oui oui oui", 0},
+	} {
+		if got, removed := collapseRepeats(c.in); got != c.want || removed != c.removed {
+			t.Errorf("%q: %q, %d removed", c.in, got, removed)
+		}
+	}
+}
