@@ -94,6 +94,17 @@ func (e *endpoint) reset() {
 	e.talking = false
 }
 
+// voiced counts the 20 ms frames of samples loud enough to be speech in a quiet room, as the endpoint hears it.
+func voiced(samples []float32) int {
+	n := 0
+	for at := 0; at+frameSamples <= len(samples); at += frameSamples {
+		if rms(samples[at:at+frameSamples]) > 0.01 {
+			n++
+		}
+	}
+	return n
+}
+
 func rms(frame []float32) float64 {
 	if len(frame) == 0 {
 		return 0

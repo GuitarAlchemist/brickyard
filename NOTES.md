@@ -648,6 +648,10 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
 
 ## Known problems
 
+- (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
+  sentence over the silence (utterances 66 and 69, live), which Claude answered. `/hear` now hears as nothing a
+  recording with fewer than 12 frames of 20 ms loud enough for speech, the endpoint's own bar, without asking
+  Whisper; brickyard-remote-b2's page no longer sends one.
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
   writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
   one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two

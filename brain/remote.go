@@ -131,10 +131,12 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	start := time.Now()
-	text, lang, err := transcribe(sound.samples)
-	if err != nil {
-		http.Error(w, "transcription: "+err.Error(), http.StatusBadGateway)
-		return
+	text, lang := "", ""
+	if voiced(sound.samples) >= minVoiced { // Whisper invents words over silence, such as a page whose sound was off sends
+		if text, lang, err = transcribe(sound.samples); err != nil {
+			http.Error(w, "transcription: "+err.Error(), http.StatusBadGateway)
+			return
+		}
 	}
 	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote", lang: lang}
 	id, where := 0, "nothing"

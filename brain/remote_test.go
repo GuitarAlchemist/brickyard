@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,7 +65,11 @@ func remoteServer(t *testing.T, r *remote) *httptest.Server {
 func wavBytes(t *testing.T, rate int, seconds float64) []byte {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "a.wav")
-	if err := writeWav(path, rate, make([]float32, int(seconds*float64(rate)))); err != nil {
+	tone := make([]float32, int(seconds*float64(rate))) // loud enough for speech
+	for i := range tone {
+		tone[i] = float32(0.1 * math.Sin(2*math.Pi*220*float64(i)/float64(rate)))
+	}
+	if err := writeWav(path, rate, tone); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -382,5 +387,40 @@ func TestAnAnswerToAnotherDevicePlaysThereOnly(t *testing.T) {
 	subscribeSaid(t, r, "own")
 	if r.aloud(20) || !r.aloud(21) || !r.aloud(22) || !r.aloud(99) {
 		t.Fatalf("aloud: %v %v %v %v", r.aloud(20), r.aloud(21), r.aloud(22), r.aloud(99))
+	}
+}
+
+// A recording with no sound in it, such as a page whose sound was off sent (44 bytes, 0.00 s), never reaches Whisper,
+// which would invent a sentence over the silence, as « Söyut, Elda. » was, live: it is heard as nothing.
+func TestASilentRecordingIsHeardAsNothing(t *testing.T) {
+	asked := 0
+	r := &remote{secret: "s3cret", route: func(u utterance) (int, string) { t.Errorf("routed %q", u.text); return 1, "channel" }}
+	r.hearWith(func([]float32) (string, string, error) { asked++; return "Söyut, Elda.", "fr", nil })
+	srv := remoteServer(t, r)
+	silent := func(seconds float64) []byte {
+		path := filepath.Join(t.TempDir(), "silent.wav")
+		if err := writeWav(path, earsRate, make([]float32, int(seconds*earsRate))); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := os.ReadFile(path)
+		return data
+	}
+	for _, wav := range [][]byte{silent(0), silent(2)} {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/hear", bytes.NewReader(wav))
+		req.Header.Set(hookHeader, "1")
+		req.Header.Set(remoteHeader, "s3cret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var answer map[string]any
+		json.NewDecoder(resp.Body).Decode(&answer)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted || answer["route"] != "nothing" || answer["text"] != "" {
+			t.Errorf("%d bytes: %d %v", len(wav), resp.StatusCode, answer)
+		}
+	}
+	if asked != 0 {
+		t.Errorf("Whisper was asked %d times", asked)
 	}
 }
