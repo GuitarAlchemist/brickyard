@@ -23,6 +23,9 @@ folder:
 
 The splash draws BRUTAL's copyright notice at start-up with Windows' Segoe UI. No font and no image of text ships.
 
+The brain draws the phone's pairing QR code with its own encoder (`brain/qr.go`). QR Code is a registered trademark of
+DENSO WAVE INCORPORATED.
+
 ## Not in the release
 
 You install these yourself, or `/delta:setup` downloads them for you, from where their authors publish them, at pinned

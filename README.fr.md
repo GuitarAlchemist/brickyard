@@ -46,11 +46,14 @@ choisissez **delta**, puis **Reconnect**, ou redémarrez Claude Code.
 
 Ce que Delta transmet par le canal :
 - les phrases qui commencent par l'appeler, « Delta, … », ou par appeler son cerveau, « Claude, … » ;
-- les phrases suivantes, pendant 15 secondes ;
-- votre réponse, dans les 20 secondes après ses dernières paroles.
+- la suite, tant que la conversation continue : chaque phrase pour Delta et chacune de ses réponses la prolongent de
+  30 secondes, qu'un anneau en bas à gauche de sa fenêtre décompte.
 
 Une phrase qu'il laisse passer faute de « Delta » s'affiche cinq secondes sous le robot, avec la façon de l'appeler :
 vous savez ainsi qu'il l'a entendue.
+
+Un clic sur l'icône de téléphone, en haut à droite de la fenêtre, ou la touche P, montre le code QR qui jumelle un
+téléphone, quand une passerelle comme celle d'IX vient d'en créer un : il vit deux minutes.
 
 Il ignore une phrase qui dit « je ne te parle pas », ou qui appelle d'abord une autre session de l'auteur : Brutal,
 Gaïa, Indigo, Amber, Codex ou IX. La conversation s'arrête alors.

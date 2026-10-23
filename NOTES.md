@@ -394,7 +394,8 @@ over WebRTC. The brain's side, as agreed with IX's session (`brain/remote.go`):
   `utterance_id` is the sentence it answers, as `/hear` returned it, or "" when it answers none; `by` says who wrote
   it, `claude`, `local` or `ack`. Both are the journal's `say` line for that `say_id`. A device too slow to take an
   event misses it rather than holding the voice back. A comment line every 15 s keeps the stream open. It carries what
-  Delta says even when the brain is muted.
+  Delta says even when the brain is muted. A device that plays the answers to its own sentences says so with
+  `X-Delta-Plays: own`.
 - **Security**, from IX's review.
   - The whole hooks address now refuses a request with an `Origin` header, which browsers add, and any Host other than
     127.0.0.1, localhost or ::1, against DNS rebinding.
@@ -536,6 +537,67 @@ hears the sentence with the next. Two more cases from the same review: a sentenc
 was bringing the next server now waits for it and is heard, rather than lost; and the `ears` note names each server
 with its own failure, where a chain of servers that could not start gave the first the last one's error.
 
+## The phone's pairing QR (2026-10-23)
+
+The user asked for the phone's pairing link in Delta's window, behind an icon: « une icône et hop ça apparaît ». IX's
+gateway posts the link it makes at each start, `{"url":"https://<lan-ip>:8810/#code=XXXX-XXXX"}`, to the brain's new
+`POST /link`, with `/hear`'s header and secret. An https link of at most 106 bytes gets 204; anything else gets 400,
+without the link repeated. The brain draws its QR code with its own encoder (`brain/qr.go`: byte mode, level M,
+versions 1 to 6, the standard library only) and sends the window `{"pairing":{"rows":[…],"seconds":120}}`. The window
+shows a phone icon in its top right corner, lit green while the code lives. A click on it, or P, opens a card with the
+code black on white, in whole pixels per module within its quiet zone, and how long the code still lives; once it has
+expired, the card says so. The code is a credential for those two minutes: the card shows only when asked, since the
+window may be shared, and the link reaches no log, nor the journal, whose `pairing` line holds only the seconds.
+OpenCV's QR detector read back every mask of versions 3, 4 and 6, a symbol of each version, and the scene's own
+`pairing` shot, which `--shots` now saves.
+
+## One room, two devices (2026-10-23)
+
+The user spoke to Delta from a phone in the same room as the computer, and heard each answer twice, a moment apart:
+from the computer's speakers and from the phone. An answer to a sentence from another device now plays on that device
+alone while a device listening to `/said` sends `X-Delta-Plays: own`, saying that it plays the answers to its own
+sentences. The computer stays silent for as long as the sentence lasts, its microphone deaf, and the journal's
+`speaking` line says `on_device`. Without that header, the computer says every answer, as in 0.5.0: brutal's review
+found that IX's page then in use played only after a tap on its sound button, so a phone with its sound off would have
+heard nothing, and the computer nothing either. IX's next page does the other half: it plays only the answers to its own
+`/hear`, after the touch that sent it, and sends the header.
+
+The same sentence also reached Claude twice (utterances 37 and 38): the computer's microphone heard it, then the phone
+sent it. A sentence whose words, but one in five, match a sentence the other device routed less than 8 s before is
+now dropped, with the route `duplicate`, which `/hear` returns to the gateway, and no chime. A copy the wake gate
+ignored at the computer does not count, so the phone's copy still goes through; nor does a sentence of fewer than three
+words, as two people may each answer « oui ».
+
+Writing the first half showed a bug in `/said` since 0.5.0: only the first sentence of an answer carried its
+`utterance_id` and `by`, and the next ones came as if Delta spoke unprompted. The remote now keeps the attribution for
+the whole say call.
+
+## Whisper's repetition loop (2026-10-23)
+
+Utterance 24 came from the phone as one question followed by eight copies of « Parfait, il y a un peu plus de
+temps. », and utterance 76 with four copies of a sentence: Whisper's decoder loops, as over a button held on silence,
+and `-nf` (ears.go) turns off whisper.cpp's temperature fallback, its own guard against loops, because it cost 31.6 s
+on a mumble with the CPU build. brutal found it. The router now keeps one copy of a sentence written three times in a
+row or more, the same words whatever the punctuation, and the `heard` line says `repeats_collapsed`. `/hear` answers
+the same text. Two copies stay, since people repeat themselves. Left to measure: the fallback back on with the CUDA
+build only, on a mumble and a long silence.
+
+## A conversation that lasts while it goes on (2026-10-23)
+
+The user forgot « Delta » and could not tell what would happen: from utterance 58 on, a dozen sentences went
+unheard, among them requests, because the conversation had ended without a sign. They asked for a lease: 30 s,
+renewed each time they talk to Delta, and visible. The wake gate's follow-up and answer windows are now 30 s each,
+where they were 15 and 20, and a sentence let through in the conversation renews it too, where before only « Delta »
+or Delta's own words did. The brain sends the window `{"lease": seconds}` at each change, and the window shows a green
+ring in its bottom left corner: « Je t'écoute » beside twelve green dots that go out one by one, clockwise, until
+Delta needs its name again. A first ring, drawn again four times a second with its seconds, stalled the frames: p99
+27 ms and max 55 ms at 60 fps, against 18 and 22 without it, since each upload waits for the GPU. brutal asked for p99
+within 2 ms of the ring-less build and max under 33 ms. The card is now drawn once for the window's size and language,
+and the dots are one small texture drawn twelve times, tinted lit or dim each frame: in alternating 20 s runs, p99
+17.3 to 17.6 ms and max 20.0 to 20.4 with the ring, against 17.3 to 17.9 and 19.9 to 21.9 without. A sentence for
+someone else, Brutal or Gaïa among them, still ends the conversation at once, and the ring with it. The cost is the
+one the old rule avoided: talk that goes on and on goes on to Claude, now in sight.
+
 ## The phone, as a conversation (2026-10-23)
 
 IX's gateway page becomes a conversation with Delta, and Delta's window always holds a QR that pairs.
@@ -574,13 +636,14 @@ test went red first, with 503 for a stopped brain and 502 for one that refuses t
 
 ## Known problems
 
-- The computer's microphone and the phone both feed one conversation. In the author's session of 2026-10-23,
-  14:49–14:58, six sentences reached the brain twice, 0.1–0.5 s apart, transcribed differently by the two
-  microphones, such as « Delta, on fait quoi ensuite ? » and « Aïta, on ne sait quoi ensuite ? »; 0.6.0's duplicate
-  rule, on words in common, caught none. Only the copy routed first got an acknowledgement, which played where that
-  copy came from: « des fois c'est le téléphone qui me répond, des fois c'est le desktop ». A rule on time and source,
-  such as ignoring the other device while one holds the conversation, is delta-live's for 0.6.1.
-
+- With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
+  writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
+  one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two
+  acknowledgements, and at times two answers, one on each device. The user asked that one device be heard at a time.
+- Talk to people in the room without « Delta » keeps a conversation open and goes to Claude, 30 s at a time; the ring
+  shows it, and a sentence for someone else, Brutal or Gaïa among them, ends it.
+- A phone reloaded while one of its answers is on the way has forgotten its question and has no sound yet: it shows
+  that answer as text only, and the computer stays silent too.
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
   the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
 - The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice
@@ -589,6 +652,10 @@ test went red first, with 503 for a stopped brain and 502 for one that refuses t
   for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
 - The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
   streamed, other people's words would show too. There is no switch to turn it off yet.
+- When a phone in the room hears a sentence without « Delta », the computer's copy is ignored and its caption shows,
+  while the phone's copy, which needs no wake word, goes to Claude.
+- A window that starts after the gateway posted its link waits for the next one, up to 100 s: the brain keeps no
+  pairing for a new connection.
 - The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
   second, and there is one per workspace.
 
@@ -610,3 +677,6 @@ test went red first, with 503 for a stopped brain and 502 for one that refuses t
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
 - A call from the phone with brain 0.6.0, live: the phone's answers play on the phone only, and whether the phone's
   echo cancellation removes Delta's voice, before `/hush` is built.
+- The ring, live: whether 30 s suits, and whether talk to people in the room now reaches Claude too often.
+- The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
+- A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.

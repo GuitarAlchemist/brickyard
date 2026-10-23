@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,12 +153,21 @@ type saidEvent struct {
 }
 
 // subscribeSaid opens /said as a device does, and waits until the brain counts it.
-func subscribeSaid(t *testing.T, r *remote) *bufio.Scanner {
+func subscribeSaid(t *testing.T, r *remote, plays string) *bufio.Scanner {
 	t.Helper()
+	listeners := func() int {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.subs)
+	}
+	before := listeners()
 	srv := remoteServer(t, r)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/said", nil)
 	req.Header.Set(hookHeader, "1")
 	req.Header.Set(remoteHeader, r.secret)
+	if plays != "" {
+		req.Header.Set(playsHeader, plays)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +177,7 @@ func subscribeSaid(t *testing.T, r *remote) *bufio.Scanner {
 		t.Fatalf("%d %s", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for !r.listened() {
+	for listeners() == before {
 		if time.Now().After(deadline) {
 			t.Fatal("the device never subscribed")
 		}
@@ -198,7 +209,7 @@ func nextSaid(t *testing.T, lines *bufio.Scanner) saidEvent {
 // them, so that a device matches an answer to its question; "" when it answers none, or when no note came.
 func TestARemoteDeviceHearsEachSentenceAsItStarts(t *testing.T) {
 	r := &remote{secret: "s3cret"}
-	lines := subscribeSaid(t, r)
+	lines := subscribeSaid(t, r, "")
 	path := filepath.Join(t.TempDir(), "s.wav")
 	if err := writeWav(path, 22050, make([]float32, 2205)); err != nil {
 		t.Fatal(err)
@@ -212,6 +223,10 @@ func TestARemoteDeviceHearsEachSentenceAsItStarts(t *testing.T) {
 	if event.SayID != 3 || event.Text != "Il est midi." || event.Seconds != 0.1 || event.TMs == 0 || !bytes.Equal(sound, file) ||
 		event.Utterance == nil || *event.Utterance != "4" || event.By != "claude" {
 		t.Fatalf("%+v", event)
+	}
+	r.publish(3, "Bonne journée.", w, path) // the say call's next sentence answers the same question
+	if event := nextSaid(t, lines); event.SayID != 3 || event.Utterance == nil || *event.Utterance != "4" || event.By != "claude" {
+		t.Fatalf("the second sentence: say %d, by %q, utterance %v", event.SayID, event.By, event.Utterance)
 	}
 	r.attribute(map[string]any{"say_id": 5, "utterance_id": "", "text": "Bonsoir.", "by": "local"})
 	r.publish(5, "Bonsoir.", w, path)
@@ -295,5 +310,77 @@ func TestTheSecretIsWrittenForTheUserAlone(t *testing.T) {
 	again, _, _ := newRemoteSecret()
 	if again == secret {
 		t.Fatal("the same secret twice")
+	}
+}
+
+// A gateway posts the link a phone opens to pair with it, and Delta's window gets the link's QR code; no answer of the
+// brain repeats the link, a credential while its code lives.
+func TestAGatewaysPairingLinkReachesTheWindowAsAQRCode(t *testing.T) {
+	var shown [][]string
+	r := &remote{secret: "s3cret", pair: func(rows []string) { shown = append(shown, rows) }}
+	srv := remoteServer(t, r)
+	post := func(body, secret string) (int, string) {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/link", strings.NewReader(body))
+		req.Header.Set(hookHeader, "1")
+		req.Header.Set(remoteHeader, secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		answer, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(answer)
+	}
+	link := "https://192.168.1.20:8810/#code=ABCD-EFGH"
+	if code, _ := post(`{"url":"`+link+`"}`, "guess"); code != http.StatusForbidden {
+		t.Fatalf("with a wrong secret: %d", code)
+	}
+	for _, bad := range []string{`{"url":"http://192.168.1.20:8810/#code=ABCD-EFGH"}`, `{"url":"https:///#code=ABCD-EFGH"}`,
+		`{"url":"https://192.168.1.20:8810/#code=` + strings.Repeat("A", 80) + `"}`, `{"url":"https://a b/#code=ABCD-EFGH"}`,
+		`code=ABCD-EFGH`} {
+		if code, answer := post(bad, "s3cret"); code != http.StatusBadRequest || strings.Contains(answer, "ABCD") {
+			t.Fatalf("%s: %d %q", bad, code, answer)
+		}
+	}
+	if len(shown) != 0 {
+		t.Fatalf("a bad link reached the window: %q", shown)
+	}
+	if code, answer := post(`{"url":"`+link+`"}`, "s3cret"); code != http.StatusNoContent || answer != "" {
+		t.Fatalf("%d %q", code, answer)
+	}
+	want, _ := qrEncode(link)
+	if len(shown) != 1 || !slices.Equal(shown[0], want) {
+		t.Fatalf("the window got %q", shown)
+	}
+}
+
+// An answer to a sentence from another device plays only there while a device listens that plays the answers to its
+// own sentences, since the computer's speakers would echo it a moment apart; an answer to the computer, or to nothing,
+// plays at the computer, and so does every answer while no device says it plays its own.
+func TestAnAnswerToAnotherDevicePlaysThereOnly(t *testing.T) {
+	r := &remote{secret: "s3cret", route: func(u utterance) (int, string) { return 12, "channel" }}
+	srv := remoteServer(t, r)
+	r.hearWith(func([]float32) (string, error) { return "Delta, quelle heure est-il ?", nil })
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/hear", bytes.NewReader(wavBytes(t, earsRate, 1)))
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, "s3cret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	r.attribute(map[string]any{"say_id": 20, "utterance_id": "12", "by": "claude"})
+	r.attribute(map[string]any{"say_id": 21, "utterance_id": "11", "by": "claude"}) // said at the computer
+	r.attribute(map[string]any{"say_id": 22, "utterance_id": "", "by": "local"})
+	if !r.aloud(20) {
+		t.Fatal("with no device listening, the computer says the answer")
+	}
+	subscribeSaid(t, r, "")
+	if !r.aloud(20) {
+		t.Fatal("a device that does not say it plays its own answers leaves them to the computer")
+	}
+	subscribeSaid(t, r, "own")
+	if r.aloud(20) || !r.aloud(21) || !r.aloud(22) || !r.aloud(99) {
+		t.Fatalf("aloud: %v %v %v %v", r.aloud(20), r.aloud(21), r.aloud(22), r.aloud(99))
 	}
 }

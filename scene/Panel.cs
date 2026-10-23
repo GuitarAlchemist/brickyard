@@ -1,6 +1,8 @@
 // The shelf's picture: one level at a time on a dark translucent card at the window's left edge, its path as the title,
-// a few rows around the selected one, and the keys at the bottom; and the caption under the robot, for a sentence Delta
-// let pass. Drawn with GDI's text into RGBA, then sampled like the splash.
+// a few rows around the selected one, and the keys at the bottom; the caption under the robot, for a sentence Delta
+// let pass; the phone icon in the top right corner, with the card it opens, the QR code that pairs a phone; and the
+// ring in the bottom left corner that empties while Delta listens without its name. Drawn with GDI's text into RGBA,
+// then sampled like the splash.
 internal static class Panel
 {
     private const int Pad = 14;
@@ -93,6 +95,145 @@ internal static class Panel
         Text(rgba, width, height, quote, Px(14), false, Px(Pad), Px(Pad) + Px(26), (150, 160, 170));
         return new Card(rgba, width, height, []);
     }
+
+    // The phone icon's size in pixels, square, for a window of that height.
+    public static int PhoneSize(int windowHeight) => (int)MathF.Round(40 * Math.Clamp(windowHeight / 720f, 0.8f, 2.2f));
+
+    // The phone icon: a phone's outline on a dark square, and a green light while a pairing code lives.
+    public static Card Phone(int windowHeight, bool live)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var size = PhoneSize(windowHeight);
+        var rgba = new byte[size * size * 4];
+        Fill(rgba, size, 0, 0, size, size, (12, 14, 18), 205);
+        var (w, h, line) = (Px(16), Px(26), Math.Max(2, Px(2)));
+        var (x, y) = ((size - w) / 2, (size - h) / 2);
+        (int, int, int) light = (214, 220, 226);
+        Fill(rgba, size, x, y, w, line, light, 255);
+        Fill(rgba, size, x, y + h - line, w, line, light, 255);
+        Fill(rgba, size, x, y, line, h, light, 255);
+        Fill(rgba, size, x + w - line, y, line, h, light, 255);
+        Fill(rgba, size, x + line, y + h - (3 * line), w - (2 * line), line, light, 255); // the screen's bottom edge
+        if (live)
+        {
+            Fill(rgba, size, size - Px(11), Px(4), Px(7), Px(7), (90, 220, 130), 255);
+        }
+
+        return new Card(rgba, size, size, []);
+    }
+
+    // The card the phone icon opens: the QR code of the link a phone opens to pair with Delta's gateway, black on white
+    // in whole pixels per module with its quiet zone of four, and how long its code still lives; or why there is none.
+    // rows is null when no code lives; expired says one did.
+    public static Card Pairing(string[]? rows, int secondsLeft, bool expired, int windowWidth, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var room = Math.Min(Px(520), windowWidth - (2 * Px(12))) - (2 * Px(Pad));
+        var left = $"{secondsLeft / 60}:{secondsLeft % 60:00}";
+        string[] lines = rows is not null
+            ? [Words.Say($"Scan it with the phone's camera. The code lives {left} more.", $"Scanne-le avec l'appareil photo du téléphone. Le code vit encore {left}.")]
+            : expired
+                ? [Words.Say("This code has expired.", "Ce code a expiré."), Words.Say("Restart the phone gateway for a new one.", "Redémarre la passerelle du téléphone pour en avoir un autre.")]
+                : [Words.Say("No pairing code yet.", "Pas encore de code de jumelage."), Words.Say("Start the phone gateway: its code shows here for two minutes.", "Démarre la passerelle du téléphone : son code s'affiche ici deux minutes.")];
+        var title = Fit(Words.Say("Pair a phone", "Jumeler un téléphone"), Px(17), true, room);
+        lines = [.. lines.Select(l => Fit(l, Px(14), false, room))];
+        var closing = Fit(Words.Say("Click the phone or press P to close", "Clique sur le téléphone ou appuie sur P pour fermer"), Px(12), false, room);
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var width = Math.Max(Wide(title, Px(17), true), Math.Max(Wide(closing, Px(12), false), lines.Max(l => Wide(l, Px(14), false))));
+        var modules = rows is null ? 0 : rows.Length + 8;
+        var module = rows is null ? 0 : Math.Max(2, Math.Min(Math.Min(windowHeight * 55 / 100, windowWidth * 80 / 100), Px(420)) / modules);
+        var side = modules * module;
+        width = Math.Max(width, side) + (2 * Px(Pad));
+        var top = Px(Pad) + Px(30);
+        var height = top + (side > 0 ? side + Px(10) : 0) + (lines.Length * Px(22)) + Px(8) + Px(20) + Px(Pad);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 225);
+        Fill(rgba, width, 0, 0, Px(3), height, (90, 220, 130), 255); // green, as the icon's light
+        Text(rgba, width, height, title, Px(17), true, Px(Pad), Px(Pad), (230, 236, 242));
+        if (rows is not null)
+        {
+            var x = (width - side) / 2;
+            Fill(rgba, width, x, top, side, side, (255, 255, 255), 255);
+            for (var j = 0; j < rows.Length; j++)
+            {
+                for (var i = 0; i < rows.Length; i++)
+                {
+                    if (rows[j][i] == '1')
+                    {
+                        Fill(rgba, width, x + ((i + 4) * module), top + ((j + 4) * module), module, module, (0, 0, 0), 255);
+                    }
+                }
+            }
+
+            top += side + Px(10);
+        }
+
+        foreach (var l in lines)
+        {
+            Text(rgba, width, height, l, Px(14), false, Px(Pad), top, (214, 220, 226));
+            top += Px(22);
+        }
+
+        Text(rgba, width, height, closing, Px(12), false, Px(Pad), top + Px(8), (110, 122, 134));
+        return new Card(rgba, width, height, []);
+    }
+
+    // While Delta listens without its name: a card in the bottom left corner, « Je t'écoute » beside a ring of LeaseDots
+    // dots. The card is drawn once for the window's size; the window lays the dots over it (LeaseDot, Dot), lit for the
+    // seconds left, so that the ring empties without a texture drawn again, which would stall a frame.
+    public const int LeaseDots = 12;
+
+    public static Card Lease(int windowHeight)
+    {
+        var scale = LeaseScale(windowHeight);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = Words.Say("Listening", "Je t'écoute");
+        int Wide(string text) => Splash.Text(text, Px(14), out var w, out _, true) is null ? 0 : w;
+        var ring = Px(30);
+        var width = Px(Pad) + ring + Px(10) + Wide(label) + Px(Pad);
+        var height = ring + (2 * Px(10));
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 205);
+        Text(rgba, width, height, label, Px(14), true, Px(Pad) + ring + Px(10), (height - Px(18)) / 2, (230, 236, 242));
+        return new Card(rgba, width, height, []);
+    }
+
+    // The centre of the ring's dot i in the lease card, clockwise from the top.
+    public static (float X, float Y) LeaseDot(int i, int windowHeight)
+    {
+        var scale = LeaseScale(windowHeight);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var ring = Px(30);
+        var (cx, cy) = (Px(Pad) + (ring / 2f), (ring + (2 * Px(10))) / 2f);
+        var radius = (ring - DotSize(windowHeight)) / 2f;
+        var turn = 2f * MathF.PI * i / LeaseDots;
+        return (cx + (radius * MathF.Sin(turn)), cy - (radius * MathF.Cos(turn)));
+    }
+
+    // A white disc the size of the ring's dots, which the window tints lit or dim.
+    public static Card Dot(int windowHeight)
+    {
+        var size = DotSize(windowHeight);
+        var rgba = new byte[size * size * 4];
+        var r = size / 2f;
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var (dx, dy) = (x + 0.5f - r, y + 0.5f - r);
+                var cover = Math.Clamp(r + 0.5f - MathF.Sqrt((dx * dx) + (dy * dy)), 0f, 1f);
+                Over(rgba, size, size, x, y, (255, 255, 255), (int)(cover * 255));
+            }
+        }
+
+        return new Card(rgba, size, size, []);
+    }
+
+    private static float LeaseScale(int windowHeight) => Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+
+    private static int DotSize(int windowHeight) => Math.Max(3, (int)MathF.Round(5f * LeaseScale(windowHeight)));
 
     // Shortens text with an ellipsis until it fits in width pixels.
     private static string Fit(string text, int pixels, bool bold, int width)
