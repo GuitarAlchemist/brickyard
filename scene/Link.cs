@@ -19,7 +19,7 @@ internal sealed class Link(Func<double> clock)
     private const int MaxLine = 256 * 1024;
     private const int MaxEnvelope = 30_000; // ten minutes in 20 ms steps
     private const double Step = 0.02;
-    private const int MaxIgnored = 300; // the brain cuts the sentence to 200 characters
+    private const int MaxIgnored = 400; // the brain cuts the sentence to 200 characters, each at most two UTF-16 units
 
     private readonly Lock gate = new();
     private string state = "idle";
@@ -362,6 +362,7 @@ internal sealed class Link(Func<double> clock)
         Check(Parse("""{"ignored":"Tu peux danser ?"}""", out _) is { State: null, Ignored: "Tu peux danser ?" }, "a sentence Delta let pass");
         Check(Parse("""{"ignored":" "}""", out _) is null && Parse("""{"ignored":3}""", out _) is null &&
             Parse($$"""{"ignored":"{{new string('a', MaxIgnored + 1)}}"}""", out _) is null, "ignored is a short sentence");
+        Check(Parse($$"""{"ignored":"{{string.Concat(Enumerable.Repeat("😀", 200))}}"}""", out _) is { Ignored.Length: 400 }, "200 characters as the brain counts them, emoji included");
         Words.Language = "fr";
         var french = Words.Say("Folder", "Dossier");
         Words.Language = "de";
