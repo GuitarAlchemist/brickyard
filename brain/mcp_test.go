@@ -598,3 +598,32 @@ func TestTheWindowShowsHowLongDeltaListens(t *testing.T) {
 		t.Fatalf("%v", ends)
 	}
 }
+
+// A sentence heard in English goes to Claude with its language, and Claude's answer to it is said in English, whatever
+// Delta's own language; a say call that answers nothing speaks Delta's own, or the language it names.
+func TestAnAnswerIsSaidInTheLanguageOfItsQuestion(t *testing.T) {
+	m, in, out := startServer(t, func(m *mcpServer) {
+		m.lang = languages["fr"]
+		m.speak = func(string, int, string, string) (string, error) { return "4 words, about 2 s", nil }
+	})
+	if where := m.hear(utterance{text: "Delta, what time is it?", lang: "en"}, time.Now()); where != "channel" {
+		t.Fatalf("went to %s", where)
+	}
+	event := next(t, out)
+	meta := event["params"].(map[string]any)["meta"].(map[string]any)
+	if meta["lang"] != "en" {
+		t.Fatalf("%v", meta)
+	}
+	call(in, 7, "say", `{"text":"It is noon.","utterance_id":"`+meta["utterance_id"].(string)+`"}`)
+	next(t, out)
+	call(in, 8, "say", `{"text":"Bonjour."}`)
+	next(t, out)
+	call(in, 9, "say", `{"text":"Hello again.","language":"en"}`)
+	next(t, out)
+	m.mu.Lock()
+	said := m.said
+	m.mu.Unlock()
+	if m.spokenIn(said-2) != "en" || m.spokenIn(said-1) != "fr" || m.spokenIn(said) != "en" {
+		t.Fatalf("%s %s %s", m.spokenIn(said-2), m.spokenIn(said-1), m.spokenIn(said))
+	}
+}

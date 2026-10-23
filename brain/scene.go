@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"net"
 	"os"
@@ -16,11 +17,12 @@ type scene struct {
 	mu       sync.Mutex
 	addr     string
 	conn     net.Conn
-	hello    []byte    // the line each new connection starts with, if any: what a window must know whatever it missed
-	launch   func()    // starts the window, when the brain may (startScene)
-	wanted   bool      // the window should be on screen
-	launched time.Time // its last start, so that a window that cannot start is not started at every line
-	closed   string    // the file the window leaves when the user closes it, if known
+	hello    []byte                     // the line each new connection starts with, if any: what a window must know whatever it missed
+	asked    func(event map[string]any) // what the window asks for, such as {"language":"fr+en"}, or nil
+	launch   func()                     // starts the window, when the brain may (startScene)
+	wanted   bool                       // the window should be on screen
+	launched time.Time                  // its last start, so that a window that cannot start is not started at every line
+	closed   string                     // the file the window leaves when the user closes it, if known
 }
 
 // relaunchEvery is the least time between two starts of the window.
@@ -70,6 +72,17 @@ func (s *scene) greet(event map[string]any) {
 	s.hello = append(line, '\n')
 }
 
+// read hands each JSON line the window writes back on c to asked, until c closes.
+func (s *scene) read(c net.Conn) {
+	lines := bufio.NewScanner(c)
+	for lines.Scan() {
+		var event map[string]any
+		if json.Unmarshal(lines.Bytes(), &event) == nil && s.asked != nil {
+			s.asked(event)
+		}
+	}
+}
+
 func (s *scene) send(event map[string]any) {
 	if s == nil || s.addr == "" {
 		return
@@ -89,6 +102,7 @@ func (s *scene) send(event map[string]any) {
 				return
 			}
 			s.conn = c
+			go s.read(c)
 		}
 		s.conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 		out := append(line, '\n')

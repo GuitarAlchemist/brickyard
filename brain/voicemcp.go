@@ -64,14 +64,15 @@ func runMCP(c mcpConfig) {
 	os.Stdout = os.Stderr // stdout carries JSON-RPC and nothing else
 	logf := func(format string, args ...any) { fmt.Fprintf(os.Stderr, "delta: "+format+"\n", args...) }
 	homePaths(&c)
-	lang, err := languageOf(c.lang)
+	langs, err := languagesOf(c.lang)
 	if err != nil {
 		logf("%v", err)
 	}
+	lang := langs[0]
 
 	var hearing sync.Mutex
 	notHearing := errors.New("Delta is still starting: its ears (whisper.cpp) are loading. Try again in a few seconds.")
-	m := &mcpServer{version: version, lang: lang, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
+	m := &mcpServer{version: version, lang: lang, langs: langs, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
 	m.gate.window = 30 * time.Second // as the user asked: a conversation lives 30 s after its last sentence
 	m.gate.follow = 30 * time.Second
 	m.gate.off = c.wakeOff
@@ -146,8 +147,30 @@ func runMCP(c mcpConfig) {
 	}
 
 	s := startScene(c, logf)
-	s.greet(map[string]any{"language": lang.code}) // the shelf's labels (Words.cs)
-	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code}
+	s.greet(map[string]any{"language": settingOf(langs)}) // the window's words (Words.cs), and its language button
+	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code, langOf: m.spokenIn}
+	mo.voiceIn = otherVoices(c, lang.code, logf, m.note)
+	s.asked = func(event map[string]any) { // the window's language button
+		setting, ok := event["language"].(string)
+		if !ok {
+			return
+		}
+		ls, err := languagesOf(setting)
+		if err != nil {
+			logf("the window asked for %q: %v", setting, err)
+			return
+		}
+		m.speakIn(ls)
+		s.greet(map[string]any{"language": settingOf(ls)})
+		s.send(map[string]any{"language": settingOf(ls)})
+		if err := saveLanguage(c.home, settingOf(ls)); err != nil {
+			logf("delta.json: %v", err)
+		}
+		m.note("language", map[string]any{"language": settingOf(ls), "by": "window"})
+		for _, l := range ls { // loads the other voice now rather than at its first sentence
+			go mo.voiceIn(l.code)
+		}
+	}
 	if fx, err := effect(c.fx); err != nil {
 		logf("%v; Delta speaks without an effect", err)
 	} else {
@@ -259,6 +282,7 @@ func runMCP(c mcpConfig) {
 		e, err := startEars(servers, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
 		if err == nil {
 			m.hearsOn = e.where
+			e.languages = func() []string { return codesOf(m.languages()) }
 		}
 		hearing.Lock()
 		if err != nil {
@@ -279,7 +303,7 @@ func runMCP(c mcpConfig) {
 			logf("ears: %s; %s hears now", why, server)
 			m.note("ears", map[string]any{"server": server, "failed": why})
 		}
-		rm.hearWith(e.hear)
+		rm.hearWith(e.hearIn)
 		heard := make(chan utterance)
 		go listen(e, s, &mo.busy, heard, false)
 		for u := range heard {
@@ -332,7 +356,8 @@ func homePaths(c *mcpConfig) {
 	if c.lang == "" {
 		c.lang = saved.Language
 	}
-	lang, _ := languageOf(c.lang) // runMCP reports an unknown language
+	langs, _ := languagesOf(c.lang) // runMCP reports an unknown language
+	lang := langs[0]
 	pick(&c.piper, saved.Piper, "piper", "piper.exe")
 	pick(&c.voice, saved.Voice, "voices", lang.voice)
 	pick(&c.whisper, saved.Whisper, "whisper", "whisper-server.exe")
@@ -416,16 +441,18 @@ func freePort() int {
 // the one before plays. The microphone is deaf while Delta speaks and for 300 ms after, so that Delta never hears
 // itself.
 type mouth struct {
-	s      *scene
-	gate   *wakeGate
-	mute   bool
-	queue  chan said
-	record func(event string, fields map[string]any)
-	fx     func(rate int) *warm                           // a fresh effect for each say call, or nil for Piper's own voice
-	lang   string                                         // the code of the language Delta speaks, for speakable
-	onClip func(say int, text string, w wav, path string) // each sentence as it starts, for remote.go, or nil
-	aloud  func(say int) bool                             // whether the computer plays a say call (remote.go), or nil
-	busy   atomic.Bool                                    // the microphone's: deaf while Delta speaks or while a transcript is routed
+	s       *scene
+	gate    *wakeGate
+	mute    bool
+	queue   chan said
+	record  func(event string, fields map[string]any)
+	fx      func(rate int) *warm                           // a fresh effect for each say call, or nil for Piper's own voice
+	lang    string                                         // the code of Delta's own language, for speakable
+	langOf  func(say int) string                           // the code of the language a say call speaks, or nil for lang
+	voiceIn func(code string) *voice                       // the voice of another language than the first voice's, or nil
+	onClip  func(say int, text string, w wav, path string) // each sentence as it starts, for remote.go, or nil
+	aloud   func(say int) bool                             // whether the computer plays a say call (remote.go), or nil
+	busy    atomic.Bool                                    // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
 	pending int // say calls not yet spoken to the end
@@ -517,8 +544,17 @@ func (mo *mouth) run(v *voice) {
 			if len(parts) == 0 {
 				clips <- clip{say: s.id, cost: s.cost, mood: s.mood, first: true, last: true}
 			}
+			code, speaker := mo.lang, v
+			if mo.langOf != nil {
+				code = mo.langOf(s.id)
+			}
+			if mo.voiceIn != nil {
+				if other := mo.voiceIn(code); other != nil {
+					speaker = other
+				}
+			}
 			for i, part := range parts {
-				path, err := v.say(speakable(part, mo.lang))
+				path, err := speaker.say(speakable(part, code))
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "delta: voice:", err)
 					path = ""
@@ -637,4 +673,57 @@ func (mo *mouth) spokeSince(t time.Time) bool {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
 	return mo.pending > 0 || mo.spoke.After(t)
+}
+
+// otherVoices returns the voice of a language other than first, the language of the voice Delta starts with, started
+// at its first sentence from the Piper voice setup.ps1 installs for it beside the first. It returns nil for first, and
+// for a language whose voice is missing, which Delta then says with its first voice, as the journal tells once.
+func otherVoices(c mcpConfig, first string, logf func(string, ...any), note func(string, map[string]any)) func(code string) *voice {
+	var mu sync.Mutex
+	voices := map[string]*voice{}
+	return func(code string) *voice {
+		mu.Lock()
+		defer mu.Unlock()
+		if v, tried := voices[code]; tried || code == first {
+			return v
+		}
+		voices[code] = nil
+		l, known := languages[code]
+		if !known {
+			return nil
+		}
+		model := filepath.Join(filepath.Dir(c.voice), l.voice)
+		dir, err := os.MkdirTemp("", "delta-voice-")
+		var v *voice
+		if _, err = os.Stat(model); err == nil {
+			if v, err = startVoice(c.piper, model, dir, "--sentence_silence", "0.1"); err == nil {
+				_, err = v.say(l.hello) // loads the voice model
+			}
+		}
+		if err != nil {
+			logf("voice for %s: %v; Delta says it with its first voice", code, err)
+			note("voice", map[string]any{"lang": code, "missing": filepath.Base(model)})
+			return nil
+		}
+		voices[code] = v
+		return v
+	}
+}
+
+// saveLanguage writes the language setting into home's delta.json, keeping the rest as it is, so that the next brain
+// hears and speaks as the window last asked.
+func saveLanguage(home, setting string) error {
+	path := filepath.Join(home, "delta.json")
+	saved := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &saved); err != nil {
+			return err
+		}
+	}
+	saved["language"] = setting
+	data, err := json.MarshalIndent(saved, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }

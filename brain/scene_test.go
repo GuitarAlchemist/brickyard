@@ -125,3 +125,37 @@ func TestTheWindowLearnsTheLanguageOnEachConnection(t *testing.T) {
 		t.Fatalf("%s then %s", a, b)
 	}
 }
+
+// The window writes back what the user asks of it, such as another language, one JSON line each, on the connection
+// the brain dialled.
+func TestTheBrainHearsWhatTheWindowAsks(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		in := bufio.NewScanner(c)
+		if in.Scan() {
+			c.Write([]byte("{\"language\":\"fr+en\"}\nnot json\n"))
+		}
+		time.Sleep(time.Second)
+	}()
+	asked := make(chan map[string]any, 2)
+	s := dialScene(l.Addr().String())
+	s.asked = func(event map[string]any) { asked <- event }
+	s.send(map[string]any{"state": "idle"})
+	select {
+	case event := <-asked:
+		if event["language"] != "fr+en" {
+			t.Fatalf("%v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the brain never heard the window")
+	}
+}

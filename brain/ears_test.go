@@ -240,3 +240,32 @@ func TestASentenceWhisperRepeatsIsHeardOnce(t *testing.T) {
 		}
 	}
 }
+
+// Bilingual, Whisper detects the language each sentence was spoken in; one it takes for a third language, as it can
+// a short sentence, is heard again in the likelier of Delta's two. With one language, Whisper is told it.
+func TestBilingualEarsTellTheLanguage(t *testing.T) {
+	var mu sync.Mutex
+	var asked []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lang := r.FormValue("language")
+		mu.Lock()
+		asked = append(asked, lang+"/"+r.FormValue("response_format"))
+		mu.Unlock()
+		if lang == "auto" {
+			io.WriteString(w, `{"text":"Hallo Delta","language_probabilities":{"de":0.6,"en":0.3,"fr":0.1}}`)
+			return
+		}
+		io.WriteString(w, `{"text":"Hello Delta"}`)
+	}))
+	defer server.Close()
+	e := &ears{url: server.URL, languages: func() []string { return []string{"fr", "en"} }}
+	text, lang, err := e.hearIn(make([]float32, 1600))
+	if err != nil || text != "Hello Delta" || lang != "en" || strings.Join(asked, " ") != "auto/verbose_json en/json" {
+		t.Fatalf("%q %q %v %v", text, lang, err, asked)
+	}
+	asked = nil
+	e.languages = func() []string { return []string{"fr"} }
+	if _, lang, err := e.hearIn(make([]float32, 1600)); err != nil || lang != "fr" || strings.Join(asked, " ") != "fr/json" {
+		t.Fatalf("%q %v %v", lang, err, asked)
+	}
+}

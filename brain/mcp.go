@@ -18,9 +18,10 @@ import (
 func instructions(l language) string {
 	return `Delta is a small robot in a window on the user's screen: it hears the user's microphone and speaks aloud. ` +
 		`When this session loads Delta as a channel, what the user says to Delta arrives as a <channel> event from delta, with an utterance_id. ` +
-		`It is a Whisper transcript of spoken ` + l.name + `, so expect misheard words ("Cloud Code" is Claude Code). Treat it as the user speaking to you, ` +
-		`and confirm anything destructive or surprising before doing it. ` +
-		`Answer aloud with Delta's say tool, in ` + l.name + `, the only language its voice speaks: one to three short spoken sentences, ` +
+		`It is a Whisper transcript of spoken ` + l.name + ` by default, so expect misheard words ("Cloud Code" is Claude Code); its meta lang ` +
+		`names the language it was heard in, en for English or fr for French, since the user can switch Delta to the other language or to both. ` +
+		`Treat it as the user speaking to you, and confirm anything destructive or surprising before doing it. ` +
+		`Answer aloud with Delta's say tool, in the language the event's lang names: one to three short spoken sentences, ` +
 		`without markdown, lists, code or URLs. ` +
 		mcpGuidance
 }
@@ -43,12 +44,15 @@ func toolsFor(l language) []map[string]any {
 	return []map[string]any{
 		{
 			"name": "say",
-			"description": "Say this aloud in Delta's voice, in " + l.name + ", with Delta speaking on screen. Returns at once: the sentences are " +
-				"spoken in order while you go on. Write it to be heard: short sentences, no markdown, lists, code or URLs.",
+			"description": "Say this aloud in Delta's voice, in the language of the utterance it answers (" + l.name + " by default), with Delta " +
+				"speaking on screen. Returns at once: the sentences are spoken in order while you go on. Write it to be heard: short sentences, " +
+				"no markdown, lists, code or URLs.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"text":         map[string]any{"type": "string", "description": "What Delta says, in " + l.name},
+					"text": map[string]any{"type": "string", "description": "What Delta says, in the language of the utterance it answers"},
+					"language": map[string]any{"type": "string", "enum": []string{"en", "fr"},
+						"description": "The language and voice to say it in, when it answers no utterance; by default the utterance's"},
 					"utterance_id": map[string]any{"type": "string", "description": "The utterance_id this answers, if it answers one"},
 					"mood": map[string]any{"type": "string", "enum": moods,
 						"description": "The expression Delta's face takes as it starts saying it, for a few seconds"},
@@ -58,7 +62,7 @@ func toolsFor(l language) []map[string]any {
 		},
 		{
 			"name": "listen",
-			"description": "Wait until the user says something to Delta, and return what Whisper heard: spoken " + l.name + ", some words " +
+			"description": "Wait until the user says something to Delta, and return what Whisper heard: spoken " + l.name + " by default, some words " +
 				"possibly misheard. For sessions that do not receive Delta's channel events.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -128,12 +132,49 @@ type mcpServer struct {
 	cancels map[string]chan struct{} // by request id
 	heard   int
 	said    int
-	acked   int       // acknowledgements said, which picks the next one
-	recent  []string  // the conversation's last lines, for the triage
-	local   []string  // the lines the triage handled since the last channel event, for Claude to know
-	lately  []routed  // the sentences routed in the last seconds, to know one that two devices heard (twice.go)
-	asked   bool      // Claude's last words asked the user something: the answer goes to Claude untriaged
-	shelfAt time.Time // when the shelf last moved, by voice or by Claude; zero once closed
+	acked   int            // acknowledgements said, which picks the next one
+	recent  []string       // the conversation's last lines, for the triage
+	local   []string       // the lines the triage handled since the last channel event, for Claude to know
+	lately  []routed       // the sentences routed in the last seconds, to know one that two devices heard (twice.go)
+	asked   bool           // Claude's last words asked the user something: the answer goes to Claude untriaged
+	shelfAt time.Time      // when the shelf last moved, by voice or by Claude; zero once closed
+	heardIn map[int]string // the language of each sentence heard, by utterance id, the last 64
+	saidIn  map[int]string // the language of each say call, by say_id, the last 64
+
+	langMu sync.Mutex
+	langs  []language // what Delta hears and speaks, its own language first, once the window changed it (lang.go)
+}
+
+// heardLanguage is the code of the language a heard line's sentence was spoken in, Delta's own when Whisper did not
+// say.
+func (m *mcpServer) heardLanguage(fields map[string]any) string {
+	if code, _ := fields["lang"].(string); code != "" {
+		return code
+	}
+	return m.language().code
+}
+
+// spokenIn is the language a say call speaks, its own language when none was given.
+func (m *mcpServer) spokenIn(sayID int) string {
+	m.mu.Lock()
+	code := m.saidIn[sayID]
+	m.mu.Unlock()
+	if code == "" {
+		return m.language().code
+	}
+	return code
+}
+
+// sayIn records the language of a say call; the caller holds m.mu.
+func (m *mcpServer) sayIn(sayID int, code string) {
+	if code == "" {
+		return
+	}
+	if m.saidIn == nil {
+		m.saidIn = map[int]string{}
+	}
+	m.saidIn[sayID] = code
+	delete(m.saidIn, sayID-64)
 }
 
 // What Delta's words cost, which its window shows: "free" from the model on this computer, "paid" from Claude.
@@ -241,6 +282,7 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 			Text        string          `json:"text"`
 			UtteranceID json.RawMessage `json:"utterance_id"` // a string, as in the channel's meta, or a number
 			Mood        string          `json:"mood"`
+			Language    string          `json:"language"`
 		}
 		json.Unmarshal(p.Arguments, &a)
 		if strings.TrimSpace(a.Text) == "" {
@@ -255,6 +297,11 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 		m.mu.Lock()
 		m.said++
 		sayID := m.said
+		if _, known := languages[a.Language]; known {
+			m.sayIn(sayID, a.Language)
+		} else if n, err := strconv.Atoi(answers); err == nil {
+			m.sayIn(sayID, m.heardIn[n])
+		}
 		m.remember("Delta: " + a.Text)
 		m.asked = strings.HasSuffix(strings.TrimSpace(a.Text), "?")
 		m.mu.Unlock()
@@ -388,6 +435,14 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	id = h.id
 	route = "channel"
 	fields := map[string]any{"utterance_id": strconv.Itoa(h.id), "text": u.text, "asr_ms": u.asr.Milliseconds()}
+	if u.lang != "" {
+		fields["lang"] = u.lang
+		if m.heardIn == nil {
+			m.heardIn = map[int]string{}
+		}
+		m.heardIn[h.id] = u.lang
+		delete(m.heardIn, h.id-64)
+	}
 	if u.source != "" {
 		fields["source"] = u.source
 	}
@@ -451,6 +506,9 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	if u.source != "" {
 		meta["source"] = u.source
 	}
+	if u.lang != "" {
+		meta["lang"] = u.lang
+	}
 	m.mu.Lock()
 	if len(m.local) > 0 {
 		meta["handled_locally"] = strings.Join(m.local, " / ")
@@ -489,13 +547,18 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 // Claude's answer comes first. The heard line's ack is the say_id of its say line, whose speaking line times the
 // first sound.
 func (m *mcpServer) acknowledge(fields map[string]any) {
-	if m.ack == nil || m.quiet == nil || !m.quiet() || len(m.lang.acks) == 0 {
+	l := m.language()
+	if code, _ := fields["lang"].(string); code != "" {
+		l, _ = languageOf(code)
+	}
+	if m.ack == nil || m.quiet == nil || !m.quiet() || len(l.acks) == 0 {
 		return
 	}
 	m.mu.Lock()
 	m.said++
 	sayID := m.said
-	word := m.lang.acks[m.acked%len(m.lang.acks)]
+	m.sayIn(sayID, l.code)
+	word := l.acks[m.acked%len(l.acks)]
 	m.acked++
 	m.mu.Unlock()
 	m.note("say", map[string]any{"say_id": sayID, "utterance_id": fields["utterance_id"], "text": word, "by": "ack"})
@@ -580,7 +643,7 @@ func (m *mcpServer) sort(text string, remote bool, fields map[string]any) string
 			fields["parrot"] = v.Answer
 			v.Answer = ""
 		}
-		m.answerLocally(text, v.Answer, smile(text), fields)
+		m.answerLocally(text, v.Answer, smile(text), "", fields)
 		return "local"
 	}
 	return m.fact(text, fields) // the triage kept it for Claude, unless the sheet answers it
@@ -588,7 +651,7 @@ func (m *mcpServer) sort(text string, remote bool, fields map[string]any) string
 
 // answerLocally is what Delta does without Claude: it keeps the exchange, which Claude reads with the next channel
 // event, and says the answer, if any, at no cost and with the given expression.
-func (m *mcpServer) answerLocally(text, answer, mood string, fields map[string]any) {
+func (m *mcpServer) answerLocally(text, answer, mood, lang string, fields map[string]any) {
 	m.mu.Lock()
 	m.remember("User: " + text)
 	m.local = append(m.local, "User: "+text)
@@ -596,6 +659,7 @@ func (m *mcpServer) answerLocally(text, answer, mood string, fields map[string]a
 	if answer != "" {
 		m.said++
 		sayID = m.said
+		m.sayIn(sayID, lang)
 		m.remember("Delta: " + answer)
 		m.local = append(m.local, "Delta: "+answer)
 	}
@@ -619,13 +683,15 @@ func (m *mcpServer) command(text string, fields map[string]any, now time.Time) s
 		fields["shelf"] = move
 		m.walkShelf(move, now)
 		m.gate.open(now) // the user walks the shelf without saying Delta at each step
-		m.answerLocally(text, inLanguage(shelfAnswers[move], m.language().code), "", fields)
+		code := m.heardLanguage(fields)
+		m.answerLocally(text, inLanguage(shelfAnswers[move], code), "", code, fields)
 		return "shelf"
 	}
 	if action := windowCommand(text); action != "" {
 		fields["window"] = action
 		m.show(map[string]any{"window": action})
-		m.answerLocally(text, inLanguage(windowActions[action], m.language().code), "", fields)
+		code := m.heardLanguage(fields)
+		m.answerLocally(text, inLanguage(windowActions[action], code), "", code, fields)
 		return "window"
 	}
 	return ""

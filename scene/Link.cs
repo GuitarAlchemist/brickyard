@@ -46,6 +46,7 @@ internal sealed class Link(Func<double> clock)
     private double pairingUntil = double.NegativeInfinity;
     private int pairingId; // counts the links, so that the card is drawn again for each
     private int demoPairing = -1; // the demo's last loop that brought a link
+    private NetworkStream? talking; // the brain connected now, which Tell writes back to
     private double leaseUntil = double.NegativeInfinity; // until when Delta listens without its name
     private double leaseLength; // how long that was when it began, for the ring
 
@@ -275,9 +276,9 @@ internal sealed class Link(Func<double> clock)
             if (root.TryGetProperty("language"u8, out var lg))
             {
                 language = lg.ValueKind == JsonValueKind.String ? lg.GetString() : null;
-                if (language is null || !Words.Languages.Contains(language))
+                if (language is null || !Words.Known(language))
                 {
-                    error = $"the shelf speaks en or fr, not {lg}";
+                    error = $"Delta speaks en, fr, or both as fr+en or en+fr, not {lg}";
                     return null;
                 }
             }
@@ -487,6 +488,11 @@ internal sealed class Link(Func<double> clock)
             Parse("""{"heard":{"text":"Tu peux danser ?"}}""", out _) is null &&
             Parse($$$"""{"heard":{"text":"{{{new string('a', MaxHeard + 1)}}}","to":"wake"}}""", out _) is null, "heard is a sentence and for whom");
         Check(Parse($$$"""{"heard":{"text":"{{{string.Concat(Enumerable.Repeat("😀", 400))}}}","to":"claude"}}""", out _) is { Heard.Length: 800 }, "400 characters as the brain counts them, emoji included");
+        Check(Parse("""{"language":"fr+en"}""", out _) is { Language: "fr+en" } && Parse("""{"language":"fr+fr"}""", out _) is null &&
+            Parse("""{"language":"fr+en+de"}""", out _) is null, "Delta speaks one language, or two");
+        Words.Speak("en+fr");
+        Check(Words.Language == "en" && Words.Setting == "en+fr" && Words.Next("en+fr") == "fr" && Words.Next("fr") == "fr+en", "the button goes through the settings in turn");
+        Words.Speak("en");
         Words.Language = "fr";
         var french = Words.Say("Folder", "Dossier");
         Words.Language = "de";
@@ -546,7 +552,7 @@ internal sealed class Link(Func<double> clock)
         return failures == 0 ? 0 : 1;
     }
 
-    private void Apply(Change change, double at)
+    internal void Apply(Change change, double at)
     {
         lock (gate)
         {
@@ -611,7 +617,7 @@ internal sealed class Link(Func<double> clock)
 
         if (change.Language is { } lang)
         {
-            Words.Language = lang;
+            Words.Speak(lang);
         }
 
         if (change.Window is { } action)
@@ -645,11 +651,37 @@ internal sealed class Link(Func<double> clock)
         }
     }
 
+    // Writes a JSON line back to the brain connected now, such as {"language":"fr+en"} when the user picks another
+    // language; false when no brain is connected.
+    public bool Tell(string json)
+    {
+        NetworkStream? stream;
+        lock (gate)
+        {
+            stream = talking;
+        }
+
+        try
+        {
+            stream?.Write(Encoding.UTF8.GetBytes(json + "\n"));
+            return stream is not null;
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
     private void Serve(TcpClient client)
     {
         using (client)
         {
             var stream = client.GetStream();
+            lock (gate)
+            {
+                talking = stream;
+            }
+
             var line = new MemoryStream();
             var buffer = new byte[4096];
             try
@@ -691,6 +723,16 @@ internal sealed class Link(Func<double> clock)
             catch (IOException)
             {
                 // The brain went away; the next one connects again.
+            }
+            finally
+            {
+                lock (gate)
+                {
+                    if (talking == stream)
+                    {
+                        talking = null;
+                    }
+                }
             }
         }
     }

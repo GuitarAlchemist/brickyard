@@ -27,7 +27,11 @@ Il vous faut Windows 10 ou 11 en 64 bits, une carte graphique dont le pilote pre
    - La première fois, cela fait environ 700 Mo : Delta, Piper et une voix française, whisper.cpp et un modèle Whisper.
    - Si vous avez déjà Piper, whisper.cpp ou le modèle, donnez leurs chemins à Claude.
    - Chaque téléchargement est vérifié par son empreinte SHA-256.
-   - Pour changer de langue plus tard, relancez `/delta:setup` et demandez l'autre langue.
+   - Pour changer de langue plus tard, relancez `/delta:setup` et demandez l'autre langue, ou cliquez sur le bouton de
+     langue à gauche de l'icône du téléphone dans la fenêtre de Delta, ou appuyez sur L. Il passe par FR, FR·EN, EN et
+     EN·FR : avec deux langues, Delta entend les deux et répond à chaque phrase dans la langue où elle a été dite, avec
+     la voix Piper de cette langue, qu'il cherche à côté de la première ; sans elle, il le dit avec sa première voix.
+     `delta.json` garde le choix.
 3. Parlez à Delta, de l'une de ces deux façons :
    - **Votre voix arrive toute seule.** Relancez Claude Code avec le
      [canal](https://code.claude.com/docs/fr/channels) de Delta, puis commencez vos phrases par « Delta » :

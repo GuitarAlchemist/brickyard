@@ -53,10 +53,10 @@ type remote struct {
 	pair   func(rows []string)                      // shows a pairing link's QR code, one string of 0 and 1 per row
 
 	mu         sync.Mutex
-	transcribe func(samples []float32) (string, error) // nil until Delta's ears are ready
-	subs       map[chan []byte]bool                    // the devices listening to /said: whether each plays its answers
-	answers    map[int]replyTo                         // whom each sentence about to be said answers, by say_id
-	heard      map[int]bool                            // the utterances that came through /hear, the last 64
+	transcribe func(samples []float32) (text, lang string, err error) // nil until Delta's ears are ready
+	subs       map[chan []byte]bool                                   // the devices listening to /said: whether each plays its answers
+	answers    map[int]replyTo                                        // whom each sentence about to be said answers, by say_id
+	heard      map[int]bool                                           // the utterances that came through /hear, the last 64
 }
 
 // replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, and by, who wrote it
@@ -82,7 +82,7 @@ func (r *remote) attribute(say map[string]any) {
 }
 
 // hearWith gives /hear Delta's ears, once whisper-server is ready.
-func (r *remote) hearWith(transcribe func(samples []float32) (string, error)) {
+func (r *remote) hearWith(transcribe func(samples []float32) (text, lang string, err error)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.transcribe = transcribe
@@ -131,12 +131,12 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	start := time.Now()
-	text, err := transcribe(sound.samples)
+	text, lang, err := transcribe(sound.samples)
 	if err != nil {
 		http.Error(w, "transcription: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote"}
+	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote", lang: lang}
 	id, where := 0, "nothing"
 	if u.text != "" {
 		id, where = r.route(u)

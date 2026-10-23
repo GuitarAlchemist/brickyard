@@ -148,7 +148,7 @@ internal static unsafe class Stage
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
         var shotsDir = Option(args, "--shots");
         var shelfAtStart = Option(args, "--shelf");
-        Words.Language = Option(args, "--lang") ?? "en";
+        Words.Speak(Option(args, "--lang") ?? "en");
         const double S = Splash.Seconds;
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
         if (shots.Length > 0 && !demo)
@@ -522,8 +522,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 8, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 8 }], // one image each
+            MaxSets = 9, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language button
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 9 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -607,6 +607,21 @@ internal static unsafe class Stage
         var pairingDrawn = (Id: -1, Left: -1, Width: 0, Height: 0, Language: "");
         var pairingShown = false;
         (int X, int Y) PhoneAt() => (extent.Width - Panel.PhoneSize(extent.Height) - CardMargin(), CardMargin());
+        // The language button left of the phone icon (Panel.LanguageButton): a click, or L, picks the next setting, which
+        // the brain applies and echoes back; with no brain, the window takes it at once.
+        var languageSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? languageTexture = null;
+        Panel.Card? languageButton = null;
+        var languageDrawn = (Setting: "", Height: 0);
+        (int X, int Y) LanguageAt() => (PhoneAt().X - (languageButton?.Width ?? 0) - Math.Max(6, extent.Height / 96), CardMargin());
+        void NextLanguage()
+        {
+            var next = Words.Next(Words.Setting);
+            if (!link.Tell($$"""{"language":"{{next}}"}"""))
+            {
+                link.Apply(new Link.Change(null, [], "", null, null, Language: next), clock.Elapsed.TotalSeconds);
+            }
+        }
         // The ring in the bottom left corner while Delta listens without its name: its card (Panel.Lease), drawn once for
         // the window's size, and one dot (Panel.Dot) drawn LeaseDots times over it, tinted lit or dim as it empties.
         var leaseSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
@@ -706,6 +721,10 @@ internal static unsafe class Stage
             {
                 pairingShown = !pairingShown;
             }
+            else if (key == GlfwKey.L)
+            {
+                NextLanguage();
+            }
             else if (key is GlfwKey.Tab or GlfwKey.M)
             {
                 shelf.Show(at);
@@ -761,6 +780,10 @@ internal static unsafe class Stage
             if (action == GlfwButtonAction.Press && (Over(w, PhoneAt(), icon, icon) || (pairingShown && pairingCard is not null && Over(w, PairingAt(), pairingCard.Width, pairingCard.Height))))
             {
                 pairingShown = !pairingShown;
+            }
+            else if (action == GlfwButtonAction.Press && languageButton is not null && Over(w, LanguageAt(), languageButton.Width, languageButton.Height))
+            {
+                NextLanguage();
             }
             else if (action == GlfwButtonAction.Press && RowAt(w) is var row and >= 0)
             {
@@ -881,6 +904,13 @@ internal static unsafe class Stage
                 phoneTexture = Upload(phone, phoneSet, phoneTexture);
             }
 
+            if (!splashing && languageDrawn != (Words.Setting, extent.Height))
+            {
+                languageDrawn = (Words.Setting, extent.Height);
+                languageButton = Panel.LanguageButton(Words.Setting, extent.Height);
+                languageTexture = Upload(languageButton, languageSet, languageTexture);
+            }
+
             if (moment.Lease > 0f && !splashing && leaseDrawn != (extent.Height, Words.Language))
             {
                 leaseDrawn = (extent.Height, Words.Language);
@@ -995,6 +1025,16 @@ internal static unsafe class Stage
                         cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&dot, sizeof(SplashPush)));
                         cb.Draw(6, 1, 0, 0);
                     }
+                }
+
+                if (languageButton is not null && languageTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (languageX, languageY) = LanguageAt();
+                    var push = new SplashPush(Rect(languageX, languageY, languageButton.Width, languageButton.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [languageSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
                 }
 
                 if (phone is not null && phoneTexture is not null)
@@ -1162,6 +1202,7 @@ internal static unsafe class Stage
         cardTexture?.Dispose();
         captionTexture?.Dispose();
         phoneTexture?.Dispose();
+        languageTexture?.Dispose();
         pairingTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();

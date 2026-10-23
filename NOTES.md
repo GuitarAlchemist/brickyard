@@ -602,6 +602,29 @@ row or more, the same words whatever the punctuation, and the `heard` line says 
 the same text. Two copies stay, since people repeat themselves. Left to measure: the fallback back on with the CUDA
 build only, on a mumble and a long silence.
 
+## Two languages, and a button to pick them (2026-10-23)
+
+Looking at the pairing card, the user missed a way to change the language from the window, then asked for the whole
+language, voice and hearing included, and for a bilingual mode, French with English for one: Delta answers in the
+language it heard, they chose, with both voices, and they agreed to download ljspeech's English voice, whose SHA-256
+matched Hugging Face's.
+
+- **The setting.** `"language"` in `delta.json` takes `fr`, `en`, `fr+en` or `en+fr`, Delta's own language first: the
+  window's words, and what it says unprompted. The window's button, left of the phone icon, or L, goes through them in
+  turn. The window writes `{"language":"fr+en"}` back on the brain's connection, the first line the window ever sends;
+  the brain applies it at once, echoes it, and writes it into `delta.json`, keeping the other keys.
+- **Hearing.** Measured on the live whisper-server: a request's `language` field overrides `-l`, so a switch needs no
+  restart, and `verbose_json` gives `language_probabilities` even when the language is forced. Bilingual, the brain
+  asks with `auto` and keeps the likelier of its two; a third language, as Whisper may take a short sentence for, is
+  heard again in the likelier of the two. Each heard line and channel event carries `lang`.
+- **Speaking.** A say call speaks the language of the utterance it answers, or its new `language` argument; an
+  acknowledgement and the window's and shelf's answers speak the sentence's. The other language's Piper voice starts
+  at the switch, or at its first sentence after a start, from beside the first voice; a missing one is journaled once, and Delta says it in its first voice.
+- **Claude's instructions** now say that each event's `lang` names its language and to answer in it, since the
+  instructions reach Claude once, at the start, and the language can change after.
+
+Not done: the triage's small talk and the persona still answer in Delta's own language, and the compaction notice too.
+
 ## A conversation that lasts while it goes on (2026-10-23)
 
 The user forgot « Delta » and could not tell what would happen: from utterance 58 on, a dozen sentences went

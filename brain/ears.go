@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,16 +32,17 @@ const earsPatience = 30 * time.Second
 // ggml-large-v3-turbo-q5_0), used as they are. Given several servers, such as a GPU build and then the CPU build, the
 // ears run the first that starts and hears, and the next when the one running dies.
 type ears struct {
-	url      string
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	dead     chan struct{} // closed once cmd has exited
-	server   string        // the server running now
-	rest     []string      // the servers to fall back on, in order
-	failed   []string      // why the servers before this one did not start
-	run      func(server string) error
-	fell     func(server, why string) // told when another server takes over, if set
-	patience time.Duration            // how long a transcription may take before the server is taken for hung
+	url       string
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	dead      chan struct{} // closed once cmd has exited
+	server    string        // the server running now
+	rest      []string      // the servers to fall back on, in order
+	failed    []string      // why the servers before this one did not start
+	run       func(server string) error
+	fell      func(server, why string) // told when another server takes over, if set
+	patience  time.Duration            // how long a transcription may take before the server is taken for hung
+	languages func() []string          // the codes Delta hears now, one or two, or nil for the server's own (-l)
 }
 
 // utterance is something heard: its text, when the speaker stopped (or the line was read), and how long the
@@ -49,6 +52,7 @@ type utterance struct {
 	ended  time.Time
 	asr    time.Duration
 	source string // "" for this computer's microphone, "remote" for another device (remote.go)
+	lang   string // the language it was spoken in, as Whisper heard it, or "" when nobody asked
 }
 
 // startEars runs whisper-server on the loopback port, transcribing lang ("en" or "fr"): the first of servers that
@@ -100,7 +104,7 @@ func (e *ears) start(server string, args []string, addr string) error {
 		}
 		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
 			c.Close()
-			if _, err := e.ask(make([]float32, earsRate)); err != nil {
+			if _, _, err := e.ask(make([]float32, earsRate)); err != nil {
 				e.stop()
 				return fmt.Errorf("ears: %s: %w", server, err)
 			}
@@ -126,14 +130,20 @@ func (e *ears) where() string {
 // hear transcribes 16 kHz mono samples. When the server died or hung, the next one takes over and hears them, as it
 // does a sentence that failed while another sentence's failure brought the next one.
 func (e *ears) hear(samples []float32) (string, error) {
+	text, _, err := e.hearIn(samples)
+	return text, err
+}
+
+// hearIn is hear, which also returns the language the samples were spoken in, among those e.languages gives.
+func (e *ears) hearIn(samples []float32) (text, lang string, err error) {
 	e.mu.Lock()
 	asked := e.server
 	e.mu.Unlock()
-	text, err := e.ask(samples)
+	text, lang, err = e.ask(samples)
 	if err != nil && e.fallBack(asked, err) {
 		return e.ask(samples)
 	}
-	return text, err
+	return text, lang, err
 }
 
 // fallBack runs the next server if the one asked died, or hung while another can take over, and says whether another
@@ -173,32 +183,82 @@ func (e *ears) fallBack(asked string, why error) bool {
 	return false
 }
 
-// ask posts the samples to the server running now.
-func (e *ears) ask(samples []float32) (string, error) {
+// ask posts the samples to the server running now, in the language Delta hears, or in either of its two: then Whisper
+// detects the language, and when it hears a third, which short sentences can fool it into, the samples are heard
+// again in the likelier of the two.
+func (e *ears) ask(samples []float32) (text, lang string, err error) {
+	var codes []string
+	if e.languages != nil {
+		codes = e.languages()
+	}
+	if len(codes) < 2 {
+		if len(codes) == 1 {
+			lang = codes[0]
+		}
+		out, err := e.post(samples, lang)
+		return cleanHeard(out.Text), lang, err
+	}
+	out, err := e.post(samples, "auto")
+	if err != nil {
+		return "", "", err
+	}
+	lang = likeliest(codes, out.Probabilities)
+	if top := likeliest(slices.Collect(maps.Keys(out.Probabilities)), out.Probabilities); top != "" && !slices.Contains(codes, top) {
+		if out, err = e.post(samples, lang); err != nil {
+			return "", "", err
+		}
+	}
+	return cleanHeard(out.Text), lang, nil
+}
+
+// heardOut is what whisper-server answers: the text, and with verbose_json, how likely each language is.
+type heardOut struct {
+	Text          string             `json:"text"`
+	Error         string             `json:"error"`
+	Probabilities map[string]float64 `json:"language_probabilities"`
+}
+
+// post asks the server to transcribe the samples in a language, "auto" to detect it, or "" for the server's own.
+func (e *ears) post(samples []float32, lang string) (heardOut, error) {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	file, _ := form.CreateFormFile("file", "heard.wav")
 	file.Write(encodeWav(samples, earsRate))
-	form.WriteField("response_format", "json")
+	format := "json"
+	if lang == "auto" {
+		format = "verbose_json"
+	}
+	form.WriteField("response_format", format)
 	form.WriteField("temperature", "0.0")
+	if lang != "" {
+		form.WriteField("language", lang)
+	}
 	form.Close()
+	var out heardOut
 	client := http.Client{Timeout: e.patience}
 	resp, err := client.Post(e.url+"/inference", form.FormDataContentType(), &body)
 	if err != nil {
-		return "", err
+		return out, err
 	}
 	defer resp.Body.Close()
-	var out struct {
-		Text  string `json:"text"`
-		Error string `json:"error"`
-	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("ears: %s: %w", resp.Status, err)
+		return out, fmt.Errorf("ears: %s: %w", resp.Status, err)
 	}
 	if out.Error != "" {
-		return "", fmt.Errorf("ears: %s", out.Error)
+		return out, fmt.Errorf("ears: %s", out.Error)
 	}
-	return cleanHeard(out.Text), nil
+	return out, nil
+}
+
+// likeliest is the code among codes that Whisper found likeliest, the first when it gave no probabilities.
+func likeliest(codes []string, probabilities map[string]float64) string {
+	best := ""
+	for _, code := range codes {
+		if best == "" || probabilities[code] > probabilities[best] {
+			best = code
+		}
+	}
+	return best
 }
 
 func (e *ears) close() {
@@ -317,11 +377,11 @@ func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels b
 			ended := time.Now().Add(-endFrames * 20 * time.Millisecond) // the speaker stopped when the quiet began
 			s.send(map[string]any{"state": "thinking"})
 			t0 := time.Now()
-			text, err := e.hear(speech)
+			text, lang, err := e.hearIn(speech)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "brain:", err)
 			}
-			out <- utterance{text: text, ended: ended, asr: time.Since(t0)}
+			out <- utterance{text: text, ended: ended, asr: time.Since(t0), lang: lang}
 		}
 	}
 }

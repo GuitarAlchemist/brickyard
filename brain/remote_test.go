@@ -107,7 +107,7 @@ func TestARemoteDeviceSpeaksToDeltaWithTheSecret(t *testing.T) {
 	if code, _ := post(speech, "s3cret"); code != http.StatusServiceUnavailable {
 		t.Fatalf("before Delta hears: %d", code)
 	}
-	r.hearWith(func([]float32) (string, error) { return " Delta, quelle heure est-il ? ", nil })
+	r.hearWith(func([]float32) (string, string, error) { return " Delta, quelle heure est-il ? ", "fr", nil })
 	if code, _ := post(wavBytes(t, 22050, 1), "s3cret"); code != http.StatusBadRequest {
 		t.Fatalf("a WAV at 22 kHz: %d", code)
 	}
@@ -360,7 +360,7 @@ func TestAGatewaysPairingLinkReachesTheWindowAsAQRCode(t *testing.T) {
 func TestAnAnswerToAnotherDevicePlaysThereOnly(t *testing.T) {
 	r := &remote{secret: "s3cret", route: func(u utterance) (int, string) { return 12, "channel" }}
 	srv := remoteServer(t, r)
-	r.hearWith(func([]float32) (string, error) { return "Delta, quelle heure est-il ?", nil })
+	r.hearWith(func([]float32) (string, string, error) { return "Delta, quelle heure est-il ?", "fr", nil })
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/hear", bytes.NewReader(wavBytes(t, earsRate, 1)))
 	req.Header.Set(hookHeader, "1")
 	req.Header.Set(remoteHeader, "s3cret")

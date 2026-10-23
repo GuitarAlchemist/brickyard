@@ -16,6 +16,32 @@ internal static class Words
         set => language = Languages.Contains(value) ? value : "en";
     }
 
+    // What Delta hears and speaks: a language, or two joined by "+" in a bilingual mode, Language first.
+    public static string Setting { get; private set; } = "en";
+
+    // The settings the language button goes through, in turn.
+    public static readonly string[] Settings = ["fr", "fr+en", "en", "en+fr"];
+
+    // Whether a setting names one language Delta knows, or two different ones.
+    public static bool Known(string setting)
+    {
+        var codes = setting.Split('+');
+        return codes.Length is 1 or 2 && codes.All(Languages.Contains) && codes.Distinct().Count() == codes.Length;
+    }
+
+    // Sets what Delta hears and speaks; the labels take its first language.
+    public static void Speak(string setting)
+    {
+        if (Known(setting))
+        {
+            Setting = setting;
+            Language = setting.Split('+')[0];
+        }
+    }
+
+    // The setting after this one on the language button.
+    public static string Next(string setting) => Settings[(Array.IndexOf(Settings, setting) + 1) % Settings.Length];
+
     public static string Say(string en, string fr) => language == "fr" ? fr : en;
 
     private static readonly string[] MonthsEn = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];

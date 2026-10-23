@@ -156,7 +156,7 @@ func (m *mcpServer) fact(text string, fields map[string]any) string {
 		return ""
 	}
 	fields["fact"] = "answered"
-	m.answerLocally(text, f.Answer, "", fields)
+	m.answerLocally(text, f.Answer, "", "", fields)
 	return "local"
 }
 

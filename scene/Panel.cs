@@ -164,6 +164,21 @@ internal static class Panel
         return new Card(rgba, size, size, []);
     }
 
+    // The language button, left of the phone icon: what Delta hears and speaks, such as FR, or FR·EN when bilingual.
+    public static Card LanguageButton(string setting, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = setting.ToUpperInvariant().Replace("+", "·");
+        var size = PhoneSize(windowHeight);
+        var wide = Splash.Text(label, Px(14), out var w, out _, true) is null ? 0 : w;
+        var width = Math.Max(size, wide + (2 * Px(10)));
+        var rgba = new byte[width * size * 4];
+        Fill(rgba, width, 0, 0, width, size, (12, 14, 18), 205);
+        Text(rgba, width, size, label, Px(14), true, (width - wide) / 2, (size - Px(18)) / 2, (214, 220, 226));
+        return new Card(rgba, width, size, []);
+    }
+
     // The card the phone icon opens: the QR code of the link a phone opens to pair with Delta's gateway, black on white
     // in whole pixels per module with its quiet zone of four, and how long its code still lives; or why there is none.
     // rows is null when no code lives; expired says one did.
