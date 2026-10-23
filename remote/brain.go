@@ -58,15 +58,18 @@ func (b *brain) hear(ctx context.Context, wav []byte) (*http.Response, error) {
 	return b.client.Do(req)
 }
 
-func (b *brain) said(ctx context.Context) (*http.Response, error) {
+// said streams what Delta says. plays: the page's sound runs, and it plays the answers to the device's own sentences,
+// so the brain may leave those out at the computer, where they would echo. A page whose sound a touch has not
+// unlocked yet would play none of them, so the computer must.
+func (b *brain) said(ctx context.Context, plays bool) (*http.Response, error) {
 	req, err := b.request(ctx, http.MethodGet, "/said", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	// The page plays the answers to the device's own sentences: a sentence from it follows a touch, which unlocks its
-	// sound. So the brain may leave those answers out at the computer, where they would echo.
-	req.Header.Set("X-Delta-Plays", "own")
+	if plays {
+		req.Header.Set("X-Delta-Plays", "own")
+	}
 	return b.stream.Do(req)
 }
 

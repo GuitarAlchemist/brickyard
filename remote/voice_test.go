@@ -200,11 +200,27 @@ func TestDeltasSentencesReachThePairedDevice(t *testing.T) {
 	if got[0] != b.said[0] || got[1] != b.said[1] {
 		t.Errorf("relayed %q, want the brain's events unchanged", got)
 	}
-	// The page plays the answers to its own sentences, so the brain may leave them out at the computer.
+}
+
+// The brain leaves the device's answers out at the computer while a listener says it plays them, so the gateway says
+// so only for a page whose sound runs: one that a touch has not unlocked yet would leave them unheard everywhere.
+func TestTheBrainHearsThatThePagePlaysOnlyWhenItsSoundRuns(t *testing.T) {
+	b := newFakeBrain(t)
+	g, cookie := voiceGateway(t, b)
+	for _, path := range []string{"/said", "/said?plays=own"} {
+		req, _ := http.NewRequest(http.MethodGet, g.ts.URL+path, nil)
+		req.Header.Set("Cookie", cookie)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.plays) != 1 || b.plays[0] != "own" {
-		t.Errorf("X-Delta-Plays on /said: %q, want [own]", b.plays)
+	if len(b.plays) != 2 || b.plays[0] != "" || b.plays[1] != "own" {
+		t.Errorf("X-Delta-Plays on /said, then on /said?plays=own: %q, want [\"\" own]", b.plays)
 	}
 }
 

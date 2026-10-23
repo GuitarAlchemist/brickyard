@@ -8,6 +8,7 @@ const sound = document.getElementById('sound');
 const log = document.getElementById('log');
 const video = document.getElementById('scene');
 const say = (text) => { state.textContent = text; };
+let online = ''; // what the state line says of the connection, shown again once other news is stale
 
 // The conversation, as bubbles: the user's on the right, Delta's on the left. Text is put as text, never as markup.
 // Each answer goes under the sentence it answers; Delta's « Une seconde » shows small, and goes when the answer comes.
@@ -86,12 +87,13 @@ async function connect() {
     if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(count);
     setInterval(() => {
       if (!frames) return;
-      say('Connecté à Delta · ' + video.videoWidth + '×' + video.videoHeight);
+      const now = 'Connecté à Delta · ' + video.videoWidth + '×' + video.videoHeight;
+      if (now !== online) say(online = now); // only on a change, so that other news stays shown
       console.log('delta-remote frames', frames, video.videoWidth + 'x' + video.videoHeight);
     }, 1000);
   };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') say('Connecté à Delta');
+    if (pc.connectionState === 'connected') say(online = 'Connecté à Delta');
     if (pc.connectionState === 'failed') { say('Connexion perdue'); pc.close(); go.hidden = false; }
   };
   await pc.setLocalDescription(await pc.createOffer());
@@ -110,21 +112,30 @@ async function connect() {
   await pc.setRemoteDescription(await r.json());
   listen();
   controls.hidden = false;
+  if (!ctx || ctx.state !== 'running') sound.hidden = false; // a first touch, before talking, unlocks sound and microphone
 }
 
 // A touch on the scene makes it big, another makes it small again, so the conversation keeps the screen.
 video.onclick = () => video.classList.toggle('big');
 
-// Sound. Browsers start audio only after a touch, so the context is made on the first one.
+// Sound. Browsers start audio only after a touch, so the context is made on the first one. A finger that touches the
+// screen does not allow it yet, lifting it does (HTML's activation-triggering events): so each lift, or a key, starts
+// the sound if it does not run, and hold-to-talk's press alone never leaves it off.
 let ctx = null;
 let worklet = null;
 function audio() {
-  if (!ctx) ctx = new AudioContext();
+  if (!ctx) {
+    ctx = new AudioContext();
+    ctx.onstatechange = () => { if (events) listen(); };
+  }
   if (ctx.state === 'suspended') ctx.resume();
   sound.hidden = true;
   return ctx;
 }
 sound.onclick = () => audio();
+for (const type of ['pointerup', 'keydown']) {
+  document.addEventListener(type, () => { if (!ctx || ctx.state !== 'running') audio(); }, true);
+}
 
 // Delta's sentences play one after another. While one plays, a call does not listen, so it never hears Delta.
 let playAt = 0;
@@ -158,8 +169,16 @@ function release() {
   waiting.forEach((h) => route(h.s, h.arrivedAt));
 }
 
+// What Delta says, one stream per page. The brain leaves this device's answers out at the computer only while the page
+// says it plays them, which it does only while its sound runs: until a touch unlocks it, the computer says them. So
+// the stream opens again when the sound starts or stops; the moment between the two loses at most an event.
+let events = null;
 function listen() {
-  const events = new EventSource('/said');
+  const plays = !!ctx && ctx.state === 'running';
+  if (events && events.plays === plays) return;
+  if (events) events.close();
+  events = new EventSource(plays ? '/said?plays=own' : '/said');
+  events.plays = plays;
   events.onmessage = (e) => route(router.attribute(JSON.parse(e.data)), performance.now());
 }
 
@@ -220,6 +239,7 @@ async function startTalking() {
   const mic = await microphone((block) => chunks.push(block));
   if (!holding) { mic.close(); return; }
   rec = { mic, chunks, t0: performance.now() };
+  say(online);
   rec.limit = setTimeout(stopTalking, 29000);
   talk.classList.add('on');
   talk.textContent = 'Je t’écoute…';
@@ -235,6 +255,10 @@ async function stopTalking() {
   talk.classList.remove('on');
   talk.textContent = 'Maintenir pour parler';
   if (performance.now() - r.t0 < 400) return;
+  // Until a touch has unlocked the sound, the microphone records nothing: silence would reach Whisper, which then
+  // writes a sentence nobody said, and Claude would answer it.
+  const samples = r.chunks.reduce((n, c) => n + c.length, 0);
+  if (samples < r.mic.rate * 0.3) { say('Le son est activé : maintiens de nouveau pour parler'); return; }
   await send(r.chunks, r.mic.rate);
 }
 

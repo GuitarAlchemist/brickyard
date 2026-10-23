@@ -228,7 +228,7 @@ func (s *server) said(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errNoBrain.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	resp, err := s.brain.said(r.Context())
+	resp, err := s.brain.said(r.Context(), r.URL.Query().Get("plays") == "own")
 	if err != nil {
 		comeBack(w)
 		return

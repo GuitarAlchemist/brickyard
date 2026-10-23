@@ -634,6 +634,30 @@ event stream holding `retry: 300` and then ending, 15 times. The gateway now ans
 `retry: 2000`, while the brain cannot be reached or refuses it, so the page asks again until the brain is back. The
 test went red first, with 503 for a stopped brain and 502 for one that refuses the secret.
 
+## The phone's sound, and its first sentence (2026-10-23)
+
+At 17:57 the user spoke from the phone and heard nothing: « Je ne t'entends pas » (utterance 71). Says 31 to 37 went
+`on_device`, so the computer kept quiet, and the phone played none of them. The page made its sound when a finger
+touched « Maintenir pour parler », but a touch that starts is not one of HTML's activation-triggering events, only a
+touch that ends is: the sound stayed suspended, and so did the microphone's worklet, which records nothing then. The
+gateway still told the brain that the page played its answers. Measured with headless Chrome under the real autoplay
+rule (`--autoplay-policy=document-user-activation-required`), a finger held 2.6 s on the button: the committed page
+stayed suspended during and after the touch, played nothing, and sent `/hear` a WAV of 44 bytes, 0.00 s; Whisper writes
+a sentence for such silence, as « Söyut, Elda. » and « RT, Ximantong. », the utterances 66 and 69 Claude answered.
+Now:
+
+- each touch that ends, or a key, starts the sound if it does not run, and the page asks for that touch, with
+  « Activer le son », as soon as it is connected;
+- a recording under 0.3 s of sound is not sent: the page says the sound is now on, and to hold again;
+- the page says it plays its answers, `/said?plays=own`, only while its sound runs, and the gateway sends the brain
+  `X-Delta-Plays: own` only then, as delta-live asked: until then the computer says them. The page opens its stream
+  again when that changes, one stream per page, where « Se reconnecter » opened a second;
+- the state line keeps its news: the frame counter wrote over it every second.
+
+The same Chrome check, two touches: before any, `/said` without the header; the first touch sends nothing and leaves
+the sound running and the stream at `plays=own`; the second records 2.61 s, and its answer plays. The header's Go test
+went red first. IX's live check (`--autoplay-policy=no-user-gesture-required`) passes its eleven expectations again.
+
 ## Known problems
 
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
