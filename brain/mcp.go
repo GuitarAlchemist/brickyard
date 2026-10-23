@@ -397,7 +397,7 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 		return id, route
 	}
 	if m.triage != nil {
-		if r := m.sort(u.text, fields); r != "" {
+		if r := m.sort(u.text, u.source == "remote", fields); r != "" {
 			route = r
 			return id, route
 		}
@@ -439,7 +439,8 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 // dropped. After the model, a question it kept goes to Claude anyway, and an answer that parrots the user is not said. It returns "dropped" or
 // "local" when Claude need not see it, and "" when Claude must: when Claude's last words asked a question, when the triage fails or
 // is slow, and when the triage says so. A local answer costs nothing, and Claude reads those lines with the next event.
-func (m *mcpServer) sort(text string, fields map[string]any) string {
+// The model cannot drop a sentence from another device (remote): holding the device's button addressed Delta.
+func (m *mcpServer) sort(text string, remote bool, fields map[string]any) string {
 	m.mu.Lock()
 	asked := m.asked
 	recent := append([]string(nil), m.recent...)
@@ -486,6 +487,10 @@ func (m *mcpServer) sort(text string, fields map[string]any) string {
 	}
 	switch v.Route {
 	case "ignore":
+		if remote {
+			fields["triage"] = "ignore overruled: another device's button addressed Delta"
+			return ""
+		}
 		return "dropped"
 	case "local":
 		if strings.Contains(text, "?") {

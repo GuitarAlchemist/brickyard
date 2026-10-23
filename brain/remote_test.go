@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -204,6 +205,38 @@ func TestARemoteSentenceNeedsNoWakeWordAndSaysWhereItCameFrom(t *testing.T) {
 	if where := m.hear(utterance{text: "Quelle heure est-il ?"}, time.Now().Add(3*time.Hour)); where != "ignored" {
 		t.Fatalf("the microphone still needs the wake word: %s", where)
 	}
+}
+
+// Holding the device's button addressed Delta, so the small model cannot drop what it heard; it still answers small
+// talk at no cost. Live, it dropped four of five sentences from the phone.
+func TestTheTriageKeepsWhatAnotherDeviceSays(t *testing.T) {
+	var s spoken
+	var records []map[string]any
+	route := verdict{Route: "ignore"}
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.speak = s.speak
+		m.triage = func(context.Context, []string, string) (verdict, error) { return route, nil }
+		m.record = func(event string, fields map[string]any) { fields["event"] = event; records = append(records, fields) }
+	})
+	now := time.Now().Add(time.Hour)
+	if where := m.hear(utterance{text: "Je ne sais pas, c'est pas, c'est pas.", source: "remote"}, now); where != "channel" {
+		t.Fatalf("went to %s", where)
+	}
+	next(t, out)
+	if heard := records[len(records)-1]; heard["triage"] != "ignore overruled: another device's button addressed Delta" {
+		t.Fatalf("%v", heard)
+	}
+	if where := m.hear(utterance{text: "Delta, je ne sais pas, c'est pas."}, now.Add(time.Hour)); where != "dropped" {
+		t.Fatalf("at the computer, the triage still drops: %s", where)
+	}
+	route = verdict{Route: "local", Answer: "Avec plaisir !"}
+	if where := m.hear(utterance{text: "Merci, c'est cool.", source: "remote"}, now.Add(2*time.Hour)); where != "local" {
+		t.Fatalf("small talk from the device went to %s", where)
+	}
+	if where := m.hear(utterance{text: "Euh...", source: "remote"}, now.Add(3*time.Hour)); where != "dropped" {
+		t.Fatalf("a filler went to %s", where)
+	}
+	silent(t, out)
 }
 
 func TestTheSecretIsWrittenForTheUserAlone(t *testing.T) {

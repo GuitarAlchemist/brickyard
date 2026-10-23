@@ -480,6 +480,15 @@ if Python gets in the way.
   answered 400 to `i_love_you`.
 - Not yet seen with a real hand: I did not turn the camera on.
 
+## The phone's sentences that went nowhere (2026-10-22, night)
+
+The author talked to Delta from the phone through IX's gateway, 20:13 to 20:15, and Delta answered one sentence of
+five. brutal read the journal: the four others had `source` remote and `triage` ignore, so they were dropped, though
+the gate had let them through and two of them had sent hearts. The first, « Au revoir. », reached Claude only because
+the triage missed its 4 s deadline. Holding the phone's button addresses Delta, so the model's ignore is now overruled
+for a sentence from another device, which goes to Claude; the triage still answers its small talk, and fillers and
+sentences that call another assistant are still dropped.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
