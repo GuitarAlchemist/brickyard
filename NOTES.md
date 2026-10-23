@@ -394,7 +394,8 @@ over WebRTC. The brain's side, as agreed with IX's session (`brain/remote.go`):
   `utterance_id` is the sentence it answers, as `/hear` returned it, or "" when it answers none; `by` says who wrote
   it, `claude`, `local` or `ack`. Both are the journal's `say` line for that `say_id`. A device too slow to take an
   event misses it rather than holding the voice back. A comment line every 15 s keeps the stream open. It carries what
-  Delta says even when the brain is muted.
+  Delta says even when the brain is muted. A device that plays the answers to its own sentences says so with
+  `X-Delta-Plays: own`.
 - **Security**, from IX's review.
   - The whole hooks address now refuses a request with an `Origin` header, which browsers add, and any Host other than
     127.0.0.1, localhost or ::1, against DNS rebinding.
@@ -574,9 +575,12 @@ OpenCV's QR detector read back every mask of versions 3, 4 and 6, a symbol of ea
 
 The user spoke to Delta from a phone in the same room as the computer, and heard each answer twice, a moment apart:
 from the computer's speakers and from the phone. An answer to a sentence from another device now plays on that device
-alone while it listens to `/said`. The computer stays silent for as long as the sentence lasts, its microphone deaf,
-and the journal's `speaking` line says `on_device`. With no device listening, the computer says it. IX's page does the
-other half: it plays only the answers to its own `/hear`.
+alone while a device listening to `/said` sends `X-Delta-Plays: own`, saying that it plays the answers to its own
+sentences. The computer stays silent for as long as the sentence lasts, its microphone deaf, and the journal's
+`speaking` line says `on_device`. Without that header, the computer says every answer, as in 0.5.0: brutal's review
+found that IX's page then in use played only after a tap on its sound button, so a phone with its sound off would have
+heard nothing, and the computer nothing either. IX's next page does the other half: it plays only the answers to its own
+`/hear`, after the touch that sent it, and sends the header.
 
 The same sentence also reached Claude twice (utterances 37 and 38): the computer's microphone heard it, then the phone
 sent it. A sentence whose words, but one in five, match a sentence the other device routed less than 8 s before is
@@ -611,6 +615,10 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
 
 ## Known problems
 
+- Talk to people in the room without « Delta » keeps a conversation open and goes to Claude, 30 s at a time; the ring
+  shows it, and a sentence for someone else, Brutal or Gaïa among them, ends it.
+- A phone reloaded while one of its answers is on the way has forgotten its question and has no sound yet: it shows
+  that answer as text only, and the computer stays silent too.
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
   the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
 - The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice

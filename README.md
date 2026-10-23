@@ -200,8 +200,8 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   `POST /link`, where the gateway posts the link a phone opens to pair with it: a click on the phone icon in the top
   right corner of Delta's window, or P, shows its QR code while the code in it lives, two minutes with IX's gateway. A sentence from
   another device needs no « Delta », and the triage may answer it but not drop it; a chime tells the room, and Claude
-  has the user confirm at the computer anything destructive it asks for. Its answer plays on the device alone while the
-  device listens to `/said`, and a copy of a sentence the other device heard a few seconds before is dropped. The whole address refuses a request with an `Origin` header, or for another host than
+  has the user confirm at the computer anything destructive it asks for. Its answer plays on the device alone while a
+  device listening to `/said` sends `X-Delta-Plays: own`, saying that it plays the answers to its own sentences, and a copy of a sentence the other device heard a few seconds before is dropped. The whole address refuses a request with an `Origin` header, or for another host than
   127.0.0.1, localhost or ::1.
 - whisper.cpp's server then runs on a free port. With `"whisper_fallback"` in `delta.json`, such as the CPU build
   behind a GPU build in `"whisper"`, the brain runs the fallback when the first cannot start or hear, or dies. The
