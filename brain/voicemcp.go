@@ -72,8 +72,8 @@ func runMCP(c mcpConfig) {
 	var hearing sync.Mutex
 	notHearing := errors.New("Delta is still starting: its ears (whisper.cpp) are loading. Try again in a few seconds.")
 	m := &mcpServer{version: version, lang: lang, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
-	m.gate.window = 20 * time.Second
-	m.gate.follow = 15 * time.Second
+	m.gate.window = 30 * time.Second // as the user asked: a conversation lives 30 s after its last sentence
+	m.gate.follow = 30 * time.Second
 	m.gate.off = c.wakeOff
 	if c.triage != "" {
 		m.triage = ollamaTriage(c.ollama, c.triage, lang)
@@ -157,6 +157,11 @@ func runMCP(c mcpConfig) {
 	m.ack, m.quiet = mo.ack, mo.quiet
 	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
 		m.tell = s.send
+		if !c.wakeOff { // the ring that empties until the conversation ends, when « Delta » is needed again
+			m.gate.changed = func(until time.Time) {
+				s.send(map[string]any{"lease": max(0, time.Until(until).Seconds())})
+			}
+		}
 		m.show = func(line map[string]any) { // a request for the window or its shelf brings back a window the user closed
 			s.summon()
 			s.send(line)

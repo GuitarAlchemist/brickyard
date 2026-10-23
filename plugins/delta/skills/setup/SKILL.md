@@ -50,7 +50,7 @@ Delta's window opens when the delta MCP server starts. If the server failed befo
 
 Delta only passes on these:
 - what starts by calling it, "Delta, …", or its brain, "Claude, …";
-- what follows within 15 seconds;
-- an answer within 20 seconds of its last words.
+- what follows, while the conversation goes on: each sentence for Delta and each of its answers keep it open 30
+  seconds more, which a ring in its window counts down.
 
 "I'm not talking to you" and « je ne te parle pas » are not passed on.

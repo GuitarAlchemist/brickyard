@@ -673,23 +673,34 @@ func (m *mcpServer) notify(method string, params any) {
 }
 
 // wakeGate lets a transcript reach the session when it calls Delta or Claude, Delta's brain, or when it comes soon
-// after: within follow of such a call, for the rest of what the user says, or within window of Delta's last words, for
-// an answer. A sentence let through without a call extends neither, so that talk that goes on and on does not all go
-// to Claude, and a sentence for someone else ends the conversation: the same microphone hears the author talk to other
-// sessions, Brutal in a terminal and Gaïa among them.
+// after: within follow of such a call or of the last sentence let through, for the rest of what the user says, or
+// within window of Delta's last words, for an answer. Delta's window shows until when (changed), so that the user
+// knows whether to say « Delta »; a sentence for someone else ends the conversation, since the same microphone hears
+// the author talk to other sessions, Brutal in a terminal and Gaïa among them.
 type wakeGate struct {
-	mu     sync.Mutex
-	off    bool          // let everything through but what is said to someone else
-	window time.Duration // after Delta's last words
-	follow time.Duration // after the user called Delta
-	until  time.Time
+	mu      sync.Mutex
+	off     bool                  // let everything through but what is said to someone else
+	window  time.Duration         // after Delta's last words
+	follow  time.Duration         // after the user called Delta, or went on talking to it
+	until   time.Time             // the conversation's end, zero when there is none
+	changed func(until time.Time) // told each new end, outside mu, or nil
 }
 
 // admit says whether a transcript is for Delta, and why.
 func (g *wakeGate) admit(text string, now time.Time) (bool, string) {
 	to := addressee(text)
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	before := g.until
+	ok, why := g.decide(to, now)
+	until := g.until
+	g.mu.Unlock()
+	if !until.Equal(before) && g.changed != nil {
+		g.changed(until)
+	}
+	return ok, why
+}
+
+func (g *wakeGate) decide(to string, now time.Time) (bool, string) {
 	switch {
 	case to == "Delta" || to == "Claude":
 		g.extend(now.Add(g.follow))
@@ -700,6 +711,7 @@ func (g *wakeGate) admit(text string, now time.Time) (bool, string) {
 	case g.off:
 		return true, "wake gate off"
 	case now.Before(g.until):
+		g.extend(now.Add(g.follow))
 		return true, "in the conversation"
 	}
 	return false, "not addressed to Delta"
@@ -708,8 +720,13 @@ func (g *wakeGate) admit(text string, now time.Time) (bool, string) {
 // open keeps the conversation going for a window from now: Delta has just spoken, or Claude has just listened.
 func (g *wakeGate) open(now time.Time) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	before := g.until
 	g.extend(now.Add(g.window))
+	until := g.until
+	g.mu.Unlock()
+	if !until.Equal(before) && g.changed != nil {
+		g.changed(until)
+	}
 }
 
 func (g *wakeGate) extend(to time.Time) {

@@ -598,6 +598,17 @@ row or more, the same words whatever the punctuation, and the `heard` line says 
 the same text. Two copies stay, since people repeat themselves. Left to measure: the fallback back on with the CUDA
 build only, on a mumble and a long silence.
 
+## A conversation that lasts while it goes on (2026-10-23)
+
+The user forgot « Delta » and could not tell what would happen: from utterance 58 on, a dozen sentences went
+unheard, among them requests, because the conversation had ended without a sign. They asked for a lease: 30 s,
+renewed each time they talk to Delta, and visible. The wake gate's follow-up and answer windows are now 30 s each,
+where they were 15 and 20, and a sentence let through in the conversation renews it too, where before only « Delta »
+or Delta's own words did. The brain sends the window `{"lease": seconds}` at each change, and the window shows a green
+ring in its bottom left corner, « Je t'écoute · 24 s », that empties until Delta needs its name again. A sentence for
+someone else, Brutal or Gaïa among them, still ends the conversation at once, and the ring with it. The cost is the
+one the old rule avoided: talk that goes on and on goes on to Claude, now in sight.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -634,5 +645,6 @@ build only, on a mumble and a long silence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
 - The hands with a real camera: each pose, a swipe each way, a wave and pointing down, and the thresholds by hand.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
+- The ring, live: whether 30 s suits, and whether talk to people in the room now reaches Claude too often.
 - The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
 - A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.

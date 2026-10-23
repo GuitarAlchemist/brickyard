@@ -1,7 +1,8 @@
 // The shelf's picture: one level at a time on a dark translucent card at the window's left edge, its path as the title,
 // a few rows around the selected one, and the keys at the bottom; the caption under the robot, for a sentence Delta
-// let pass; and the phone icon in the top right corner, with the card it opens, the QR code that pairs a phone. Drawn
-// with GDI's text into RGBA, then sampled like the splash.
+// let pass; the phone icon in the top right corner, with the card it opens, the QR code that pairs a phone; and the
+// ring in the bottom left corner that empties while Delta listens without its name. Drawn with GDI's text into RGBA,
+// then sampled like the splash.
 internal static class Panel
 {
     private const int Pad = 14;
@@ -176,6 +177,44 @@ internal static class Panel
         }
 
         Text(rgba, width, height, closing, Px(12), false, Px(Pad), top + Px(8), (110, 122, 134));
+        return new Card(rgba, width, height, []);
+    }
+
+    // While Delta listens without its name: a green ring that empties over the conversation's last seconds, and the
+    // seconds left.
+    public static Card Lease(float left, float length, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = Words.Say($"Listening · {MathF.Ceiling(left):0} s", $"Je t'écoute · {MathF.Ceiling(left):0} s");
+        int Wide(string text) => Splash.Text(text, Px(14), out var w, out _, true) is null ? 0 : w;
+        var ring = Px(30);
+        var width = Px(Pad) + ring + Px(10) + Wide(label) + Px(Pad);
+        var height = ring + (2 * Px(10));
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 205);
+        var (cx, cy) = (Px(Pad) + (ring / 2f), height / 2f);
+        var (outer, inner) = (ring / 2f, (ring / 2f) - Px(4));
+        var full = Math.Clamp(length > 0f ? left / length : 0f, 0f, 1f);
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var (dx, dy) = (x + 0.5f - cx, y + 0.5f - cy);
+                var d = MathF.Sqrt((dx * dx) + (dy * dy));
+                var cover = Math.Clamp(outer + 0.5f - d, 0f, 1f) * Math.Clamp(d - inner + 0.5f, 0f, 1f);
+                if (cover <= 0f)
+                {
+                    continue;
+                }
+
+                var turn = (MathF.Atan2(dx, -dy) / (2f * MathF.PI)) + 0.5f; // 0 at the top, clockwise
+                var lit = turn >= 1f - full;
+                Over(rgba, width, height, x, y, lit ? (90, 220, 130) : (60, 66, 72), (int)(cover * 255));
+            }
+        }
+
+        Text(rgba, width, height, label, Px(14), true, Px(Pad) + ring + Px(10), (height - Px(18)) / 2, (230, 236, 242));
         return new Card(rgba, width, height, []);
     }
 
