@@ -57,7 +57,7 @@ type remote struct {
 // (claude, local or ack).
 type replyTo struct{ utterance, by string }
 
-// attribute keeps whom a sentence about to be said answers, from its say note (mcp.go), until publish sends it.
+// attribute keeps whom a say call answers, from its say note (mcp.go), for publish to send with each of its sentences.
 func (r *remote) attribute(say map[string]any) {
 	id, _ := say["say_id"].(int)
 	utterance, _ := say["utterance_id"].(string)
@@ -69,7 +69,7 @@ func (r *remote) attribute(say map[string]any) {
 	}
 	r.answers[id] = replyTo{utterance, by}
 	for old := range r.answers {
-		if old <= id-64 { // a sentence never said, such as an acknowledgement the mouth dropped
+		if old <= id-64 { // said long ago, or never, such as an acknowledgement the mouth dropped
 			delete(r.answers, old)
 		}
 	}
@@ -230,8 +230,7 @@ func (r *remote) listened() bool {
 // device too slow to take it misses it rather than holding Delta's voice back.
 func (r *remote) publish(sayID int, text string, sound wav, path string) {
 	r.mu.Lock()
-	a := r.answers[sayID]
-	delete(r.answers, sayID)
+	a := r.answers[sayID] // kept for the call's next sentences, until attribute forgets it
 	r.mu.Unlock()
 	if !r.listened() {
 		return
