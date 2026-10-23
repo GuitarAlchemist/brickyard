@@ -489,6 +489,20 @@ the triage missed its 4 s deadline. Holding the phone's button addresses Delta, 
 for a sentence from another device, which goes to Claude; the triage still answers its small talk, and fillers and
 sentences that call another assistant are still dropped.
 
+## Ears on the graphics card, with a fallback (2026-10-22, night)
+
+The author found Delta slow from the phone. WMUX measured Whisper at 2 to 4 s a sentence when the machine is quiet and
+11 to 13 s under load: IX's whisper.cpp b5454 runs on the CPU only, with 16 threads. brutal built whisper.cpp v1.9.5 with
+CUDA 13.0 for the RTX 5080 (sm_120) in `C:\tmp\whisper-cuda`, and measured the same 3.5 s clip with Delta's arguments:
+72 to 208 ms on the GPU against 1961 to 2128 ms on the CPU, with the same text. WMUX also found 72 NVIDIA driver
+incidents and 93 PCIe errors in 30 days, so the GPU build should not run without the CPU one behind it.
+
+The ears now take several servers. They run the first that starts and hears a second of silence, and when the one
+running dies, the next takes over and hears the sentence again. `"whisper_fallback"` in `delta.json` names the second.
+The journal gets an `ears` line with the server that hears and, if any, why another did not. A test plays three fake
+servers, from the test binary itself: one that stops at once, as a GPU build without its libraries, one that dies after
+its warm-up, and one that hears. Not switched on yet: that is the author's call.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

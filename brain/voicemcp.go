@@ -18,6 +18,7 @@ import (
 // mcpConfig is what -mcp runs with. -home is where setup.ps1 installed Delta's ears and voice; flags override it.
 type mcpConfig struct {
 	home, piper, voice, whisper, whisperModel string
+	whisperFallback                           string // the whisper-server to run when whisper cannot, if any
 	lang                                      string // what Delta hears and speaks: "en" or "fr" (lang.go)
 	scene                                     string // the scene's address
 	journal                                   string // where to record what Delta heard and said, if anywhere
@@ -236,10 +237,11 @@ func runMCP(c mcpConfig) {
 	}()
 
 	go func() {
-		e, err := startEars(c.whisper, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
-		if err == nil {
-			_, err = e.hear(make([]float32, earsRate)) // loads the model's weights and kernels
+		servers := []string{c.whisper}
+		if c.whisperFallback != "" && c.whisperFallback != c.whisper {
+			servers = append(servers, c.whisperFallback)
 		}
+		e, err := startEars(servers, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
 		hearing.Lock()
 		if err != nil {
 			notHearing = fmt.Errorf("Delta cannot hear: %v. The delta:setup skill installs what is missing.", err)
@@ -249,7 +251,16 @@ func runMCP(c mcpConfig) {
 		}
 		notHearing = nil
 		hearing.Unlock()
-		logf("ears ready on %s", e.url)
+		logf("ears ready on %s with %s", e.url, e.server)
+		ready := map[string]any{"server": e.server}
+		if len(e.failed) > 0 { // the journal tells which server hears, and why the first did not
+			ready["failed"] = strings.Join(e.failed, "; ")
+		}
+		m.note("ears", ready)
+		e.fell = func(server, why string) {
+			logf("ears: %s; %s hears now", why, server)
+			m.note("ears", map[string]any{"server": server, "failed": why})
+		}
 		rm.hearWith(e.hear)
 		heard := make(chan utterance)
 		go listen(e, s, &mo.busy, heard, false)
@@ -282,6 +293,7 @@ func homePaths(c *mcpConfig) {
 		Voice        string `json:"voice"`
 		Whisper      string `json:"whisper"`
 		WhisperModel string `json:"whisper_model"`
+		Fallback     string `json:"whisper_fallback"` // a CPU build, for a GPU build in whisper
 		WakeWord     *bool  `json:"wake_word"`
 		Triage       string `json:"triage"`
 		Language     string `json:"language"`
@@ -307,6 +319,9 @@ func homePaths(c *mcpConfig) {
 	pick(&c.voice, saved.Voice, "voices", lang.voice)
 	pick(&c.whisper, saved.Whisper, "whisper", "whisper-server.exe")
 	pick(&c.whisperModel, saved.WhisperModel, "whisper", "ggml-large-v3-turbo-q5_0.bin")
+	if c.whisperFallback == "" {
+		c.whisperFallback = saved.Fallback
+	}
 	if c.triage == "" {
 		c.triage = saved.Triage
 	}
