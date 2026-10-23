@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeltaSpeaksEnglishUnlessToldOtherwise(t *testing.T) {
@@ -82,5 +83,84 @@ func TestDeltaCanBeBilingual(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if !strings.Contains(string(data), `"language": "en+fr"`) || !strings.Contains(string(data), `"voice": "v.onnx"`) {
 		t.Errorf("%s", data)
+	}
+}
+
+// A phone cannot click the window's language button, so Delta changes its languages when asked aloud, and leaves to
+// Claude a sentence that says no or only speaks about a language.
+func TestDeltaChangesItsLanguageWhenAsked(t *testing.T) {
+	fr, frEn, en, enFr := []language{languages["fr"]}, []language{languages["fr"], languages["en"]}, []language{languages["en"]}, []language{languages["en"], languages["fr"]}
+	for _, c := range []struct {
+		text string
+		now  []language
+		want string
+	}{
+		{"Delta, parle seulement français.", frEn, "fr"},
+		{"En français, s'il te plaît.", frEn, "fr"},
+		{"Ok, continue en français, s'il te plaît.", frEn, "fr"},
+		{"Continue en français.", enFr, "fr+en"},
+		{"Ne parle qu'en français.", enFr, "fr"},
+		{"Parle anglais.", fr, "en+fr"},
+		{"Speak English only.", frEn, "en"},
+		{"Let's continue in English.", fr, "en+fr"},
+		{"In French, please.", en, "fr+en"},
+		{"Passe en mode bilingue.", fr, "fr+en"},
+		{"Be bilingual.", en, "en+fr"},
+		{"Parle français et anglais.", en, "fr+en"},
+		{"Parle français.", fr, "fr"},
+
+		{"Ne parle plus anglais.", frEn, ""},
+		{"Stop speaking English.", enFr, ""},
+		{"Ok, tu es bilingue ?", frEn, ""},
+		{"Comment on dit bonjour en anglais ?", fr, ""},
+		{"Il y a un petit défaut dans l'interface : on ne peut pas cliquer sur le bouton français-anglais.", frEn, ""},
+		{"Delta, mets-toi en haut à gauche.", fr, ""},
+	} {
+		if got := languageCommand(c.text, c.now); got != c.want {
+			t.Errorf("%q in %s: %q, want %q", c.text, settingOf(c.now), got, c.want)
+		}
+	}
+	for _, setting := range languageSettings {
+		if ls, err := languagesOf(setting); err != nil || settingOf(ls) != setting || languageAnswers[setting] == "" {
+			t.Errorf("%s: %v %v %q", setting, ls, err, languageAnswers[setting])
+		}
+	}
+}
+
+func TestDeltaChangesItsLanguageWithoutClaude(t *testing.T) {
+	var s spoken
+	var changed []string
+	var records []map[string]any
+	m, in, out := startServer(t, func(m *mcpServer) {
+		m.lang = languages["fr"]
+		m.langs = []language{languages["fr"], languages["en"]}
+		m.speak = s.speak
+		m.relanguage = func(ls []language, by string) { m.speakIn(ls); changed = append(changed, settingOf(ls)+" by "+by) }
+		m.record = func(event string, fields map[string]any) { fields["event"] = event; records = append(records, fields) }
+	})
+	now := time.Now()
+	if where := m.hear(utterance{text: "Delta, parle seulement français.", lang: "fr"}, now); where != "language" {
+		t.Fatalf("went to %s", where)
+	}
+	silent(t, out)
+	if got := s.all(); got != "free: D'accord, je parle seulement français." {
+		t.Fatalf("said %q", got)
+	}
+	if last := records[len(records)-1]; last["route"] != "language" || last["language"] != "fr" {
+		t.Fatalf("%v", last)
+	}
+	call(in, 1, "language", `{"setting":"en+fr"}`)
+	if r := next(t, out); isError(r) {
+		t.Fatalf("%v", r)
+	}
+	call(in, 2, "language", `{"setting":"de"}`)
+	if r := next(t, out); !isError(r) {
+		t.Fatalf("an unknown language: %v", r)
+	}
+	if got := strings.Join(changed, ", "); got != "fr by voice, en+fr by claude" {
+		t.Fatalf("changed %s", got)
+	}
+	if got := settingOf(m.languages()); got != "en+fr" {
+		t.Fatalf("speaks %s", got)
 	}
 }

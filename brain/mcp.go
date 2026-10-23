@@ -35,6 +35,7 @@ const mcpGuidance = `Pass say the utterance_id you are answering. ` +
 	`Give say a mood when your words carry one, such as joy, proud or sorry: Delta's face shows it as it speaks. ` +
 	`The window tool moves, sizes or hides Delta's window, and the shelf tool opens its menu of Claude Code sessions, plugins and ` +
 	`marketplaces; Delta also does both by itself when the user asks it aloud, and you read those requests as handled_locally. ` +
+	`The language tool changes the languages Delta hears and speaks, as Delta does itself for a plain request. ` +
 	`An event whose meta has source "remote" was spoken on another device through Delta's remote gateway, not at this computer: ` +
 	`before anything destructive or irreversible it asks for, have the user confirm it at the computer. ` +
 	`Delta's code is github.com/GuitarAlchemist/brickyard.`
@@ -94,6 +95,18 @@ func toolsFor(l language) []map[string]any {
 				"required":   []string{"move"},
 			},
 		},
+		{
+			"name": "language",
+			"description": "Change the languages Delta hears and speaks, as the button in its window does: en or fr alone, or " +
+				"en+fr and fr+en for a bilingual Delta, which answers each sentence in the language it was spoken in, its own " +
+				"language first. Delta does it by itself for a plain request, such as « parle seulement français »; use it for " +
+				"one Delta left to you.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"setting": map[string]any{"type": "string", "enum": languageSettings}},
+				"required":   []string{"setting"},
+			},
+		},
 	}
 }
 
@@ -141,8 +154,9 @@ type mcpServer struct {
 	heardIn map[int]string // the language of each sentence heard, by utterance id, the last 64
 	saidIn  map[int]string // the language of each say call, by say_id, the last 64
 
-	langMu sync.Mutex
-	langs  []language // what Delta hears and speaks, its own language first, once the window changed it (lang.go)
+	langMu     sync.Mutex
+	langs      []language                     // what Delta hears and speaks, its own language first, once changed (lang.go)
+	relanguage func(ls []language, by string) // changes them, tells the window and saves them, or nil
 }
 
 // heardLanguage is the code of the language a heard line's sentence was spoken in, Delta's own when Whisper did not
@@ -342,6 +356,22 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 		}
 		m.note(p.Name, map[string]any{"move": what, "by": "claude"})
 		m.toolResult(id, "Delta's "+p.Name+": "+what+".", false)
+	case "language":
+		var a struct {
+			Setting string `json:"setting"`
+		}
+		json.Unmarshal(p.Arguments, &a)
+		ls, err := languagesOf(a.Setting)
+		if err != nil || !slices.Contains(languageSettings, a.Setting) {
+			m.toolResult(id, "Delta cannot speak "+strconv.Quote(a.Setting)+": give one of "+strings.Join(languageSettings, ", ")+".", true)
+			return
+		}
+		if m.relanguage == nil {
+			m.toolResult(id, "This brain keeps the languages it started with.", true)
+			return
+		}
+		m.relanguage(ls, "claude")
+		m.toolResult(id, "Delta now hears and speaks "+a.Setting+".", false)
 	case "listen":
 		var a struct {
 			Timeout float64 `json:"timeout_seconds"`
@@ -674,9 +704,16 @@ func (m *mcpServer) answerLocally(text, answer, mood, lang string, fields map[st
 	}
 }
 
-// command does what the user asked aloud of Delta's own window, without Claude: a move through the shelf, or opening
-// it, then a move of the window. It returns "shelf" or "window", or "" when the sentence asks neither.
+// command does what the user asked aloud of Delta itself, without Claude: its languages, a move through the shelf, or
+// opening it, then a move of the window. It returns "language", "shelf" or "window", or "" when the sentence asks none.
 func (m *mcpServer) command(text string, fields map[string]any, now time.Time) string {
+	if setting := languageCommand(text, m.languages()); setting != "" && m.relanguage != nil {
+		ls, _ := languagesOf(setting)
+		fields["language"] = setting
+		m.relanguage(ls, "voice")
+		m.answerLocally(text, languageAnswers[setting], "", ls[0].code, fields)
+		return "language"
+	}
 	if m.show == nil {
 		return ""
 	}

@@ -638,6 +638,16 @@ The user then asked, from the phone, for a way to mute the microphone. A button 
 speaks, echoes the state to the window, which strikes the microphone through in red, and journals `mic`. It is not
 saved: a new brain hears again. `/hear` from a phone is not muted, which is the point of muting the computer.
 
+Live, from the phone, the bilingual mode heard French sentences as English (« Delta, c'est un drôle, tu ranné. »,
+lang en) and Delta answered them in English; the user asked « En français, s'il te plaît » four times, and could not
+click the button from the phone. Delta now changes its languages when asked aloud (languageCommand, lang.go): a
+short sentence that names a language and asks for it, « continue en français », "speak English only", « passe en mode
+bilingue ». Asking for a language puts it first and keeps the other one heard; asking for the one already first, or
+for one only (« seulement », « ne … qu'en », "only"), keeps it alone. A sentence that says no (« ne parle plus
+anglais », "stop speaking English") or only speaks about a language (« tu es bilingue ? ») goes to Claude, which has a
+new language tool. The window's button, the voice and the tool share one change (mcpServer.relanguage), journaled
+`language` with `by` window, voice or claude.
+
 ## A conversation that lasts while it goes on (2026-10-23)
 
 The user forgot « Delta » and could not tell what would happen: from utterance 58 on, a dozen sentences went

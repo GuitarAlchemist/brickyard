@@ -154,6 +154,18 @@ func runMCP(c mcpConfig) {
 	greet()
 	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code, langOf: m.spokenIn}
 	mo.voiceIn = otherVoices(c, lang.code, logf, m.note)
+	m.relanguage = func(ls []language, by string) { // the window's button, a sentence asking it aloud, or Claude's tool
+		m.speakIn(ls)
+		greet()
+		s.send(map[string]any{"language": settingOf(ls)})
+		if err := saveLanguage(c.home, settingOf(ls)); err != nil {
+			logf("delta.json: %v", err)
+		}
+		m.note("language", map[string]any{"language": settingOf(ls), "by": by})
+		for _, l := range ls { // loads the other voice now rather than at its first sentence
+			go mo.voiceIn(l.code)
+		}
+	}
 	s.asked = func(event map[string]any) { // the window's language and microphone buttons
 		if on, ok := event["mic"].(bool); ok {
 			muted.Store(!on)
@@ -171,16 +183,7 @@ func runMCP(c mcpConfig) {
 			logf("the window asked for %q: %v", setting, err)
 			return
 		}
-		m.speakIn(ls)
-		greet()
-		s.send(map[string]any{"language": settingOf(ls)})
-		if err := saveLanguage(c.home, settingOf(ls)); err != nil {
-			logf("delta.json: %v", err)
-		}
-		m.note("language", map[string]any{"language": settingOf(ls), "by": "window"})
-		for _, l := range ls { // loads the other voice now rather than at its first sentence
-			go mo.voiceIn(l.code)
-		}
+		m.relanguage(ls, "window")
 	}
 	if fx, err := effect(c.fx); err != nil {
 		logf("%v; Delta speaks without an effect", err)

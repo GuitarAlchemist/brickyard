@@ -119,7 +119,7 @@ func TestMCPHandshakeDeclaresAChannelAndItsTools(t *testing.T) {
 	for _, tool := range list["result"].(map[string]any)["tools"].([]any) {
 		names = append(names, tool.(map[string]any)["name"].(string))
 	}
-	if strings.Join(names, ",") != "say,listen,window,shelf" {
+	if strings.Join(names, ",") != "say,listen,window,shelf,language" {
 		t.Fatalf("tools %v", names)
 	}
 
