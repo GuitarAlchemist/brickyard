@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,12 +26,17 @@ import (
 //
 //	POST /hear  a 16 kHz mono 16-bit WAV of at most 30 s; 202 {"utterance_id","text","route"}, 503 until Delta hears
 //	GET  /said  server-sent events, one per sentence as it starts playing: {"say_id","text","seconds","t_ms","wav_b64"}
+//	POST /link  {"url"}, the https link of at most 106 bytes that a phone opens to pair with the gateway; 204
 //
 // A sentence from /hear is routed as one addressed to Delta, since holding the device's button addressed it. Its heard
 // line and channel event carry source "remote". A chime tells the room when Delta says nothing back at once, nor is
-// speaking: a sentence for Claude gets Delta's acknowledgement instead, and small talk its answer.
+// speaking: a sentence for Claude gets Delta's acknowledgement instead, and small talk its answer. Delta's window shows
+// the link from /link as a QR code behind its phone icon, while the pairing code in it lives.
 
 const remoteHeader = "X-Delta-Remote"
+
+// pairingSeconds is how long a pairing code from IX's gateway lives.
+const pairingSeconds = 120
 
 // maxHeard is 30 s of 16-bit samples at whisper's rate, and a WAV header.
 const maxHeard = 30*earsRate*2 + 1024
@@ -39,6 +45,7 @@ type remote struct {
 	secret string
 	route  func(u utterance) (id int, route string) // routes a transcript as hear does
 	chime  func()                                   // tells the room a sentence came from another device
+	pair   func(rows []string)                      // shows a pairing link's QR code, one string of 0 and 1 per row
 
 	mu         sync.Mutex
 	transcribe func(samples []float32) (string, error) // nil until Delta's ears are ready
@@ -78,6 +85,7 @@ func (r *remote) hearWith(transcribe func(samples []float32) (string, error)) {
 func (r *remote) handle(mux *http.ServeMux) {
 	mux.HandleFunc("/hear", r.hear)
 	mux.HandleFunc("/said", r.said)
+	mux.HandleFunc("/link", r.link)
 }
 
 // allowed answers 403 unless the request has the method, the hooks' header and the secret.
@@ -181,6 +189,34 @@ func (r *remote) said(w http.ResponseWriter, req *http.Request) {
 		}
 		flusher.Flush()
 	}
+}
+
+// link takes the link a phone opens to pair with the gateway, which IX's posts at each of its starts. The link holds
+// the pairing code, a credential while it lives: it goes to Delta's window as a QR code, and nowhere else.
+func (r *remote) link(w http.ResponseWriter, req *http.Request) {
+	if !r.allowed(w, req, http.MethodPost) {
+		return
+	}
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(req.Body, 4096)).Decode(&body); err != nil {
+		http.Error(w, `{"url"}, please`, http.StatusBadRequest)
+		return
+	}
+	if u, err := url.Parse(body.URL); err != nil || u.Scheme != "https" || u.Host == "" {
+		http.Error(w, "an https link, please", http.StatusBadRequest)
+		return
+	}
+	rows, err := qrEncode(body.URL)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("a link of at most %d bytes, please", qrMaxBytes), http.StatusBadRequest)
+		return
+	}
+	if r.pair != nil {
+		r.pair(rows)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // listened says whether a device listens to /said.

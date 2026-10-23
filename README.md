@@ -196,7 +196,9 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
 - Another device can talk to Delta through a gateway on this computer, such as IX's over WebRTC. The gateway posts
   each sentence the device heard, a 16 kHz mono WAV of at most 30 s, to `POST /hear` on the same address, and plays
   what Delta says from `GET /said`, one server-sent event per sentence with its WAV and the `utterance_id` it answers. Both need the hooks' header and
-  `X-Delta-Remote`, the secret the brain writes at each start to `%LOCALAPPDATA%\delta\remote.secret`. A sentence from
+  `X-Delta-Remote`, the secret the brain writes at each start to `%LOCALAPPDATA%\delta\remote.secret`. So does
+  `POST /link`, where the gateway posts the link a phone opens to pair with it: a click on the phone icon in the top
+  right corner of Delta's window, or P, shows its QR code while the code in it lives, two minutes with IX's gateway. A sentence from
   another device needs no « Delta », and the triage may answer it but not drop it; a chime tells the room, and Claude
   has the user confirm at the computer anything destructive it asks for. The whole address refuses a request with an `Origin` header, or for another host than
   127.0.0.1, localhost or ::1.

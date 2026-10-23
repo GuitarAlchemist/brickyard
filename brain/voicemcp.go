@@ -207,6 +207,11 @@ func runMCP(c mcpConfig) {
 		rm.secret = secret
 		logf("remote: a gateway's secret is in %s", path)
 	}
+	rm.pair = func(rows []string) { // the journal says that a link came, never which
+		s.send(map[string]any{"pairing": map[string]any{"rows": rows, "seconds": pairingSeconds}})
+		m.note("pairing", map[string]any{"seconds": pairingSeconds})
+		logf("remote: a pairing link came; Delta's window shows its QR code behind the phone icon")
+	}
 	h.remote = rm
 	mo.onClip = rm.publish
 	m.attribute = rm.attribute

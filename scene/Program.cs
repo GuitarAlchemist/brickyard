@@ -5,8 +5,8 @@
 //
 //	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--shelf SECTION] [--hidden] [--immediate] [--cap N] | --selftest
 //
-// --demo plays idle, listening, thinking, speaking, a compaction, each expression and the caption of a sentence let pass
-// in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
+// --demo plays idle, listening, thinking, speaking, a compaction, each expression, the caption of a sentence let pass
+// and the pairing card in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
 //
@@ -150,7 +150,7 @@ internal static unsafe class Stage
         var shelfAtStart = Option(args, "--shelf");
         Words.Language = Option(args, "--lang") ?? "en";
         const double S = Splash.Seconds;
-        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored")];
+        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
         if (shots.Length > 0 && !demo)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
@@ -522,8 +522,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 4, // the logo, the notice, the shelf's card and the caption
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 4 }],
+            MaxSets = 6, // the logo, the notice, the shelf's card, the caption, the phone icon and its pairing card
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 6 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -593,6 +593,21 @@ internal static unsafe class Stage
         Panel.Card? caption = null;
         var captionId = 0;
         var captionSize = (0, 0);
+
+        // The phone icon in the top right corner (Panel.Phone), lit while a pairing code lives, and the card a click on it
+        // or P opens and closes (Panel.Pairing). The code is a credential while it lives, so it shows only when asked, as
+        // the window may be shared.
+        var phoneSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? phoneTexture = null;
+        Panel.Card? phone = null;
+        var phoneDrawn = (Live: false, Height: 0);
+        var pairingSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? pairingTexture = null;
+        Panel.Card? pairingCard = null;
+        var pairingDrawn = (Id: -1, Left: -1, Width: 0, Height: 0, Language: "");
+        var pairingShown = false;
+        (int X, int Y) PhoneAt() => (extent.Width - Panel.PhoneSize(extent.Height) - CardMargin(), CardMargin());
+        (int X, int Y) PairingAt() => pairingCard is null ? (0, 0) : ((extent.Width - pairingCard.Width) / 2, (extent.Height - pairingCard.Height) / 2);
 
         // Uploads a drawn card into a new texture that set samples, once no frame in flight reads the old one.
         Texture Upload(Panel.Card drawn, VkDescriptorSet set, Texture? old)
@@ -678,9 +693,17 @@ internal static unsafe class Stage
                 return;
             }
 
-            if (key is GlfwKey.Tab or GlfwKey.M)
+            if (key == GlfwKey.P)
+            {
+                pairingShown = !pairingShown;
+            }
+            else if (key is GlfwKey.Tab or GlfwKey.M)
             {
                 shelf.Show(at);
+            }
+            else if (key == GlfwKey.Escape && pairingShown)
+            {
+                pairingShown = false;
             }
             else if (key == GlfwKey.Escape)
             {
@@ -715,9 +738,22 @@ internal static unsafe class Stage
             return -1;
         }
 
+        // Whether the cursor is on a card drawn at corner, in the window's pixels.
+        bool Over(GlfwWindow w, (int X, int Y) corner, int width, int height)
+        {
+            var x = w.CursorX * extent.Width / Math.Max(1, w.Width);
+            var y = w.CursorY * extent.Height / Math.Max(1, w.Height);
+            return x >= corner.X && x < corner.X + width && y >= corner.Y && y < corner.Y + height;
+        }
+
         window.OnMouseButton += (w, button, action, mods) =>
         {
-            if (action == GlfwButtonAction.Press && RowAt(w) is var row and >= 0)
+            var icon = Panel.PhoneSize(extent.Height);
+            if (action == GlfwButtonAction.Press && (Over(w, PhoneAt(), icon, icon) || (pairingShown && pairingCard is not null && Over(w, PairingAt(), pairingCard.Width, pairingCard.Height))))
+            {
+                pairingShown = !pairingShown;
+            }
+            else if (action == GlfwButtonAction.Press && RowAt(w) is var row and >= 0)
             {
                 var at = clock.Elapsed.TotalSeconds;
                 shelf.Select(at, row);
@@ -776,6 +812,10 @@ internal static unsafe class Stage
             }
 
             var moment = link.Read(linkNow);
+            if (demo)
+            {
+                pairingShown = linkNow % Link.DemoSeconds >= 20.0; // the demo opens the pairing card for its last second
+            }
             var time = (float)now;
             shelf.Tick(now);
             robot.Presenting = shelf.Open;
@@ -823,6 +863,21 @@ internal static unsafe class Stage
                 captionSize = (extent.Width, extent.Height);
                 caption = Panel.Caption(moment.Ignored, extent.Width, extent.Height);
                 captionTexture = Upload(caption, captionSet, captionTexture);
+            }
+
+            if (!splashing && phoneDrawn != (moment.Pairing is not null, extent.Height))
+            {
+                phoneDrawn = (moment.Pairing is not null, extent.Height);
+                phone = Panel.Phone(extent.Height, phoneDrawn.Live);
+                phoneTexture = Upload(phone, phoneSet, phoneTexture);
+            }
+
+            var secondsLeft = (int)Math.Ceiling(moment.PairingLeft);
+            if (pairingShown && !splashing && pairingDrawn != (moment.PairingId, secondsLeft, extent.Width, extent.Height, Words.Language))
+            {
+                pairingDrawn = (moment.PairingId, secondsLeft, extent.Width, extent.Height, Words.Language);
+                pairingCard = Panel.Pairing(moment.Pairing, secondsLeft, moment.PairingId > 0 && moment.Pairing is null, extent.Width, extent.Height);
+                pairingTexture = Upload(pairingCard, pairingSet, pairingTexture);
             }
 
             var slot = frame % FramesInFlight;
@@ -900,6 +955,26 @@ internal static unsafe class Stage
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var push = new SplashPush(Rect((extent.Width - caption.Width) / 2, extent.Height - caption.Height - CardMargin(), caption.Width, caption.Height), new SN.Vector4(1f, 1f, 1f, fade));
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [captionSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (phone is not null && phoneTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (phoneX, phoneY) = PhoneAt();
+                    var push = new SplashPush(Rect(phoneX, phoneY, phone.Width, phone.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [phoneSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (pairingShown && pairingCard is not null && pairingTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (cardX, cardY) = PairingAt();
+                    var push = new SplashPush(Rect(cardX, cardY, pairingCard.Width, pairingCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [pairingSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -1048,6 +1123,8 @@ internal static unsafe class Stage
 
         cardTexture?.Dispose();
         captionTexture?.Dispose();
+        phoneTexture?.Dispose();
+        pairingTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);
 
         device.DestroyDescriptorPool(descriptorPool, null);
