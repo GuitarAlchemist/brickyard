@@ -214,6 +214,7 @@ func runMCP(c mcpConfig) {
 	}
 	h.remote = rm
 	mo.onClip = rm.publish
+	mo.aloud = rm.aloud
 	m.attribute = rm.attribute
 	if c.hooks != "" {
 		go h.serve(c.hooks)
@@ -418,6 +419,7 @@ type mouth struct {
 	fx     func(rate int) *warm                           // a fresh effect for each say call, or nil for Piper's own voice
 	lang   string                                         // the code of the language Delta speaks, for speakable
 	onClip func(say int, text string, w wav, path string) // each sentence as it starts, for remote.go, or nil
+	aloud  func(say int) bool                             // whether the computer plays a say call (remote.go), or nil
 	busy   atomic.Bool                                    // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
@@ -522,12 +524,19 @@ func (mo *mouth) run(v *voice) {
 	}()
 	var fx *warm    // the say call's effect, which runs through all its sentences
 	var mood string // the say call's expression, until a sentence carries it to the window
+	aloud := true   // whether the computer plays the say call, or leaves it to the device that asked
 	for c := range clips {
 		if c.first {
-			mo.record("speaking", map[string]any{"say_id": c.say, "muted": mo.mute, "cost": c.cost})
+			aloud = mo.aloud == nil || mo.aloud(c.say)
+			fields := map[string]any{"say_id": c.say, "muted": mo.mute, "cost": c.cost}
+			if !aloud {
+				fields["on_device"] = true
+			}
+			mo.record("speaking", fields)
 			fx, mood = nil, c.mood
 		}
 		if c.path != "" {
+			seconds := 0.0
 			w, err := readWav(c.path)
 			if err == nil && mo.fx != nil {
 				if fx == nil {
@@ -546,9 +555,14 @@ func (mo *mouth) run(v *voice) {
 				if mo.onClip != nil {
 					mo.onClip(c.say, c.text, w, c.path)
 				}
+				seconds = w.seconds
 			}
-			if !mo.mute {
+			switch {
+			case mo.mute:
+			case aloud:
 				play(c.path)
+			default: // the device plays it, while the microphone here stays deaf to it
+				time.Sleep(time.Duration(seconds * float64(time.Second)))
 			}
 			os.Remove(c.path)
 		}

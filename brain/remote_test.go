@@ -344,3 +344,29 @@ func TestAGatewaysPairingLinkReachesTheWindowAsAQRCode(t *testing.T) {
 		t.Fatalf("the window got %q", shown)
 	}
 }
+
+// An answer to a sentence from another device plays only there while the device listens, since the computer's
+// speakers would echo it a moment apart; an answer to the computer, or to nothing, plays at the computer.
+func TestAnAnswerToAnotherDevicePlaysThereOnly(t *testing.T) {
+	r := &remote{secret: "s3cret", route: func(u utterance) (int, string) { return 12, "channel" }}
+	srv := remoteServer(t, r)
+	r.hearWith(func([]float32) (string, error) { return "Delta, quelle heure est-il ?", nil })
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/hear", bytes.NewReader(wavBytes(t, earsRate, 1)))
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, "s3cret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	r.attribute(map[string]any{"say_id": 20, "utterance_id": "12", "by": "claude"})
+	r.attribute(map[string]any{"say_id": 21, "utterance_id": "11", "by": "claude"}) // said at the computer
+	r.attribute(map[string]any{"say_id": 22, "utterance_id": "", "by": "local"})
+	if !r.aloud(20) {
+		t.Fatal("with no device listening, the computer says the answer")
+	}
+	subscribeSaid(t, r)
+	if r.aloud(20) || !r.aloud(21) || !r.aloud(22) || !r.aloud(99) {
+		t.Fatalf("aloud: %v %v %v %v", r.aloud(20), r.aloud(21), r.aloud(22), r.aloud(99))
+	}
+}

@@ -570,6 +570,24 @@ window may be shared, and the link reaches no log, nor the journal, whose `pairi
 OpenCV's QR detector read back every mask of versions 3, 4 and 6, a symbol of each version, and the scene's own
 `pairing` shot, which `--shots` now saves.
 
+## One room, two devices (2026-10-23)
+
+The user spoke to Delta from a phone in the same room as the computer, and heard each answer twice, a moment apart:
+from the computer's speakers and from the phone. An answer to a sentence from another device now plays on that device
+alone while it listens to `/said`. The computer stays silent for as long as the sentence lasts, its microphone deaf,
+and the journal's `speaking` line says `on_device`. With no device listening, the computer says it. IX's page does the
+other half: it plays only the answers to its own `/hear`.
+
+The same sentence also reached Claude twice (utterances 37 and 38): the computer's microphone heard it, then the phone
+sent it. A sentence whose words, but one in five, match a sentence the other device routed less than 8 s before is
+now dropped, with the route `duplicate`, which `/hear` returns to the gateway, and no chime. A copy the wake gate
+ignored at the computer does not count, so the phone's copy still goes through; nor does a sentence of fewer than three
+words, as two people may each answer « oui ».
+
+Writing the first half showed a bug in `/said` since 0.5.0: only the first sentence of an answer carried its
+`utterance_id` and `by`, and the next ones came as if Delta spoke unprompted. The remote now keeps the attribution for
+the whole say call.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -582,6 +600,8 @@ OpenCV's QR detector read back every mask of versions 3, 4 and 6, a symbol of ea
   streamed, other people's words would show too. There is no switch to turn it off yet.
 - IX's gateway makes a pairing code only when it starts, so two minutes later the card can only say that the code
   expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user has not decided.
+- When a phone in the room hears a sentence without « Delta », the computer's copy is ignored and its caption shows,
+  while the phone's copy, which needs no wake word, goes to Claude.
 - A window that starts after the gateway posted its link never gets it: the brain keeps no pairing for a new
   connection.
 - The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
@@ -605,3 +625,4 @@ OpenCV's QR detector read back every mask of versions 3, 4 and 6, a symbol of ea
 - The hands with a real camera: each pose, a swipe each way, a wave and pointing down, and the thresholds by hand.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
 - The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
+- A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.
