@@ -363,6 +363,8 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 // heardAs is hear, which also returns the utterance's number. A sentence from another device (source "remote") needs
 // no wake word: holding the device's button addressed Delta. Its heard line and channel event say where it came from.
 func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
+	text, repeats := collapseRepeats(u.text)
+	u.text = text
 	m.mu.Lock()
 	m.heard++
 	h := heardText{id: m.heard, text: u.text}
@@ -371,6 +373,9 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	fields := map[string]any{"utterance_id": strconv.Itoa(h.id), "text": u.text, "asr_ms": u.asr.Milliseconds()}
 	if u.source != "" {
 		fields["source"] = u.source
+	}
+	if repeats > 0 { // Whisper wrote a sentence over and over
+		fields["repeats_collapsed"] = repeats
 	}
 	defer func() {
 		fields["route"] = route

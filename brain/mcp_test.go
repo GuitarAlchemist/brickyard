@@ -543,3 +543,21 @@ func TestASentenceHeardByTwoDevicesGoesOnce(t *testing.T) {
 		t.Fatal("a short answer said on each device is two answers")
 	}
 }
+
+func TestTheJournalSaysWhenWhisperRepeatedASentence(t *testing.T) {
+	records := make(chan map[string]any, 4)
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.record = func(event string, fields map[string]any) {
+			if event == "heard" {
+				records <- fields
+			}
+		}
+	})
+	m.hear(utterance{text: "Delta, quel est le dépôt IX ? " + strings.Repeat("Parfait. Merci. ", 1) + strings.Repeat("C'est bon pour moi. ", 4), source: "remote"}, time.Now())
+	if content := next(t, out)["params"].(map[string]any)["content"]; content != "Delta, quel est le dépôt IX ? Parfait. Merci. C'est bon pour moi." {
+		t.Fatalf("Claude got %q", content)
+	}
+	if r := <-records; r["repeats_collapsed"] != 3 || r["text"] != "Delta, quel est le dépôt IX ? Parfait. Merci. C'est bon pour moi." {
+		t.Fatalf("%v", r)
+	}
+}
