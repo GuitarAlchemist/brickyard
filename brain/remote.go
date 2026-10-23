@@ -30,7 +30,8 @@ import (
 //
 // A sentence from /hear is routed as one addressed to Delta, since holding the device's button addressed it. Its heard
 // line and channel event carry source "remote". A chime tells the room when Delta says nothing back at once, nor is
-// speaking: a sentence for Claude gets Delta's acknowledgement instead, and small talk its answer. Delta's window shows
+// speaking: a sentence for Claude gets Delta's acknowledgement instead, and small talk its answer. What answers it plays
+// on the device only, while the device listens to /said. Delta's window shows
 // the link from /link as a QR code behind its phone icon, while the pairing code in it lives.
 
 const remoteHeader = "X-Delta-Remote"
@@ -51,6 +52,7 @@ type remote struct {
 	transcribe func(samples []float32) (string, error) // nil until Delta's ears are ready
 	subs       map[chan []byte]struct{}                // the devices listening to /said
 	answers    map[int]replyTo                         // whom each sentence about to be said answers, by say_id
+	heard      map[int]bool                            // the utterances that came through /hear, the last 64
 }
 
 // replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, and by, who wrote it
@@ -134,13 +136,24 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 	id, where := 0, "nothing"
 	if u.text != "" {
 		id, where = r.route(u)
-		if r.chime != nil && where != "channel" && where != "local" {
+		if r.chime != nil && where != "channel" && where != "local" && where != "duplicate" {
 			r.chime()
 		}
 	}
 	answer := map[string]any{"utterance_id": "", "text": u.text, "route": where}
 	if id > 0 {
 		answer["utterance_id"] = strconv.Itoa(id)
+		r.mu.Lock()
+		if r.heard == nil {
+			r.heard = map[int]bool{}
+		}
+		r.heard[id] = true
+		for old := range r.heard {
+			if old <= id-64 {
+				delete(r.heard, old)
+			}
+		}
+		r.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -217,6 +230,16 @@ func (r *remote) link(w http.ResponseWriter, req *http.Request) {
 		r.pair(rows)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// aloud says whether the computer plays a say call: not when it answers a sentence from another device that listens
+// to /said, which plays it, since the two would echo a moment apart.
+func (r *remote) aloud(sayID int) bool {
+	r.mu.Lock()
+	utterance, _ := strconv.Atoi(r.answers[sayID].utterance)
+	device := r.heard[utterance]
+	r.mu.Unlock()
+	return !device || !r.listened()
 }
 
 // listened says whether a device listens to /said.

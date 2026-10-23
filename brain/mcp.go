@@ -131,6 +131,7 @@ type mcpServer struct {
 	acked   int       // acknowledgements said, which picks the next one
 	recent  []string  // the conversation's last lines, for the triage
 	local   []string  // the lines the triage handled since the last channel event, for Claude to know
+	lately  []routed  // the sentences routed in the last seconds, to know one that two devices heard (twice.go)
 	asked   bool      // Claude's last words asked the user something: the answer goes to Claude untriaged
 	shelfAt time.Time // when the shelf last moved, by voice or by Claude; zero once closed
 }
@@ -352,7 +353,8 @@ func (m *mcpServer) stopWaiting(key string) bool {
 
 // hear routes one transcript: to the oldest pending listen call (Claude asked, so no wake word is needed), else, when
 // the user addressed Delta, through the triage if there is one, then to the session as a channel event. It returns
-// where it went: "listen", "channel", "ignored" by the wake gate, or "dropped" or "local" by the triage.
+// where it went: "listen", "channel", "ignored" by the wake gate, "dropped" or "local" by the triage, or "duplicate"
+// when the other device heard it a moment before (twice.go).
 func (m *mcpServer) hear(u utterance, now time.Time) string {
 	_, route := m.heardAs(u, now)
 	return route
@@ -373,7 +375,16 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	defer func() {
 		fields["route"] = route
 		m.note("heard", fields)
+		if route != "ignored" && route != "duplicate" {
+			m.routedNow(u, now)
+		}
 	}()
+	if m.heardTwice(u, now) { // the computer's microphone and a phone both heard it
+		m.mu.Unlock()
+		route = "duplicate"
+		fields["reason"] = "heard by the other device too"
+		return id, route
+	}
 	if len(m.waiting) > 0 {
 		l := m.waiting[0]
 		m.waiting = m.waiting[1:]

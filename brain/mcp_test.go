@@ -501,3 +501,45 @@ func TestTheSayNoteTellsTheRemoteWhomASentenceAnswers(t *testing.T) {
 		t.Fatalf("%v", told)
 	}
 }
+
+// The computer's microphone and a phone in the same room both hear a sentence, the phone's copy a few seconds later:
+// it goes to Claude once. A copy the wake gate ignored here does not hold back the phone's, and a short answer said
+// twice is two answers.
+func TestASentenceHeardByTwoDevicesGoesOnce(t *testing.T) {
+	records := make(chan map[string]any, 16)
+	m, _, _ := startServer(t, func(m *mcpServer) {
+		m.record = func(event string, fields map[string]any) {
+			if event == "heard" {
+				records <- fields
+			}
+		}
+	})
+	route := func(text, source string, at time.Time) string {
+		m.hear(utterance{text: text, source: source}, at)
+		return (<-records)["route"].(string)
+	}
+	now := time.Now()
+	if r := route("Delta, je pense qu'on devrait supporter les deux modes, l'appel ou le bouton.", "", now); r != "channel" {
+		t.Fatalf("the computer's copy: %s", r)
+	}
+	if r := route("Delta, je pense qu'on devrait supporter les deux modes : l'appel ou le bouton « je t'écoute ».", "remote", now.Add(2*time.Second)); r != "duplicate" {
+		t.Fatalf("the phone's copy: %s", r)
+	}
+	if r := route("Delta, je pense qu'on devrait supporter les deux modes, l'appel ou le bouton.", "remote", now.Add(20*time.Second)); r != "channel" {
+		t.Fatalf("said again much later: %s", r)
+	}
+
+	later := now.Add(time.Hour)
+	if r := route("Et la version du tableau de bord, on la change ?", "", later); r != "ignored" {
+		t.Fatalf("without Delta: %s", r)
+	}
+	if r := route("Et la version du tableau de bord, on la change ?", "remote", later.Add(2*time.Second)); r != "channel" {
+		t.Fatalf("the phone's copy of a sentence ignored here: %s", r)
+	}
+	if r := route("Oui.", "", later.Add(3*time.Second)); r != "channel" {
+		t.Fatalf("an answer: %s", r)
+	}
+	if r := route("Oui.", "remote", later.Add(4*time.Second)); r == "duplicate" {
+		t.Fatal("a short answer said on each device is two answers")
+	}
+}
