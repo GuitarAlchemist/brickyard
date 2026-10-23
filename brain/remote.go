@@ -31,10 +31,14 @@ import (
 // A sentence from /hear is routed as one addressed to Delta, since holding the device's button addressed it. Its heard
 // line and channel event carry source "remote". A chime tells the room when Delta says nothing back at once, nor is
 // speaking: a sentence for Claude gets Delta's acknowledgement instead, and small talk its answer. What answers it plays
-// on the device only, while the device listens to /said. Delta's window shows
+// on the device only, while a device listening to /said sent X-Delta-Plays: own, saying that it plays the answers to
+// its own sentences; without it, the computer plays every answer, as in 0.5.0. Delta's window shows
 // the link from /link as a QR code behind its phone icon, while the pairing code in it lives.
 
 const remoteHeader = "X-Delta-Remote"
+
+// playsHeader is how a device listening to /said says, with "own", that it plays the answers to its own sentences.
+const playsHeader = "X-Delta-Plays"
 
 // pairingSeconds is how long a pairing code from IX's gateway lives.
 const pairingSeconds = 120
@@ -50,7 +54,7 @@ type remote struct {
 
 	mu         sync.Mutex
 	transcribe func(samples []float32) (string, error) // nil until Delta's ears are ready
-	subs       map[chan []byte]struct{}                // the devices listening to /said
+	subs       map[chan []byte]bool                    // the devices listening to /said: whether each plays its answers
 	answers    map[int]replyTo                         // whom each sentence about to be said answers, by say_id
 	heard      map[int]bool                            // the utterances that came through /hear, the last 64
 }
@@ -177,9 +181,9 @@ func (r *remote) said(w http.ResponseWriter, req *http.Request) {
 	ch := make(chan []byte, 16)
 	r.mu.Lock()
 	if r.subs == nil {
-		r.subs = map[chan []byte]struct{}{}
+		r.subs = map[chan []byte]bool{}
 	}
-	r.subs[ch] = struct{}{}
+	r.subs[ch] = req.Header.Get(playsHeader) == "own"
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -233,14 +237,22 @@ func (r *remote) link(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// aloud says whether the computer plays a say call: not when it answers a sentence from another device that listens
-// to /said, which plays it, since the two would echo a moment apart.
+// aloud says whether the computer plays a say call: not when it answers a sentence from another device while a device
+// listening to /said plays the answers to its own sentences, since the two would echo a moment apart. A device that
+// does not say so, such as a gateway whose page plays only after a tap, leaves every answer to the computer.
 func (r *remote) aloud(sayID int) bool {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	utterance, _ := strconv.Atoi(r.answers[sayID].utterance)
-	device := r.heard[utterance]
-	r.mu.Unlock()
-	return !device || !r.listened()
+	if !r.heard[utterance] {
+		return true
+	}
+	for _, own := range r.subs {
+		if own {
+			return false
+		}
+	}
+	return true
 }
 
 // listened says whether a device listens to /said.
