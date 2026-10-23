@@ -13,11 +13,13 @@ import (
 
 // captureArgs has ffmpeg capture the window hwnd (Windows Graphics Capture, so the window is seen even when covered)
 // and send it as constrained-baseline H.264 over RTP to 127.0.0.1:port. gfxcapture sends a frame only when the
-// window changes, so fps=30 repeats the last one: x264 then keeps making frames, and a keyframe every second.
+// window changes, so fps=30 repeats the last one: x264 then keeps making frames, and a keyframe every second. The
+// frame is 1280×720 whatever the window's size, and a window resized during the capture is scaled into it whole.
 func captureArgs(hwnd uintptr, port int) []string {
 	return []string{
 		"-hide_banner", "-loglevel", "error",
-		"-filter_complex", fmt.Sprintf("gfxcapture=hwnd=%d:capture_cursor=0:max_framerate=30,"+
+		"-filter_complex", fmt.Sprintf("gfxcapture=hwnd=%d:capture_cursor=0:max_framerate=30:"+
+			"width=1280:height=720:resize_mode=scale_aspect,"+
 			"hwdownload,format=bgra,fps=30,scale=-2:720,format=yuv420p", hwnd),
 		"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
 		"-profile:v", "baseline", "-level:v", "3.1",

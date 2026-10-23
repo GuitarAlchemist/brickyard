@@ -2,8 +2,9 @@
 //
 //	delta-remote [-ip <address>] [-port 8810] [-udp 8811] [-cert <file> -key <file> -name <host>] [-forget-devices]
 //
-// Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within two minutes; a paired
-// device needs no code afterwards. -forget-devices unpairs them all.
+// Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within 100 s. Then a new code
+// replaces it, as soon as a device uses it too: Delta's window shows the current one as a QR, and link.txt holds it. A
+// paired device needs no code afterwards. -forget-devices unpairs them all.
 //
 // Without -cert, the certificate is the gateway's own: the browser warns about it once, and a device on the same
 // network could stand in for the gateway while you accept that warning. Give a certificate the device trusts, such as
@@ -111,11 +112,11 @@ func run(o options) error {
 	}
 	s.onPeer = c.run
 
+	s.linkFile = filepath.Join(home, "link.txt")
 	link := fmt.Sprintf("https://%s/#code=%s", s.host, s.issueCode())
-	if err := os.WriteFile(filepath.Join(home, "link.txt"), []byte(link+"\n"), 0o600); err != nil {
-		return err
-	}
-	fmt.Println("To pair a device, open within two minutes:", link)
+	fmt.Printf("To pair a device, scan the QR in Delta's window, or open within %d s: %s\n",
+		int(renewEvery/time.Second), link)
+	fmt.Println("A new link replaces it then, in", s.linkFile)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort(ip.String(), strconv.Itoa(o.port)),

@@ -9,14 +9,24 @@ device at a time.
 cd remote; go build; .\delta-remote.exe
 ```
 
-It prints a link, `https://<address>:8810/#code=<code>`, and Delta's window shows it as a QR code. Open it on the
-device within two minutes: that pairs the device, which then needs no code, and the QR goes away. Each start prints a
-new code; `-forget-devices` unpairs every device.
+It prints a link, `https://<address>:8810/#code=<code>`, and hands it to Delta's window for its QR card (the phone
+icon). Scanning the QR pairs the device in one step; it then needs no code for 90 days. The code is renewed every
+100 s, and as soon as a device uses it, so the card always holds a QR that works while the gateway runs;
+`%LOCALAPPDATA%\delta-remote\link.txt` holds the same link. `-forget-devices` unpairs every device.
 
-- **Talking:** hold the button and speak; on release, what the microphone heard goes to Delta's brain as a 16 kHz WAV
-  (30 s at most), which transcribes it and takes it as said to Delta. A chime plays in the room. Delta's answers are
-  shown and played on the device as Delta says them at the computer. The brain's `/hear`, `/said` and `/link` need
-  the secret it writes at each start to `%LOCALAPPDATA%\delta\remote.secret`; the gateway reads it on each request.
+- **Talking:** the page shows the conversation as bubbles, each answer under the sentence it answers. There are two
+  ways to speak:
+  - **Hold** the button and speak; what the microphone heard goes when you let go.
+  - **Appeler** starts a call. The microphone stays open, and the page cuts what it hears into sentences by loudness,
+    sending each one when you stop speaking. It does not listen while Delta speaks, so it never hears Delta. The
+    screen stays on until **Raccrocher**.
+
+  Each sentence goes to Delta's brain as a 16 kHz WAV (30 s at most), which transcribes it and takes it as said to
+  Delta. A chime plays in the room. The device plays the answers to its own sentences. It shows the answers to the
+  computer's sentences without sound, with a ▶ to play one here, and plays Delta speaking on his own only during a
+  call. The brain's `/hear`, `/said` and `/link` need the secret it writes at each start to
+  `%LOCALAPPDATA%\delta\remote.secret`; the gateway reads it on each request. The page's logic that needs no browser
+  is tested by `node --test` (`talk.test.js`).
 
 - **What it shows:** the one visible window titled `Brickyard` of `scene.exe`, through ffmpeg 8's `gfxcapture`
   (Windows Graphics Capture, so the window shows even when covered). None or several such windows: nothing is shown.

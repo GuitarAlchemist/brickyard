@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -18,6 +20,8 @@ var (
 	pageHTML []byte
 	//go:embed page.js
 	pageJS []byte
+	//go:embed talk.js
+	talkJS []byte
 	//go:embed page.css
 	pageCSS []byte
 	//go:embed recorder.js
@@ -42,7 +46,9 @@ type server struct {
 	brain *brain // nil: no voice and no QR
 
 	linkMu   sync.Mutex
-	linkCode string // the code Delta's window shows, until it is used or expires
+	linkCode string        // the code Delta's window holds for its QR card
+	linkFile string        // where the link that pairs now is kept, for the script that started the gateway; "": none
+	life     time.Duration // how often that code is renewed
 
 	mu     sync.Mutex
 	peer   *webrtc.PeerConnection
@@ -50,10 +56,19 @@ type server struct {
 	onPeer func(connected bool) // starts and stops the capture
 }
 
-func newServer(home string, loopback bool) (*server, error) {
+// newServer makes a server whose WebRTC stays on this machine, for the tests: see loopbackOnly.
+func newServer(home string) (*server, error) {
+	return newServerWith(home, loopbackOnly())
+}
+
+// loopbackOnly gathers candidates on the loopback addresses only and sends no mDNS. A binary that opens only those
+// sockets makes Windows ask for no firewall rule: each test build has a new path, so each one used to ask.
+func loopbackOnly() webrtc.SettingEngine {
 	se := webrtc.SettingEngine{}
-	se.SetIncludeLoopbackCandidate(loopback)
-	return newServerWith(home, se)
+	se.SetIncludeLoopbackCandidate(true)
+	se.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	return se
 }
 
 func newServerWith(home string, se webrtc.SettingEngine) (*server, error) {
@@ -74,43 +89,45 @@ func newServerWith(home string, se webrtc.SettingEngine) (*server, error) {
 		api:    webrtc.NewAPI(webrtc.WithSettingEngine(se)),
 		video:  v,
 		now:    time.Now,
+		life:   renewEvery,
 		onPeer: func(bool) {},
 	}, nil
 }
 
-// issueCode opens pairing for one device, for two minutes, and has Delta's window show the link as a QR until the
-// code is used or expires.
+// issueCode opens pairing for one device and has Delta's window keep the link for its QR card. The code is replaced
+// as soon as a device uses it, and every s.life (100 s, inside the brain's 120 s), so the card always holds a QR that
+// works while the gateway runs. The card opens only when the user asks for it.
 func (s *server) issueCode() string {
 	code := s.pair.issue(s.now())
 	s.showLink(code)
-	time.AfterFunc(codeLife, func() { s.hideLink(code) })
+	time.AfterFunc(s.life, func() { s.renew(code) })
 	return code
 }
 
-func (s *server) showLink(code string) {
-	if s.brain == nil {
-		return
-	}
+// renew replaces code with a new one if Delta's window still holds it.
+func (s *server) renew(code string) {
 	s.linkMu.Lock()
-	defer s.linkMu.Unlock()
-	s.linkCode = code
-	if err := s.brain.link("https://" + s.host + "/#code=" + code); err != nil {
-		logf("the QR: %v", err)
+	current := s.linkCode
+	s.linkMu.Unlock()
+	if current == code {
+		s.issueCode()
 	}
 }
 
-// hideLink takes the QR away if it still shows code; "" hides whatever it shows.
-func (s *server) hideLink(code string) {
+func (s *server) showLink(code string) {
+	s.linkMu.Lock()
+	defer s.linkMu.Unlock()
+	link := "https://" + s.host + "/#code=" + code
+	if s.linkFile != "" {
+		if err := os.WriteFile(s.linkFile, []byte(link+"\n"), 0o600); err != nil {
+			logf("the link file: %v", err)
+		}
+	}
 	if s.brain == nil {
 		return
 	}
-	s.linkMu.Lock()
-	defer s.linkMu.Unlock()
-	if s.linkCode == "" || (code != "" && code != s.linkCode) {
-		return
-	}
-	s.linkCode = ""
-	if err := s.brain.link(""); err != nil {
+	s.linkCode = code
+	if err := s.brain.link(link); err != nil {
 		logf("the QR: %v", err)
 	}
 }
@@ -129,6 +146,7 @@ func (s *server) handler() http.Handler {
 	}
 	mux.HandleFunc("GET /{$}", static("text/html; charset=utf-8", pageHTML))
 	mux.HandleFunc("GET /page.js", static("text/javascript; charset=utf-8", pageJS))
+	mux.HandleFunc("GET /talk.js", static("text/javascript; charset=utf-8", talkJS))
 	mux.HandleFunc("GET /page.css", static("text/css; charset=utf-8", pageCSS))
 	mux.HandleFunc("GET /recorder.js", static("text/javascript; charset=utf-8", recorderJS))
 	mux.HandleFunc("POST /pair", s.pairDevice)
@@ -159,7 +177,7 @@ func (s *server) pairDevice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	s.hideLink("")
+	s.issueCode() // the next device scans the window's QR again
 	http.SetCookie(w, &http.Cookie{
 		Name: deviceCookie, Value: cookie, Path: "/", MaxAge: int(deviceLife / time.Second),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
@@ -337,8 +355,9 @@ func logf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "delta-remote: "+format+"\n", args...)
 }
 
+// close leaves the window's last link: the brain shows it as expired within 120 s, which is true once the gateway
+// stops, and it takes no empty link.
 func (s *server) close() {
-	s.hideLink("")
 	s.mu.Lock()
 	pc := s.peer
 	s.mu.Unlock()

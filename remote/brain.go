@@ -64,6 +64,9 @@ func (b *brain) said(ctx context.Context) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	// The page plays the answers to the device's own sentences: a sentence from it follows a touch, which unlocks its
+	// sound. So the brain may leave those answers out at the computer, where they would echo.
+	req.Header.Set("X-Delta-Plays", "own")
 	return b.stream.Do(req)
 }
 

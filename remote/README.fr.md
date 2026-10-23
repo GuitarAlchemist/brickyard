@@ -9,15 +9,25 @@ Delta depuis cet appareil. Un appareil à la fois.
 cd remote; go build; .\delta-remote.exe
 ```
 
-Il affiche un lien, `https://<adresse>:8810/#code=<code>`, et la fenêtre de Delta le montre en QR code. Ouvre-le sur
-l'appareil dans les deux minutes : l'appareil est alors appairé et n'a plus besoin de code, et le QR disparaît. Chaque
-démarrage affiche un nouveau code ; `-forget-devices` désappaire tous les appareils.
+Il affiche un lien, `https://<adresse>:8810/#code=<code>`, et le confie à la fenêtre de Delta pour sa carte QR
+(l'icône du téléphone). Scanner le QR appaire l'appareil en une seule étape ; il n'a ensuite plus besoin de code
+pendant 90 jours. Le code est renouvelé toutes les 100 s, et dès qu'un appareil s'en sert, donc la carte contient
+toujours un QR qui marche tant que la passerelle tourne ; `%LOCALAPPDATA%\delta-remote\link.txt` contient le même
+lien. `-forget-devices` désappaire tous les appareils.
 
-- **Parler :** maintiens le bouton et parle ; au relâchement, ce que le micro a entendu part vers le cerveau de Delta
-  en WAV 16 kHz (30 s au plus), qui le transcrit et le prend comme dit à Delta. Un carillon sonne dans la pièce. Les
-  réponses de Delta s'affichent et se jouent sur l'appareil au moment où Delta les dit à l'ordinateur. Les `/hear`,
-  `/said` et `/link` du cerveau exigent le secret qu'il écrit à chaque démarrage dans
-  `%LOCALAPPDATA%\delta\remote.secret` ; la passerelle le relit à chaque requête.
+- **Parler :** la page montre la conversation en bulles, chaque réponse sous la phrase à laquelle elle répond. Il y a
+  deux façons de parler :
+  - **Maintenir** le bouton et parler ; ce que le micro a entendu part au relâchement.
+  - **Appeler** lance un appel. Le micro reste ouvert, et la page découpe ce qu'elle entend en phrases d'après le
+    volume, en envoyant chacune quand tu t'arrêtes de parler. Elle n'écoute pas pendant que Delta parle, donc elle ne
+    l'entend jamais. L'écran reste allumé jusqu'à **Raccrocher**.
+
+  Chaque phrase part vers le cerveau de Delta en WAV 16 kHz (30 s au plus), qui la transcrit et la prend comme dite à
+  Delta. Un carillon sonne dans la pièce. L'appareil joue les réponses à ses propres phrases. Il montre les réponses
+  aux phrases dites à l'ordinateur sans le son, avec un ▶ pour en écouter une ici, et ne joue Delta parlant de
+  lui-même que pendant un appel. Les `/hear`, `/said` et `/link` du cerveau exigent le secret qu'il écrit à chaque
+  démarrage dans `%LOCALAPPDATA%\delta\remote.secret` ; la passerelle le relit à chaque requête. La logique de la page
+  qui se passe de navigateur est testée par `node --test` (`talk.test.js`).
 
 - **Ce qu'il montre :** l'unique fenêtre visible intitulée `Brickyard` de `scene.exe`, par le `gfxcapture` de ffmpeg 8
   (la capture graphique de Windows, donc la fenêtre se voit même recouverte). Aucune fenêtre de ce genre, ou plusieurs :

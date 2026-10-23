@@ -536,6 +536,32 @@ hears the sentence with the next. Two more cases from the same review: a sentenc
 was bringing the next server now waits for it and is heard, rather than lost; and the `ears` note names each server
 with its own failure, where a chain of servers that could not start gave the first the last one's error.
 
+## The phone, as a conversation (2026-10-23)
+
+IX's gateway page becomes a conversation with Delta, and Delta's window always holds a QR that pairs.
+
+- The page shows bubbles, each answer under the sentence it answers, by `utterance_id`. The acknowledgement shows
+  small until the answer replaces it. Appeler opens a call: an energy VAD, half-duplex, so the phone hears nothing
+  while Delta plays, and the screen stays awake. Hold-to-talk stays; releasing it before the microphone opens now
+  closes the microphone.
+- Where an answer plays (`Router` in `remote/talk.js`): on the phone when it answers the phone's own `/hear`; silent,
+  behind a ▶ button, when it answers the computer's; Delta speaking on its own plays on the phone only during a call.
+  An answer that arrives before its `/hear` reply waits for it, 2 s at most. The later sentences of an answer follow
+  the first by `say_id`, since brain 0.5.0 names only the first.
+- The gateway sends `X-Delta-Plays: own` on `/said`, and brain 0.6.0 then leaves the phone's answers out at the
+  computer, where they echoed. delta-live confirmed the name and the exact value `own`.
+- The QR: a new code every 100 s, inside the window's 120 s, and at once after a device pairs. No empty link reaches
+  `/link`, which refuses it. The card opens only on the user's click. `link.txt` and the line the gateway prints kept
+  the code of the start, which the first renewal made useless: `link.txt` now follows the QR, and the line says 100 s.
+- The capture scales the window to 1280×720, keeping its aspect: a window maximized after connect showed one corner.
+- The tests' WebRTC gathers loopback candidates only, without mDNS, so a test build no longer has Windows ask for a
+  firewall rule (`TestTheTestsWebRTCStaysOnLoopback`).
+
+Measured: `go vet` and `go test` pass in `remote/`, and `node --test` passes 12 tests. Each new Go test went red
+first; mutation witnesses: four for `talk.js`, two for the QR's renewal, one for `link.txt`. IX's live check, with a
+fake brain, a fake microphone and headless Chrome at phone size, passed the eleven expectations written before the
+run. IX deployed this gateway from the working tree on 2026-10-23 at 14:41, on the author's go, for a demo of the QR.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
@@ -565,3 +591,5 @@ with its own failure, where a chain of servers that could not start gave the fir
 - English for the local window and shelf commands, the triage and the compaction sentence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
+- A call from the phone with brain 0.6.0, live: the phone's answers play on the phone only, and whether the phone's
+  echo cancellation removes Delta's voice, before `/hush` is built.

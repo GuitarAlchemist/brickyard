@@ -19,6 +19,9 @@ func TestTheCaptureSendsWhatAPhoneDecodes(t *testing.T) {
 		"-level:v 3.1",          //
 		"-g 30",                 // a keyframe every second
 		"-bf 0",                 // no B-frames, for latency
+		// A window maximized or resized while a device watches is scaled into the frame, whole; by default gfxcapture
+		// keeps the first size and crops, so the phone saw a corner of the maximized scene.
+		"width=1280:height=720:resize_mode=scale_aspect",
 		// Room for SRTP under a 1500-byte MTU. localaddr: without it ffmpeg binds its RTP and RTCP sockets on 0.0.0.0,
 		// and Windows asks at each start whether ffmpeg may listen on public networks.
 		"rtp://127.0.0.1:40000?pkt_size=1200&localaddr=127.0.0.1",

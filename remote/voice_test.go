@@ -26,6 +26,7 @@ type fakeBrain struct {
 	links []string
 	bad   []string // why a request was refused
 	said  []string // SSE data lines /said sends
+	plays []string // X-Delta-Plays of each /said request
 }
 
 func newFakeBrain(t *testing.T) *fakeBrain {
@@ -51,6 +52,7 @@ func newFakeBrain(t *testing.T) *fakeBrain {
 			b.links = append(b.links, req.URL)
 			w.WriteHeader(http.StatusNoContent)
 		case "/said":
+			b.plays = append(b.plays, r.Header.Get("X-Delta-Plays"))
 			w.Header().Set("Content-Type", "text/event-stream")
 			for _, d := range b.said {
 				io.WriteString(w, "data: "+d+"\n\n")
@@ -198,20 +200,67 @@ func TestDeltasSentencesReachThePairedDevice(t *testing.T) {
 	if got[0] != b.said[0] || got[1] != b.said[1] {
 		t.Errorf("relayed %q, want the brain's events unchanged", got)
 	}
+	// The page plays the answers to its own sentences, so the brain may leave them out at the computer.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.plays) != 1 || b.plays[0] != "own" {
+		t.Errorf("X-Delta-Plays on /said: %q, want [own]", b.plays)
+	}
 }
 
-func TestDeltaShowsThePairingLinkUntilItIsUsed(t *testing.T) {
+// Delta's window always has a QR that works: a code used by a device, or 100 s old, is replaced at once by a new one,
+// so a scan pairs the next device in one step.
+func TestDeltasWindowAlwaysHoldsAFreshPairingLink(t *testing.T) {
 	b := newFakeBrain(t)
 	g, _ := voiceGateway(t, b) // pairs one device with the code it issues
-	g.s.issueCode()
 	_, links, _ := b.snapshot()
-	if len(links) < 3 {
-		t.Fatalf("links %q: want a link, its clearing once used, and the next link", links)
+	if len(links) != 2 || links[0] == links[1] {
+		t.Fatalf("links %q: want the first link, then a new one once it is used", links)
 	}
-	if !strings.Contains(links[0], "#code=") || links[1] != "" || !strings.Contains(links[2], "#code=") {
-		t.Errorf("links %q: want a #code= link, then \"\" once it is used, then a new link", links)
+	g.s.life = 50 * time.Millisecond
+	g.s.issueCode()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, links, _ = b.snapshot(); len(links) >= 5 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(links) < 5 {
+		t.Fatalf("links %q: want a new link each time a code ages out", links)
+	}
+	seen := map[string]bool{}
+	for _, l := range links {
+		if !strings.Contains(l, "#code=") {
+			t.Errorf("link %q: want every link to carry a code, never a cleared QR", l)
+		}
+		seen[l] = true
+	}
+	if len(seen) != len(links) {
+		t.Errorf("links %q: a code was shown twice", links)
 	}
 	if strings.Contains(strings.Join(links, " "), secret) {
 		t.Error("the brain's secret went into a link")
+	}
+}
+
+// The link file, which the scripts that start the gateway read, follows Delta's window: it holds the code that pairs
+// now, not the one the gateway printed when it started.
+func TestTheLinkFileHoldsTheCodeThatPairsNow(t *testing.T) {
+	b := newFakeBrain(t)
+	g, _ := voiceGateway(t, b)
+	g.s.linkFile = filepath.Join(t.TempDir(), "link.txt")
+	g.pair(t, g.s.issueCode()) // spends the code issued here, as a device scanning the printed link would
+	data, err := os.ReadFile(g.s.linkFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := strings.TrimSpace(string(data))
+	if _, links, _ := b.snapshot(); link != links[len(links)-1] {
+		t.Fatal("the link file holds another link than Delta's window")
+	}
+	_, code, _ := strings.Cut(link, "#code=")
+	if resp, _ := g.pair(t, code); resp.StatusCode != http.StatusOK {
+		t.Errorf("the link file's code: status %d, want 200", resp.StatusCode)
 	}
 }

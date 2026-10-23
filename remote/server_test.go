@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -23,7 +24,7 @@ type testGateway struct {
 func newTestGateway(t *testing.T, home string) *testGateway {
 	t.Helper()
 	g := &testGateway{now: time.Unix(1_800_000_000, 0)}
-	s, err := newServer(home, true)
+	s, err := newServer(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,9 +70,7 @@ func (g *testGateway) pair(t *testing.T, code string) (*http.Response, string) {
 // offer makes a receiving peer like the page's and returns it with the offer the page would post.
 func offer(t *testing.T) (*webrtc.PeerConnection, []byte) {
 	t.Helper()
-	se := webrtc.SettingEngine{}
-	se.SetIncludeLoopbackCandidate(true)
-	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(se)).NewPeerConnection(webrtc.Configuration{})
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(loopbackOnly())).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +90,38 @@ func offer(t *testing.T) (*webrtc.PeerConnection, []byte) {
 	<-gathered
 	body, _ := json.Marshal(pc.LocalDescription())
 	return pc, body
+}
+
+// Both peers of the tests gather on loopback only, with no mDNS name: a socket on another address makes Windows ask
+// for a firewall rule, and each test build is a new program to it.
+func TestTheTestsWebRTCStaysOnLoopback(t *testing.T) {
+	g := newTestGateway(t, t.TempDir())
+	_, cookie := g.pair(t, g.s.issueCode())
+	_, body := offer(t)
+	resp := g.do(t, "/offer", body, cookie, g.ts.URL)
+	var sent, answer webrtc.SessionDescription
+	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+		t.Fatalf("status %d: %v", resp.StatusCode, err)
+	}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatal(err)
+	}
+	for who, sdp := range map[string]string{"the page's peer": sent.SDP, "the gateway": answer.SDP} {
+		n := 0
+		for _, line := range strings.Split(sdp, "\n") {
+			if !strings.HasPrefix(line, "a=candidate:") {
+				continue
+			}
+			n++
+			f := strings.Fields(line)
+			if ip := net.ParseIP(f[min(4, len(f)-1)]); ip == nil || !ip.IsLoopback() {
+				t.Errorf("%s offers %q: want loopback only", who, strings.TrimSpace(line))
+			}
+		}
+		if n == 0 {
+			t.Errorf("%s offers no candidate", who)
+		}
+	}
 }
 
 func TestAPairingCodeIsTradedOnceForADeviceCookie(t *testing.T) {

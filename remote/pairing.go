@@ -18,13 +18,14 @@ import (
 const (
 	deviceCookie = "delta_device"
 	codeLife     = 2 * time.Minute
+	renewEvery   = 100 * time.Second // a new code before the brain's card counts the last one expired, at 120 s
 	codeTries    = 5
 	deviceLife   = 90 * 24 * time.Hour
 )
 
-// pairing holds the one pairing code a start of the gateway shows, and the devices paired so far. A code is single
-// use, lives two minutes and is burnt after five wrong tries; a device keeps a random cookie whose SHA-256 is kept in
-// the devices file, so the file never holds anything a device could present.
+// pairing holds the one pairing code open now, and the devices paired so far. A code is single use, lives two minutes
+// and is burnt after five wrong tries; a device keeps a random cookie whose SHA-256 is kept in the devices file, so
+// the file never holds anything a device could present.
 type pairing struct {
 	path string // the devices file
 
@@ -79,7 +80,7 @@ func (p *pairing) trade(code string, now time.Time) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.code == "" || now.After(p.expires) {
-		return "", errors.New("no pairing code is open: restart delta-remote for a new one")
+		return "", errors.New("no pairing code is open: scan the QR in Delta's window again")
 	}
 	if subtle.ConstantTimeCompare([]byte(code), []byte(p.code)) != 1 {
 		if p.misses++; p.misses >= codeTries {
