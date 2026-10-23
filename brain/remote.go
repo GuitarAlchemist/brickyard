@@ -43,6 +43,29 @@ type remote struct {
 	mu         sync.Mutex
 	transcribe func(samples []float32) (string, error) // nil until Delta's ears are ready
 	subs       map[chan []byte]struct{}                // the devices listening to /said
+	answers    map[int]replyTo                         // whom each sentence about to be said answers, by say_id
+}
+
+// replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, and by, who wrote it
+// (claude, local or ack).
+type replyTo struct{ utterance, by string }
+
+// attribute keeps whom a sentence about to be said answers, from its say note (mcp.go), until publish sends it.
+func (r *remote) attribute(say map[string]any) {
+	id, _ := say["say_id"].(int)
+	utterance, _ := say["utterance_id"].(string)
+	by, _ := say["by"].(string)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.answers == nil {
+		r.answers = map[int]replyTo{}
+	}
+	r.answers[id] = replyTo{utterance, by}
+	for old := range r.answers {
+		if old <= id-64 { // a sentence never said, such as an acknowledgement the mouth dropped
+			delete(r.answers, old)
+		}
+	}
 }
 
 // hearWith gives /hear Delta's ears, once whisper-server is ready.
@@ -167,9 +190,13 @@ func (r *remote) listened() bool {
 	return len(r.subs) > 0
 }
 
-// publish sends one sentence to every device listening, as it starts playing here; a device too slow to take it
-// misses it rather than holding Delta's voice back.
+// publish sends one sentence to every device listening, as it starts playing here, with the utterance it answers; a
+// device too slow to take it misses it rather than holding Delta's voice back.
 func (r *remote) publish(sayID int, text string, sound wav, path string) {
+	r.mu.Lock()
+	a := r.answers[sayID]
+	delete(r.answers, sayID)
+	r.mu.Unlock()
 	if !r.listened() {
 		return
 	}
@@ -177,8 +204,8 @@ func (r *remote) publish(sayID int, text string, sound wav, path string) {
 	if err != nil {
 		return
 	}
-	event, _ := json.Marshal(map[string]any{"say_id": sayID, "text": text, "seconds": sound.seconds,
-		"t_ms": time.Now().UnixMilli(), "wav_b64": base64.StdEncoding.EncodeToString(data)})
+	event, _ := json.Marshal(map[string]any{"say_id": sayID, "utterance_id": a.utterance, "by": a.by, "text": text,
+		"seconds": sound.seconds, "t_ms": time.Now().UnixMilli(), "wav_b64": base64.StdEncoding.EncodeToString(data)})
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for ch := range r.subs {

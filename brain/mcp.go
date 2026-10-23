@@ -106,6 +106,7 @@ type mcpServer struct {
 	record     func(event string, fields map[string]any)                       // the journal, if any
 	show       func(line map[string]any)                                       // sends Delta's window a line, if it has one (window.go)
 	tell       func(line map[string]any)                                       // the same, without bringing back a window the user closed
+	attribute  func(say map[string]any)                                        // learns whom each sentence answers, from its say note, if set (remote.go)
 	listenMin  time.Duration
 	listenMax  time.Duration
 	gate       wakeGate
@@ -623,6 +624,9 @@ func (m *mcpServer) remember(line string) {
 func (m *mcpServer) note(event string, fields map[string]any) {
 	if m.record != nil {
 		m.record(event, fields)
+	}
+	if event == "say" && m.attribute != nil {
+		m.attribute(fields)
 	}
 }
 

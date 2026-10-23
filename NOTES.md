@@ -390,7 +390,9 @@ over WebRTC. The brain's side, as agreed with IX's session (`brain/remote.go`):
 
   It answers 202 with `{"utterance_id","text","route"}`, or 503 until the ears are ready.
 - **`GET /said`** streams server-sent events, one per sentence as it starts playing here:
-  `{"say_id","text","seconds","t_ms","wav_b64"}`, the sentence's WAV after the warm voice. A device too slow to take an
+  `{"say_id","utterance_id","by","text","seconds","t_ms","wav_b64"}`, the sentence's WAV after the warm voice.
+  `utterance_id` is the sentence it answers, as `/hear` returned it, or "" when it answers none; `by` says who wrote
+  it, `claude`, `local` or `ack`. Both are the journal's `say` line for that `say_id`. A device too slow to take an
   event misses it rather than holding the voice back. A comment line every 15 s keeps the stream open. It carries what
   Delta says even when the brain is muted.
 - **Security**, from IX's review.
@@ -535,6 +537,15 @@ cut to 200 characters, and the scene shows it for five seconds in a caption cent
 Dis « Delta » d'abord. » in bold, then the sentence in quotes, on a dark card with an amber edge, coming in over 0.2 s
 and fading over the last 0.8 s. Only for that reason: not a filler, nor a sentence that calls another session, and it
 does not bring back a window the user closed. `--demo` ends with the caption, and `--shots` saves `ignored`.
+
+## Which question an answer answers (2026-10-22, night)
+
+brutal proposed it, for Gaia's proof of a remote exchange: a device that asks a question could match the answer only
+by timing. Each `/said` event now carries the `utterance_id` it answers and `by`, which the remote takes from the
+`say` note itself, journal or not, so that the two cannot disagree. A note whose sentence is never said, such as a
+dropped acknowledgement, is forgotten 64 sentences later. Left for later, as brutal noted: ids start again at 1 when
+the brain restarts, a device that misses an event cannot tell, and the `channel` route says nothing of when an answer
+will come.
 
 ## Known problems
 
