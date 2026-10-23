@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -28,73 +29,145 @@ func captureArgs(hwnd uintptr, port int) []string {
 	}
 }
 
-// capture runs ffmpeg while a device is connected and forwards its RTP packets to the video track.
+// capture runs ffmpeg on Delta's window while a device is connected and forwards its RTP packets to the video
+// track. It looks for the window again every followEvery, so that the picture comes back by itself when the window
+// appears late, or when the brain replaces it with a new one.
 type capture struct {
-	ffmpeg, title, exe string
-	conn               *net.UDPConn
-	track              *webrtc.TrackLocalStaticRTP
+	conn  *net.UDPConn
+	track *webrtc.TrackLocalStaticRTP
+	find  func() (uintptr, error)                                // Delta's window
+	start func(hwnd uintptr, exited func(error)) (func(), error) // runs ffmpeg on it; the func returned stops it
 
-	mu  sync.Mutex
-	cmd *exec.Cmd
+	mu     sync.Mutex
+	on     bool    // a device is connected
+	stop   func()  // stops the ffmpeg that runs, or is nil
+	hwnd   uintptr // the window it shows
+	runs   int     // counts the ffmpeg started, so that the end of one stopped on purpose is not taken for the next's
+	missed string  // the last lookup error printed, so that it is said once and not every followEvery
 }
+
+const followEvery = 2 * time.Second
 
 func newCapture(ffmpeg, title, exe string, track *webrtc.TrackLocalStaticRTP) (*capture, error) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		return nil, err
 	}
-	c := &capture{ffmpeg: ffmpeg, title: title, exe: exe, conn: conn, track: track}
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	c := &capture{conn: conn, track: track, find: func() (uintptr, error) { return findWindow(title, exe) }}
+	c.start = func(hwnd uintptr, exited func(error)) (func(), error) {
+		cmd := exec.Command(ffmpeg, captureArgs(hwnd, port)...)
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		go func() { exited(cmd.Wait()) }()
+		return func() { cmd.Process.Kill() }, nil
+	}
 	go c.forward()
+	go func() {
+		for range time.Tick(followEvery) {
+			c.follow()
+		}
+	}()
 	return c, nil
 }
 
 func (c *capture) forward() {
 	buf := make([]byte, 1600)
 	var p rtp.Packet
+	var r renumber
 	for {
 		n, _, err := c.conn.ReadFromUDP(buf)
 		if err != nil {
 			return
 		}
 		if p.Unmarshal(buf[:n]) == nil {
+			r.apply(&p)
 			c.track.WriteRTP(&p)
 		}
 	}
 }
 
-// run starts ffmpeg when on is true and stops it otherwise. The window is looked up again at each start.
+// renumber makes the packets of successive ffmpeg, each with its own SSRC and its own random first sequence number
+// and timestamp, one stream that carries on: a browser drops packets that seem older than the ones it has seen.
+type renumber struct {
+	ssrc      uint32
+	begun     bool
+	seq       uint16 // added to each packet's sequence number
+	ts        uint32 // and to its timestamp
+	lastSeq   uint16
+	lastStamp uint32
+}
+
+// frameTicks is a frame at 30 fps on H.264's 90 kHz RTP clock, the gap left between two captures.
+const frameTicks = 90000 / 30
+
+func (r *renumber) apply(p *rtp.Packet) {
+	if !r.begun || p.SSRC != r.ssrc {
+		if r.begun {
+			r.seq = r.lastSeq + 1 - p.SequenceNumber
+			r.ts = r.lastStamp + frameTicks - p.Timestamp
+		}
+		r.ssrc, r.begun = p.SSRC, true
+	}
+	p.SequenceNumber += r.seq
+	p.Timestamp += r.ts
+	r.lastSeq, r.lastStamp = p.SequenceNumber, p.Timestamp
+}
+
+// run starts the capture when on is true and stops it otherwise.
 func (c *capture) run(on bool) {
 	c.mu.Lock()
+	c.on = on
+	c.mu.Unlock()
+	c.follow()
+}
+
+// follow brings the capture in line: stopped while no device is connected, else on the one window found, and started
+// again on a new one. When no single window is found, what runs is left alone, since the window it shows may still
+// be open beside a second one.
+func (c *capture) follow() {
+	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !on {
-		if c.cmd != nil {
-			c.cmd.Process.Kill()
-			c.cmd = nil
+	if !c.on {
+		c.halt()
+		c.missed = ""
+		return
+	}
+	hwnd, err := c.find()
+	if err != nil {
+		if err.Error() != c.missed {
+			fmt.Fprintln(os.Stderr, "delta-remote:", err)
+			c.missed = err.Error()
 		}
 		return
 	}
-	if c.cmd != nil {
+	c.missed = ""
+	if c.stop != nil && hwnd == c.hwnd {
 		return
 	}
-	hwnd, err := findWindow(c.title, c.exe)
+	c.halt()
+	c.runs++
+	run := c.runs
+	stop, err := c.start(hwnd, func(err error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.runs == run && c.stop != nil {
+			fmt.Fprintln(os.Stderr, "delta-remote: the capture stopped:", err)
+			c.stop = nil
+		}
+	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "delta-remote:", err)
-		return
-	}
-	cmd := exec.Command(c.ffmpeg, captureArgs(hwnd, c.conn.LocalAddr().(*net.UDPAddr).Port)...)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "delta-remote: ffmpeg:", err)
 		return
 	}
-	c.cmd = cmd
-	go func() {
-		err := cmd.Wait()
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.cmd == cmd {
-			fmt.Fprintln(os.Stderr, "delta-remote: the capture stopped:", err)
-			c.cmd = nil
-		}
-	}()
+	c.stop, c.hwnd = stop, hwnd
+}
+
+func (c *capture) halt() {
+	if c.stop != nil {
+		c.stop()
+		c.stop = nil
+	}
 }

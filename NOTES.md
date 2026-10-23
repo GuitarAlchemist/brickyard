@@ -667,6 +667,20 @@ conversation, or brings it back, and on a tablet also puts the page full screen,
 in headless Chrome, with the window's 1280×720 test card: at 1280×800 the window is 880×760 and the column 384 px; at
 800×1280 the window is 784×441; at 390×844, a phone, it is 358×201, as before.
 
+## The tablet's picture after Delta's window changed (2026-10-23)
+
+Around 19:41 the tablet connected and showed « connecté à Delta » with no picture (utterances 5 and 7). Two windows titled
+« Brickyard » were open, Delta's and a scene demo IX had opened to show a new look, and the gateway's log says twice
+`2 windows "Brickyard" of scene.exe are open; the capture shows one or none`. The capture looked for the window once,
+when a device connected, and never again: the demo's window closing did not bring the picture back, nor would a new
+window from a brain started again, as each reconnection of `/mcp` does. While a device is connected the gateway now
+looks for the window every 2 s: it starts the capture once there is one window, starts it again on a new window, and
+again when ffmpeg ends; a second window beside the one it shows leaves it as it is, and the error is written once,
+not every 2 s. Each ffmpeg numbers its RTP packets from a random start, so the packets of a capture started again
+carry on from the last ones sent: a browser drops packets that seem older than the ones it has seen. The three tests,
+on a fake window and a fake ffmpeg, went red first. Still to see live: the picture coming back on the tablet after a
+`/mcp` reconnection, and how long the browser takes over the jump to the new capture.
+
 ## Known problems
 
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
