@@ -79,8 +79,12 @@ func TestWavEnvelope(t *testing.T) {
 }
 
 // A fake Piper: the test binary itself, run with BRAIN_FAKE_PIPER set. For each line it writes a WAV into
-// --output_dir and prints its path, as Piper does.
+// --output_dir and prints its path, as Piper does. With BRAIN_FAKE_WHISPER set, it is a fake whisper-server instead
+// (ears_test.go).
 func TestMain(m *testing.M) {
+	if os.Getenv("BRAIN_FAKE_WHISPER") != "" {
+		fakeWhisper()
+	}
 	if os.Getenv("BRAIN_FAKE_PIPER") == "" {
 		os.Exit(m.Run())
 	}
