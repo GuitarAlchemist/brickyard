@@ -513,6 +513,20 @@ notice. The mouth drops it, with an `unsaid` line, when something waits behind i
 it would start more than 1.5 s late. From the phone, it replaces the chime, which now plays only when Delta answers
 nothing at once. The heard line's `ack` ties the sentence to the word; their `speaking` line times the first sound.
 
+## Questions of fact, answered locally (2026-10-22, night)
+
+The author also approved, through brutal, more local answers. `brain/facts.go` gives the triage's model a fact sheet
+the brain writes for each question: the day and the time in Delta's language, its version as a voice can read it
+(« 0.4.0, a development build 8 commits after it » rather than a git describe), where Whisper runs, the small model,
+and one line each on Brickyard and IX. The model answers with JSON constrained to `known`, then `answer`. A rule picks
+the questions first, by a question mark or a question word and a word the sheet covers, so that other sentences do not
+wait for a second call. An answer that promises work is overruled, as the triage's are.
+
+Measured before writing it, with qwen3:8b warm and the same prompt and schema, on nine questions: answers in 230 to
+550 ms (the time, the day, the version, IX, where Whisper runs), and `known` false in 148 to 169 ms for the time in
+Tokyo, reviewing a pull request, writing the time into a file, and what was done today. The end-to-end time, from the
+end of speech to the first sound, is still to measure live.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although

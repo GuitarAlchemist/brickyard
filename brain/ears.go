@@ -105,6 +105,18 @@ func (e *ears) start(server string, args []string, addr string) error {
 	return fmt.Errorf("ears: %s did not open %s within 60 s", server, addr)
 }
 
+// where says where the server running now transcribes, as its folder names it: a build in a folder named for CUDA or
+// Vulkan is taken for the graphics card's.
+func (e *ears) where() string {
+	e.mu.Lock()
+	server := strings.ToLower(e.server)
+	e.mu.Unlock()
+	if strings.Contains(server, "cuda") || strings.Contains(server, "vulkan") {
+		return "on the graphics card"
+	}
+	return "on the processor"
+}
+
 // hear transcribes 16 kHz mono samples. When the server died, the next one takes over and hears them.
 func (e *ears) hear(samples []float32) (string, error) {
 	text, err := e.ask(samples)
