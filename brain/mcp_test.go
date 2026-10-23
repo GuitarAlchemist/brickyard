@@ -404,3 +404,100 @@ func TestClaudeMovesDeltasWindowAndWalksItsShelf(t *testing.T) {
 		t.Fatalf("no window, yet %v", r)
 	}
 }
+
+// A sentence for Claude gets a word at once, which the journal ties to it, a different word each time; not one heard
+// while Delta speaks.
+func TestDeltaAcknowledgesASentenceForClaudeAtOnce(t *testing.T) {
+	var acks []string
+	var records []map[string]any
+	quiet := true
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.lang = languages["fr"]
+		m.ack = func(text string, id int) { acks = append(acks, fmt.Sprint(id, " ", text)) }
+		m.quiet = func() bool { return quiet }
+		m.record = func(event string, fields map[string]any) { fields["event"] = event; records = append(records, fields) }
+	})
+	now := time.Now()
+	m.hear(utterance{text: "Delta, quelle heure est-il ?"}, now)
+	next(t, out)
+	if len(acks) != 1 || acks[0] != "1 "+languages["fr"].acks[0] {
+		t.Fatalf("%q", acks)
+	}
+	say, heard := records[0], records[1]
+	if say["event"] != "say" || say["by"] != "ack" || say["say_id"] != 1 || say["utterance_id"] != "1" ||
+		heard["event"] != "heard" || heard["ack"] != 1 {
+		t.Fatalf("%v", records)
+	}
+	m.hear(utterance{text: "Delta, et demain ?"}, now.Add(time.Second))
+	next(t, out)
+	if len(acks) != 2 || acks[1] != "2 "+languages["fr"].acks[1] {
+		t.Fatalf("the next word: %q", acks)
+	}
+	quiet = false
+	m.hear(utterance{text: "Delta, encore une chose."}, now.Add(2*time.Second))
+	next(t, out)
+	if len(acks) != 2 {
+		t.Fatalf("while Delta speaks: %q", acks)
+	}
+}
+
+// The mouth drops an acknowledgement that something waits behind, such as Claude's answer, or that comes too late.
+func TestAnAcknowledgementGivesWayToTheAnswer(t *testing.T) {
+	now := time.Now()
+	ack := said{text: "Une seconde.", ack: true, at: now}
+	for _, c := range []struct {
+		s       said
+		waiting int
+		after   time.Duration
+		dropped bool
+	}{
+		{ack, 0, 200 * time.Millisecond, false},
+		{ack, 1, 200 * time.Millisecond, true},
+		{ack, 0, 2 * time.Second, true},
+		{said{text: "La réponse."}, 3, time.Hour, false},
+	} {
+		if why := unsaid(c.s, c.waiting, now.Add(c.after)); (why != "") != c.dropped {
+			t.Errorf("%+v, %d waiting, after %v: %q", c.s, c.waiting, c.after, why)
+		}
+	}
+}
+
+// A sentence the wake gate let pass for want of « Delta » shows in the window, so that the user knows it was heard;
+// without bringing a closed window back, and not a filler, nor a sentence for another session.
+func TestTheWindowShowsWhatDeltaIgnored(t *testing.T) {
+	var told, shown []map[string]any
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.tell = func(line map[string]any) { told = append(told, line) }
+		m.show = func(line map[string]any) { shown = append(shown, line) }
+	})
+	now := time.Now().Add(time.Hour)
+	for _, text := range []string{"Est-ce que tu peux danser ?", "Euh...", "Gaïa, lance le watcher."} {
+		if where := m.hear(utterance{text: text}, now); where != "ignored" {
+			t.Fatalf("%q went to %s", text, where)
+		}
+	}
+	silent(t, out)
+	if len(told) != 1 || told[0]["ignored"] != "Est-ce que tu peux danser ?" || len(shown) != 0 {
+		t.Fatalf("told %v, shown %v", told, shown)
+	}
+	long := strings.Repeat("blabla ", 60)
+	m.hear(utterance{text: long}, now)
+	if got := told[1]["ignored"].(string); len([]rune(got)) > 200 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("a long sentence is cut: %d runes", len([]rune(got)))
+	}
+}
+
+// The remote learns whom each sentence answers from its say note, journal or not (remote.go).
+func TestTheSayNoteTellsTheRemoteWhomASentenceAnswers(t *testing.T) {
+	var s spoken
+	var told []map[string]any
+	_, in, out := startServer(t, func(m *mcpServer) {
+		m.speak = s.speak
+		m.attribute = func(say map[string]any) { told = append(told, say) }
+	})
+	call(in, 1, "say", `{"text":"Il est midi.","utterance_id":"4"}`)
+	next(t, out)
+	if len(told) != 1 || told[0]["say_id"] != 1 || told[0]["utterance_id"] != "4" || told[0]["by"] != "claude" {
+		t.Fatalf("%v", told)
+	}
+}

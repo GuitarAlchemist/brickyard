@@ -2,13 +2,17 @@ package main
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestEndpointCutsAnUtterance(t *testing.T) {
@@ -69,6 +73,112 @@ func TestEarsHear(t *testing.T) {
 	text, err := (&ears{url: server.URL}).hear(make([]float32, 1600))
 	if err != nil || text != "Bonjour Delta." {
 		t.Fatalf("%q %v", text, err)
+	}
+}
+
+// fakeWhisper is whisper-server as the test binary plays it, copied under a name that says how it behaves: "broken"
+// stops at once, as a GPU build without its libraries; "dies" hears its first request, the warm-up, then stops at the
+// next; any other answers every request with its own name.
+func fakeWhisper() {
+	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
+	if name == "broken" {
+		os.Exit(1)
+	}
+	port := ""
+	for i, a := range os.Args {
+		if a == "--port" {
+			port = os.Args[i+1]
+		}
+	}
+	heard := 0
+	http.HandleFunc("/inference", func(w http.ResponseWriter, r *http.Request) {
+		if heard++; name == "dies" && heard > 1 {
+			os.Exit(2)
+		}
+		if name == "hangs" && heard > 1 { // as a graphics driver that stopped answering
+			time.Sleep(time.Hour)
+		}
+		fmt.Fprintf(w, `{"text":%q}`, name)
+	})
+	http.ListenAndServe("127.0.0.1:"+port, nil)
+	os.Exit(3)
+}
+
+// A GPU build of whisper.cpp that cannot start, dies or hangs leaves Delta hearing with the next server, the CPU build;
+// so does a chain of servers that cannot start, and a sentence heard while another takes over.
+func TestTheEarsFallBackOnTheNextServer(t *testing.T) {
+	t.Setenv("BRAIN_FAKE_WHISPER", "1")
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := func(name string) string {
+		path := filepath.Join(t.TempDir(), name+".exe")
+		if err := os.WriteFile(path, self, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	broken, dies, hangs, cpu := server("broken"), server("dies"), server("hangs"), server("cpu")
+	start := func(servers ...string) *ears {
+		e, err := startEars(servers, "model.bin", "fr", freePort(), 1, "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(e.close)
+		return e
+	}
+
+	e := start(broken, cpu)
+	if text, err := e.hear(make([]float32, 1600)); text != "cpu" || err != nil || e.server != cpu || len(e.failed) != 1 {
+		t.Fatalf("%q %v, %s after %v", text, err, e.server, e.failed)
+	}
+
+	e = start(dies, cpu)
+	var fell []string
+	e.fell = func(server, why string) { fell = append(fell, server, why) }
+	if text, err := e.hear(make([]float32, 1600)); text != "cpu" || err != nil {
+		t.Fatalf("after the first server died: %q %v", text, err)
+	}
+	if len(fell) != 2 || fell[0] != cpu || !strings.Contains(fell[1], "dies.exe died") {
+		t.Fatalf("%q", fell)
+	}
+
+	e = start(dies, broken, cpu)
+	fell = nil
+	e.fell = func(server, why string) { fell = append(fell, server, why) }
+	if text, err := e.hear(make([]float32, 1600)); text != "cpu" || err != nil {
+		t.Fatalf("after a chain of failures: %q %v", text, err)
+	}
+	if len(fell) != 2 || !strings.Contains(fell[1], "dies.exe died: Post") || !strings.Contains(fell[1], "broken.exe stopped") {
+		t.Fatalf("the message names each server with its own failure: %q", fell)
+	}
+
+	e = start(hangs, cpu)
+	e.patience = 300 * time.Millisecond
+	fell = nil
+	e.fell = func(server, why string) { fell = append(fell, server, why) }
+	if text, err := e.hear(make([]float32, 1600)); text != "cpu" || err != nil || len(fell) != 2 || !strings.Contains(fell[1], "hangs.exe did not answer") {
+		t.Fatalf("after the first server hung: %q %v %q", text, err, fell)
+	}
+
+	e = start(dies, cpu)
+	var wg sync.WaitGroup
+	texts, errs := make([]string, 2), make([]error, 2)
+	for i := range 2 { // the microphone and another device at once
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			texts[i], errs[i] = e.hear(make([]float32, 1600))
+		}()
+	}
+	wg.Wait()
+	if texts[0] != "cpu" || texts[1] != "cpu" || errs[0] != nil || errs[1] != nil {
+		t.Fatalf("two sentences while the next server takes over: %q %v", texts, errs)
+	}
+
+	if _, err := startEars([]string{broken}, "model.bin", "fr", freePort(), 1, "", 0); err == nil || !strings.Contains(err.Error(), "broken.exe") {
+		t.Fatalf("no server can hear: %v", err)
 	}
 }
 

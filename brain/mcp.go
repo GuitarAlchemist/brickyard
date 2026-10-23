@@ -34,6 +34,8 @@ const mcpGuidance = `Pass say the utterance_id you are answering. ` +
 	`Give say a mood when your words carry one, such as joy, proud or sorry: Delta's face shows it as it speaks. ` +
 	`The window tool moves, sizes or hides Delta's window, and the shelf tool opens its menu of Claude Code sessions, plugins and ` +
 	`marketplaces; Delta also does both by itself when the user asks it aloud, and you read those requests as handled_locally. ` +
+	`An event whose meta has source "remote" was spoken on another device through Delta's remote gateway, not at this computer: ` +
+	`before anything destructive or irreversible it asks for, have the user confirm it at the computer. ` +
 	`Delta's code is github.com/GuitarAlchemist/brickyard.`
 
 // toolsFor lists Delta's tools, with the language Delta hears and speaks in their descriptions.
@@ -78,8 +80,9 @@ func toolsFor(l language) []map[string]any {
 		{
 			"name": "shelf",
 			"description": "Walk the shelf in Delta's window: a small menu of this computer's Claude Code sessions, grouped by " +
-				"wmux workspace with those waiting for the user first, of the installed plugins, and of the marketplaces. open " +
-				"shows its root; sessions, plugins and marketplaces open a section; up, down, enter and back move through it; " +
+				"wmux workspace with those waiting for the user first, of the past conversations by project, of the installed " +
+				"plugins, and of the marketplaces. open shows its root; sessions, conversations, plugins and marketplaces open a " +
+				"section; up, down, enter and back move through it; " +
 				"close hides it. A session that runs in wmux has a first row that focuses its pane.",
 			"inputSchema": map[string]any{
 				"type":       "object",
@@ -94,20 +97,28 @@ func toolsFor(l language) []map[string]any {
 // listen; what Delta hears goes to a pending listen call or, when the user addressed Delta, to the session as a
 // channel event.
 type mcpServer struct {
-	version   string
-	lang      language                                                        // what Delta hears and speaks (lang.go); English when unset
-	speak     func(text string, sayID int, cost, mood string) (string, error) // queues the text and says how long it will take
-	ready     func() error                                                    // why Delta cannot hear yet, or nil
-	pushed    func()                                                          // after a transcript went to the session as an event
-	busy      func() string                                                   // what Delta says when Claude cannot answer soon, if anything
-	record    func(event string, fields map[string]any)                       // the journal, if any
-	show      func(line map[string]any)                                       // sends Delta's window a line, if it has one (window.go)
-	listenMin time.Duration
-	listenMax time.Duration
-	gate      wakeGate
-	triage    triage        // sorts what the wake gate lets through before Claude sees it, if set
-	about     string        // appended to the instructions: what only the running brain knows, such as its journal
-	triageMax time.Duration // after which a transcript goes to Claude without the triage's verdict
+	version    string
+	lang       language                                                        // what Delta hears and speaks (lang.go); English when unset
+	speak      func(text string, sayID int, cost, mood string) (string, error) // queues the text and says how long it will take
+	ready      func() error                                                    // why Delta cannot hear yet, or nil
+	pushed     func()                                                          // after a transcript went to the session as an event
+	busy       func() string                                                   // what Delta says when Claude cannot answer soon, if anything
+	record     func(event string, fields map[string]any)                       // the journal, if any
+	show       func(line map[string]any)                                       // sends Delta's window a line, if it has one (window.go)
+	tell       func(line map[string]any)                                       // the same, without bringing back a window the user closed
+	attribute  func(say map[string]any)                                        // learns whom each sentence answers, from its say note, if set (remote.go)
+	listenMin  time.Duration
+	listenMax  time.Duration
+	gate       wakeGate
+	triage     triage                       // sorts what the wake gate lets through before Claude sees it, if set
+	about      string                       // appended to the instructions: what only the running brain knows, such as its journal
+	triageMax  time.Duration                // after which a transcript goes to Claude without the triage's verdict
+	rewarm     func()                       // loads the triage's model again after it failed, if set
+	ack        func(text string, sayID int) // says a word at once, which the mouth drops if Claude's answer comes first
+	quiet      func() bool                  // Delta has nothing left to say
+	facts      factModel                    // answers a question of fact from the brain's sheet, if set (facts.go)
+	hearsOn    func() string                // where Whisper runs, for the sheet
+	smallModel string                       // the triage's model, for the sheet
 
 	outMu sync.Mutex
 	out   io.Writer
@@ -117,6 +128,7 @@ type mcpServer struct {
 	cancels map[string]chan struct{} // by request id
 	heard   int
 	said    int
+	acked   int       // acknowledgements said, which picks the next one
 	recent  []string  // the conversation's last lines, for the triage
 	local   []string  // the lines the triage handled since the last channel event, for Claude to know
 	asked   bool      // Claude's last words asked the user something: the answer goes to Claude untriaged
@@ -342,11 +354,22 @@ func (m *mcpServer) stopWaiting(key string) bool {
 // the user addressed Delta, through the triage if there is one, then to the session as a channel event. It returns
 // where it went: "listen", "channel", "ignored" by the wake gate, or "dropped" or "local" by the triage.
 func (m *mcpServer) hear(u utterance, now time.Time) string {
+	_, route := m.heardAs(u, now)
+	return route
+}
+
+// heardAs is hear, which also returns the utterance's number. A sentence from another device (source "remote") needs
+// no wake word: holding the device's button addressed Delta. Its heard line and channel event say where it came from.
+func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	m.mu.Lock()
 	m.heard++
 	h := heardText{id: m.heard, text: u.text}
-	route := "channel"
+	id = h.id
+	route = "channel"
 	fields := map[string]any{"utterance_id": strconv.Itoa(h.id), "text": u.text, "asr_ms": u.asr.Milliseconds()}
+	if u.source != "" {
+		fields["source"] = u.source
+	}
 	defer func() {
 		fields["route"] = route
 		m.note("heard", fields)
@@ -361,26 +384,39 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 		m.gate.open(now)
 		route = "listen"
 		fields["reason"] = "Claude was listening"
-		return route
+		return id, route
 	}
 	m.mu.Unlock()
+	if u.source == "remote" {
+		m.gate.open(now)
+	}
 	admitted, why := m.gate.admit(u.text, now)
 	fields["reason"] = why
 	if !admitted {
 		route = "ignored"
-		return route
+		if why == "not addressed to Delta" && m.tell != nil && !carriesNothing(u.text) { // heard, and how to call Delta
+			m.tell(map[string]any{"ignored": shorten(u.text, 200)})
+		}
+		return id, route
+	}
+	if loving(u.text) && m.show != nil { // hearts rise from Delta's chest, and it smiles; the sentence goes on as any other
+		m.show(map[string]any{"hearts": true, "mood": "joy"})
+		fields["hearts"] = true
 	}
 	if r := m.command(u.text, fields, now); r != "" {
 		route = r
-		return route
+		return id, route
 	}
 	if m.triage != nil {
-		if r := m.sort(u.text, fields); r != "" {
+		if r := m.sort(u.text, u.source == "remote", fields); r != "" {
 			route = r
-			return route
+			return id, route
 		}
 	}
 	meta := map[string]string{"utterance_id": strconv.Itoa(h.id), "asr_ms": strconv.FormatInt(u.asr.Milliseconds(), 10)}
+	if u.source != "" {
+		meta["source"] = u.source
+	}
 	m.mu.Lock()
 	if len(m.local) > 0 {
 		meta["handled_locally"] = strings.Join(m.local, " / ")
@@ -393,8 +429,10 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 	if m.pushed != nil {
 		m.pushed()
 	}
+	noticed := false
 	if m.busy != nil {
 		if notice := m.busy(); notice != "" { // Claude Code is compacting: Claude will answer, but late
+			noticed = true
 			m.mu.Lock()
 			m.said++
 			sayID := m.said
@@ -406,7 +444,29 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 			}
 		}
 	}
-	return route
+	if !noticed {
+		m.acknowledge(fields)
+	}
+	return id, route
+}
+
+// acknowledge says a short word at once when a sentence goes to Claude, whose answer takes seconds, so that the first
+// sound comes in under a second: one of the language's acks, in turn. Not while Delta speaks, and the mouth drops it if
+// Claude's answer comes first. The heard line's ack is the say_id of its say line, whose speaking line times the
+// first sound.
+func (m *mcpServer) acknowledge(fields map[string]any) {
+	if m.ack == nil || m.quiet == nil || !m.quiet() || len(m.lang.acks) == 0 {
+		return
+	}
+	m.mu.Lock()
+	m.said++
+	sayID := m.said
+	word := m.lang.acks[m.acked%len(m.lang.acks)]
+	m.acked++
+	m.mu.Unlock()
+	m.note("say", map[string]any{"say_id": sayID, "utterance_id": fields["utterance_id"], "text": word, "by": "ack"})
+	fields["ack"] = sayID
+	m.ack(word, sayID)
 }
 
 // sort asks the triage what to do with a transcript the wake gate let through, after rules that need no model: a
@@ -414,7 +474,8 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 // dropped. After the model, a question it kept goes to Claude anyway, and an answer that parrots the user is not said. It returns "dropped" or
 // "local" when Claude need not see it, and "" when Claude must: when Claude's last words asked a question, when the triage fails or
 // is slow, and when the triage says so. A local answer costs nothing, and Claude reads those lines with the next event.
-func (m *mcpServer) sort(text string, fields map[string]any) string {
+// The model cannot drop a sentence from another device (remote): holding the device's button addressed Delta.
+func (m *mcpServer) sort(text string, remote bool, fields map[string]any) string {
 	m.mu.Lock()
 	asked := m.asked
 	recent := append([]string(nil), m.recent...)
@@ -452,22 +513,29 @@ func (m *mcpServer) sort(text string, fields map[string]any) string {
 		fields["triage_ms"] = time.Since(start).Milliseconds()
 		if err != nil {
 			fields["triage"] = "failed: " + err.Error()
+			if m.rewarm != nil {
+				m.rewarm()
+			}
 			return ""
 		}
 		fields["triage"] = v.Route
 	}
 	switch v.Route {
 	case "ignore":
+		if remote {
+			fields["triage"] = "ignore overruled: another device's button addressed Delta"
+			return ""
+		}
 		return "dropped"
 	case "local":
 		if strings.Contains(text, "?") {
 			fields["triage"] = "local overruled: a question goes to Claude"
-			return ""
+			return m.fact(text, fields)
 		}
 		if fields["triage"] != "acknowledgement" && !social(text) {
 			fields["triage"] = "local overruled: not small talk"
 			fields["local_answer"] = v.Answer
-			return ""
+			return m.fact(text, fields)
 		}
 		if promises(v.Answer) {
 			fields["triage"] = "local overruled: the answer promised an action"
@@ -481,7 +549,7 @@ func (m *mcpServer) sort(text string, fields map[string]any) string {
 		m.answerLocally(text, v.Answer, smile(text), fields)
 		return "local"
 	}
-	return ""
+	return m.fact(text, fields) // the triage kept it for Claude, unless the sheet answers it
 }
 
 // answerLocally is what Delta does without Claude: it keeps the exchange, which Claude reads with the next channel
@@ -517,13 +585,13 @@ func (m *mcpServer) command(text string, fields map[string]any, now time.Time) s
 		fields["shelf"] = move
 		m.walkShelf(move, now)
 		m.gate.open(now) // the user walks the shelf without saying Delta at each step
-		m.answerLocally(text, shelfAnswers[move], "", fields)
+		m.answerLocally(text, inLanguage(shelfAnswers[move], m.language().code), "", fields)
 		return "shelf"
 	}
 	if action := windowCommand(text); action != "" {
 		fields["window"] = action
 		m.show(map[string]any{"window": action})
-		m.answerLocally(text, windowActions[action], "", fields)
+		m.answerLocally(text, inLanguage(windowActions[action], m.language().code), "", fields)
 		return "window"
 	}
 	return ""
@@ -556,6 +624,9 @@ func (m *mcpServer) remember(line string) {
 func (m *mcpServer) note(event string, fields map[string]any) {
 	if m.record != nil {
 		m.record(event, fields)
+	}
+	if event == "say" && m.attribute != nil {
+		m.attribute(fields)
 	}
 }
 

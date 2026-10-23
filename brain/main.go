@@ -89,7 +89,7 @@ func main() {
 		fail(err)
 	}
 	if *transcribe {
-		e, err := startEars(*whisper, *whisperModel, l.code, *earsPort, *threads, "Delta, Brickyard.", *audioCtx)
+		e, err := startEars([]string{*whisper}, *whisperModel, l.code, *earsPort, *threads, "Delta, Brickyard.", *audioCtx)
 		if err != nil {
 			fail(err)
 		}
@@ -147,13 +147,10 @@ func main() {
 	var e *ears
 	if *whisper != "" {
 		start = time.Now()
-		if e, err = startEars(*whisper, *whisperModel, l.code, *earsPort, *threads, "Delta, Brickyard.", *audioCtx); err != nil {
+		if e, err = startEars([]string{*whisper}, *whisperModel, l.code, *earsPort, *threads, "Delta, Brickyard.", *audioCtx); err != nil {
 			fail(err)
 		}
 		defer e.close()
-		if _, err := e.hear(make([]float32, earsRate)); err != nil { // loads the model's weights and kernels
-			fail(err)
-		}
 		fmt.Printf("ears ready on %s in %d ms\n", e.url, time.Since(start).Milliseconds())
 	}
 

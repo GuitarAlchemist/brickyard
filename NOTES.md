@@ -362,11 +362,179 @@ After the plugin's first release, the author asked: « il faut que ça marche po
     French voice from `delta.json` and kept `triage`.
 - **The v0.2.0 release works from an empty folder.** Its workflow published the zip. `setup.ps1` installed it into an
   empty folder, checked it against the asset's digest, and `brain.exe -version` printed 0.2.0.
-- **Still in French only**, in Delta Live's files. In English, these requests go to Claude, which has the window and
-  shelf tools.
-  - the local window and shelf commands (`window.go`);
-  - the triage's prompt and its local answers (`triage.go`);
-  - the sentence Delta says while Claude Code compacts (`hooks.go`).
+- **Delta Live's files in English too**, the same evening.
+  - Requests are read in both languages whatever the setting: the window and shelf phrases, the fillers, the
+    acknowledgements, the small talk and the promises a local answer must not make. A French word in an English
+    session is read as before.
+  - What Delta says follows the setting: the window and shelf answers, the triage's prompt and the language of its
+    local answers, the sentence said during a compaction, and « IX », read « ixe » by the French voice and "I X" by
+    the English one. The French prompt is word for word the one the corpus was measured with.
+  - English is riskier to match than French: "move", "go", "right" and "hide" are common words. A place needs its
+    preposition ("to the right"), and "hide", "open", "up" or "down" count only as the whole request. "Delta, hide
+    the terminal", "go ahead, all right" and "move the file to the left folder" go to Claude.
+  - The scene's shelf learns the language from a `{"language":"en"|"fr"}` line, which the brain sends first on every
+    connection, so that a window started later, or by another brain, knows it too. `--lang fr` sets it for shots.
+
+## Another device, through a gateway (2026-10-22, night)
+
+IX is building a gateway that lets the author speak to Delta from a phone or another computer on the local network,
+over WebRTC. The brain's side, as agreed with IX's session (`brain/remote.go`):
+
+- **`POST /hear`** takes a 16 kHz mono 16-bit WAV of at most 30 s: 960,000 bytes and a header; more gets 413, another
+  rate 400. The brain transcribes it with its own whisper-server and routes it as it would a sentence from the
+  microphone, with three differences:
+  - it needs no wake word, since pressing the device's button addressed Delta;
+  - its `heard` line and its channel event carry `source: "remote"`;
+  - a chime of two short notes, 880 then 1320 Hz, tells the room, unless Delta is speaking, since one sound stops the
+    other. The microphone is deaf while it rings.
+
+  It answers 202 with `{"utterance_id","text","route"}`, or 503 until the ears are ready.
+- **`GET /said`** streams server-sent events, one per sentence as it starts playing here:
+  `{"say_id","utterance_id","by","text","seconds","t_ms","wav_b64"}`, the sentence's WAV after the warm voice.
+  `utterance_id` is the sentence it answers, as `/hear` returned it, or "" when it answers none; `by` says who wrote
+  it, `claude`, `local` or `ack`. Both are the journal's `say` line for that `say_id`. A device too slow to take an
+  event misses it rather than holding the voice back. A comment line every 15 s keeps the stream open. It carries what
+  Delta says even when the brain is muted.
+- **Security**, from IX's review.
+  - The whole hooks address now refuses a request with an `Origin` header, which browsers add, and any Host other than
+    127.0.0.1, localhost or ::1, against DNS rebinding.
+  - `/hear` and `/said` also need `X-Delta-Remote`: a secret of 32 random bytes the brain writes at each start to
+    `%LOCALAPPDATA%\delta\remote.secret`, in the user's profile, compared in constant time. A brain without a secret
+    refuses every device. The gateway reads the file at each request, so a new brain needs no restart of it.
+  - A sentence from another device is never consent: Claude's instructions have the user confirm at the computer
+    anything destructive or irreversible such a sentence asks for.
+  - The brain still listens on 127.0.0.1 only: the local network is the gateway's.
+
+## The window that closed by itself (2026-10-22, night)
+
+The live window vanished at 16:35 while the brain went on speaking: `scene.log` ended with an unhandled
+`VkResultError: ... vkQueuePresentKHR failed with error: VK_ERROR_OUT_OF_DATE_KHR`. BRUTAL throws Vulkan's errors
+rather than returning them, so the frame loop's check for an out-of-date swapchain never ran: a window that changes
+size between acquiring an image and presenting it closed the scene. Acquire and present now catch that one error and
+rebuild the swapchain. Resizing the window every few milliseconds closed the old scene at the first resize; the new
+one rebuilt its swapchain 443 times in 60 s and closed at its time limit.
+
+The same evening, opening a session in the shelf closed the window too: its "Started" row asked .NET for the fr-FR
+(later en-US) culture, and the scene runs with `InvariantGlobalization`, where that throws, on a thread-pool thread
+that nothing catches. It had done so since the shelf's first version. `Words.Date` and `Words.Number` now write months
+and decimal commas themselves, and the selftest checks both languages.
+
+## The triage that fell asleep (2026-10-22, night)
+
+After an hour without a transcript, every sentence went to Claude with `triage: failed: ... context deadline
+exceeded`, small talk included, and Delta seemed slow. Ollama had unloaded qwen3:8b after its 30 minutes of
+keep_alive; loading it again took 7.4 s, longer than the 4 s a sentence waits, and four sentences in two minutes failed
+that way before one found the model loaded. After a failure the brain now loads the model in the background, without a
+deadline, one load at a time, so that the next sentence finds it ready.
+
+## Past conversations on the shelf (2026-10-22, night)
+
+The author asked to see « toutes nos sessions Claude et toutes nos conversations » in the scene. The running sessions
+were already there; a Conversations section now lists `~\.claude\projects`: 38 projects and 238 transcripts here.
+
+- A project is named by the folder its newest conversation ran in, read from the transcript (`cwd`), since the
+  project's own folder name loses its separators. Two folders of the same name show the folder that holds each.
+- A transcript reaches 600 MB here, so only its last and first 256 KB are read. The title is the last `custom-title`
+  (the user's /rename), else the last `ai-title`, else the first request. The requests are the user's typed lines and
+  the sentences spoken to Delta, without tools' results, reminders, commands' output or compaction summaries.
+- A conversation opens onto its six last requests, its folder, its last activity, its size and its id; a running one
+  in wmux first offers its pane. Opening a project reads at most its 60 newest transcripts.
+- "Show the conversations" and « montre-moi nos conversations » open it, and the `shelf` tool's `conversations` move.
+
+## The window comes back (2026-10-22, night)
+
+Twice tonight Delta's window was gone while its brain went on speaking: once crashed, once closed. Nothing brought it
+back but a new brain. The brain now starts it again at the next line nobody answers, at most every 10 s, when it
+crashed, or when the user asked for it: a `window` or `shelf` request, spoken or from Claude. A window the user closed
+stays closed until then, and one that crashed within 30 s of its start (no graphics card, say) is not restarted in a
+loop. The log of the window that ended is kept as `scene.prev.log`.
+
+The 0.4.0 review found that a window the brain had not started, found already listening, came back after the user
+closed it: the brain could not tell a close from a crash. The window now leaves
+`%LOCALAPPDATA%\delta\scene-<port>.closed` when the user closes it (its button or Esc), and removes it when it starts;
+the brain does not start a window again while that marker is there, and a request for the window removes it.
+
+## Hearts (2026-10-22, night)
+
+The author asked, through the wmux relay: « quand on dit au robot « love you » ou « je t'aime », il envoie des cœurs en
+3D ». A sentence the wake gate lets through that says « je t'aime », « je t'adore », "love you" or "love ya" (and not
+« je ne t'aime pas » or "I don't love you") sends `{"hearts":true,"mood":"joy"}` to the window, and is then routed as
+any other: the triage or Claude still answers it. Its `heard` line carries `hearts`. Seven hearts of red cubes rise
+from the chest one after another, on either side of the face, for four seconds, while Delta smiles.
+
+## The phone's sentences that went nowhere (2026-10-22, night)
+
+The author talked to Delta from the phone through IX's gateway, 20:13 to 20:15, and Delta answered one sentence of
+five. brutal read the journal: the four others had `source` remote and `triage` ignore, so they were dropped, though
+the gate had let them through and two of them had sent hearts. The first, « Au revoir. », reached Claude only because
+the triage missed its 4 s deadline. Holding the phone's button addresses Delta, so the model's ignore is now overruled
+for a sentence from another device, which goes to Claude; the triage still answers its small talk, and fillers and
+sentences that call another assistant are still dropped.
+
+## Ears on the graphics card, with a fallback (2026-10-22, night)
+
+The author found Delta slow from the phone. WMUX measured Whisper at 2 to 4 s a sentence when the machine is quiet and
+11 to 13 s under load: IX's whisper.cpp b5454 runs on the CPU only, with 16 threads. brutal built whisper.cpp v1.9.5 with
+CUDA 13.0 for the RTX 5080 (sm_120) in `C:\tmp\whisper-cuda`, and measured the same 3.5 s clip with Delta's arguments:
+72 to 208 ms on the GPU against 1961 to 2128 ms on the CPU, with the same text. WMUX also found 72 NVIDIA driver
+incidents and 93 PCIe errors in 30 days, so the GPU build should not run without the CPU one behind it.
+
+The ears now take several servers. They run the first that starts and hears a second of silence, and when the one
+running dies, the next takes over and hears the sentence again. `"whisper_fallback"` in `delta.json` names the second.
+The journal gets an `ears` line with the server that hears and, if any, why another did not. A test plays three fake
+servers, from the test binary itself: one that stops at once, as a GPU build without its libraries, one that dies after
+its warm-up, and one that hears. Not switched on yet: that is the author's call.
+
+## A word at once (2026-10-22, night)
+
+With Whisper on the GPU (216 ms) and the triage warm (about 250 ms), Claude's turn is almost all of the wait: 7.5 s
+from the phone's test sentence to « Test reçu. ». The author approved, through brutal, a spoken acknowledgement. A
+sentence that goes to Claude now gets one of four short words in Delta's language, in turn (« Je regarde. », « Une
+seconde. », « Voyons voir. », « Je réfléchis. »), spoken at no cost. Not while Delta speaks, nor after the compaction
+notice. The mouth drops it, with an `unsaid` line, when something waits behind it by the time its turn comes, or when
+it would start more than 1.5 s late. From the phone, it replaces the chime, which now plays only when Delta answers
+nothing at once. The heard line's `ack` ties the sentence to the word; their `speaking` line times the first sound.
+
+## Questions of fact, answered locally (2026-10-22, night)
+
+The author also approved, through brutal, more local answers. `brain/facts.go` gives the triage's model a fact sheet
+the brain writes for each question: the day and the time in Delta's language, its version as a voice can read it
+(« 0.4.0, a development build 8 commits after it » rather than a git describe), where Whisper runs, the small model,
+and one line each on Brickyard and IX. The model answers with JSON constrained to `known`, then `answer`. A rule picks
+the questions first, by a question mark or a question word and a word the sheet covers, so that other sentences do not
+wait for a second call. An answer that promises work is overruled, as the triage's are.
+
+Measured before writing it, with qwen3:8b warm and the same prompt and schema, on nine questions: answers in 230 to
+550 ms (the time, the day, the version, IX, where Whisper runs), and `known` false in 148 to 169 ms for the time in
+Tokyo, reviewing a pull request, writing the time into a file, and what was done today. The end-to-end time, from the
+end of speech to the first sound, is still to measure live.
+
+## What Delta let pass, on screen (2026-10-22, night)
+
+A sentence the wake gate let pass for want of « Delta » left no trace but the journal, so that a user who forgot the
+name could not tell a deaf Delta from one that ignored them. The brain now sends the window `{"ignored": sentence}`,
+cut to 200 characters, and the scene shows it for five seconds in a caption centred under the robot: « Pas pour moi ?
+Dis « Delta » d'abord. » in bold, then the sentence in quotes, on a dark card with an amber edge, coming in over 0.2 s
+and fading over the last 0.8 s. Only for that reason: not a filler, nor a sentence that calls another session, and it
+does not bring back a window the user closed. `--demo` ends with the caption, and `--shots` saves `ignored`.
+
+## Which question an answer answers (2026-10-22, night)
+
+brutal proposed it, for Gaia's proof of a remote exchange: a device that asks a question could match the answer only
+by timing. Each `/said` event now carries the `utterance_id` it answers and `by`, which the remote takes from the
+`say` note itself, journal or not, so that the two cannot disagree. A note whose sentence is never said, such as a
+dropped acknowledgement, is forgotten 64 sentences later. Left for later, as brutal noted: ids start again at 1 when
+the brain restarts, a device that misses an event cannot tell, and the `channel` route says nothing of when an answer
+will come.
+
+## Ears that hang (2026-10-23)
+
+From brutal's review of the fallback. The ears asked whisper-server without a timeout, so a GPU build that stopped
+answering, as a graphics driver can, left Delta deaf for good: the fallback ran only when the server's process ended.
+A transcription now has 30 s; past that, while another server can take over, the brain kills the one that hung and
+hears the sentence with the next. Two more cases from the same review: a sentence that failed while another's failure
+was bringing the next server now waits for it and is heard, rather than lost; and the `ears` note names each server
+with its own failure, where a chain of servers that could not start gave the first the last one's error.
 
 ## Known problems
 
@@ -374,6 +542,12 @@ After the plugin's first release, the author asked: « il faut que ça marche po
   the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
 - The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice
   sooner.
+- A sentence from another device gets its chime, its acknowledgement and `/hear`'s 202 only once routed: up to 4 s
+  for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
+- The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
+  streamed, other people's words would show too. There is no switch to turn it off yet.
+- The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
+  second, and there is one per workspace.
 
 ## To verify
 
@@ -389,3 +563,5 @@ After the plugin's first release, the author asked: « il faut que ça marche po
   - a session with `--dangerously-load-development-channels plugin:delta@brickyard`.
 - A live English session with a human voice: the wake word, "Delter", and the latency.
 - English for the local window and shelf commands, the triage and the compaction sentence.
+- The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
+- The caption of a sentence let pass, live: whether five seconds is enough to read it.

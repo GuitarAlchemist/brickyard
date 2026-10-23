@@ -18,6 +18,7 @@ import (
 // mcpConfig is what -mcp runs with. -home is where setup.ps1 installed Delta's ears and voice; flags override it.
 type mcpConfig struct {
 	home, piper, voice, whisper, whisperModel string
+	whisperFallback                           string // the whisper-server to run when whisper cannot, if any
 	lang                                      string // what Delta hears and speaks: "en" or "fr" (lang.go)
 	scene                                     string // the scene's address
 	journal                                   string // where to record what Delta heard and said, if anywhere
@@ -75,16 +76,35 @@ func runMCP(c mcpConfig) {
 	m.gate.follow = 15 * time.Second
 	m.gate.off = c.wakeOff
 	if c.triage != "" {
-		m.triage = ollamaTriage(c.ollama, c.triage)
+		m.triage = ollamaTriage(c.ollama, c.triage, lang)
 		m.triageMax = 4 * time.Second
+		m.facts, m.smallModel = ollamaFacts(c.ollama, c.triage, lang), c.triage
 		go func() {
 			start := time.Now()
-			if err := warmTriage(m.triage); err != nil {
+			if err := warmTriage(m.triage, lang); err != nil {
 				logf("triage: %v; what Delta hears goes to Claude", err)
 				return
 			}
 			logf("triage ready: %s in %.1f s", c.triage, time.Since(start).Seconds())
 		}()
+		// Ollama unloads the model after its keep_alive, or for another model, and a load takes longer than the triage
+		// waits: each sentence would then cancel the load the one before began. After a failure the model loads in the
+		// background, without the sentence's deadline, and the next sentence finds it ready.
+		var warming atomic.Bool
+		m.rewarm = func() {
+			if !warming.CompareAndSwap(false, true) {
+				return
+			}
+			go func() {
+				defer warming.Store(false)
+				start := time.Now()
+				if err := warmTriage(m.triage, lang); err != nil {
+					logf("triage: %v", err)
+					return
+				}
+				logf("triage awake again in %.1f s", time.Since(start).Seconds())
+			}()
+		}
 	}
 	m.ready = func() error {
 		hearing.Lock()
@@ -126,20 +146,26 @@ func runMCP(c mcpConfig) {
 	}
 
 	s := startScene(c, logf)
-	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note}
+	s.greet(map[string]any{"language": lang.code}) // the shelf's labels (Words.cs)
+	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code}
 	if fx, err := effect(c.fx); err != nil {
 		logf("%v; Delta speaks without an effect", err)
 	} else {
 		mo.fx = fx
 	}
 	m.speak = mo.speak
+	m.ack, m.quiet = mo.ack, mo.quiet
 	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
-		m.show = s.send
+		m.tell = s.send
+		m.show = func(line map[string]any) { // a request for the window or its shelf brings back a window the user closed
+			s.summon()
+			s.send(line)
+		}
 	}
 
 	// The robot shows how full Claude's context is, from the session's transcript, and when Claude Code compacts it,
 	// from its hooks.
-	h := &hooks{own: ownSession, logf: logf, maxCompact: 10 * time.Minute,
+	h := &hooks{own: ownSession, logf: logf, maxCompact: 10 * time.Minute, lang: lang.code,
 		compacting: func(trigger string) {
 			m.note("compacting", map[string]any{"trigger": trigger})
 			s.send(map[string]any{"compacting": true})
@@ -154,6 +180,36 @@ func runMCP(c mcpConfig) {
 	}
 	m.busy = h.busy
 	h.gesture = func(g gesture) { m.gesture(g, time.Now()) }
+
+	// Another device speaks to Delta and hears it through a gateway on this computer, such as IX's (remote.go).
+	rm := &remote{route: func(u utterance) (int, string) {
+		id, where := m.heardAs(u, time.Now())
+		logf("heard %q from another device in %d ms: %s", u.text, u.asr.Milliseconds(), where)
+		if where == "ignored" || where == "dropped" || where == "local" {
+			s.send(map[string]any{"state": "idle"})
+		}
+		return id, where
+	}}
+	if chime, err := chimeFile(os.TempDir()); err != nil {
+		logf("remote: %v; no chime", err)
+	} else {
+		rm.chime = func() { // only while Delta is quiet: one sound stops another
+			if !c.mute && mo.quiet() {
+				mo.busy.Store(true) // the microphone does not hear the chime
+				play(chime)
+				mo.routed()
+			}
+		}
+	}
+	if secret, path, err := newRemoteSecret(); err != nil {
+		logf("remote: %v; no other device can speak to Delta", err)
+	} else {
+		rm.secret = secret
+		logf("remote: a gateway's secret is in %s", path)
+	}
+	h.remote = rm
+	mo.onClip = rm.publish
+	m.attribute = rm.attribute
 	if c.hooks != "" {
 		go h.serve(c.hooks)
 	}
@@ -185,9 +241,13 @@ func runMCP(c mcpConfig) {
 	}()
 
 	go func() {
-		e, err := startEars(c.whisper, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
+		servers := []string{c.whisper}
+		if c.whisperFallback != "" && c.whisperFallback != c.whisper {
+			servers = append(servers, c.whisperFallback)
+		}
+		e, err := startEars(servers, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
 		if err == nil {
-			_, err = e.hear(make([]float32, earsRate)) // loads the model's weights and kernels
+			m.hearsOn = e.where
 		}
 		hearing.Lock()
 		if err != nil {
@@ -198,7 +258,17 @@ func runMCP(c mcpConfig) {
 		}
 		notHearing = nil
 		hearing.Unlock()
-		logf("ears ready on %s", e.url)
+		logf("ears ready on %s with %s", e.url, e.server)
+		ready := map[string]any{"server": e.server}
+		if len(e.failed) > 0 { // the journal tells which server hears, and why the first did not
+			ready["failed"] = strings.Join(e.failed, "; ")
+		}
+		m.note("ears", ready)
+		e.fell = func(server, why string) {
+			logf("ears: %s; %s hears now", why, server)
+			m.note("ears", map[string]any{"server": server, "failed": why})
+		}
+		rm.hearWith(e.hear)
 		heard := make(chan utterance)
 		go listen(e, s, &mo.busy, heard, false)
 		for u := range heard {
@@ -230,6 +300,7 @@ func homePaths(c *mcpConfig) {
 		Voice        string `json:"voice"`
 		Whisper      string `json:"whisper"`
 		WhisperModel string `json:"whisper_model"`
+		Fallback     string `json:"whisper_fallback"` // a CPU build, for a GPU build in whisper
 		WakeWord     *bool  `json:"wake_word"`
 		Triage       string `json:"triage"`
 		Language     string `json:"language"`
@@ -255,6 +326,9 @@ func homePaths(c *mcpConfig) {
 	pick(&c.voice, saved.Voice, "voices", lang.voice)
 	pick(&c.whisper, saved.Whisper, "whisper", "whisper-server.exe")
 	pick(&c.whisperModel, saved.WhisperModel, "whisper", "ggml-large-v3-turbo-q5_0.bin")
+	if c.whisperFallback == "" {
+		c.whisperFallback = saved.Fallback
+	}
 	if c.triage == "" {
 		c.triage = saved.Triage
 	}
@@ -270,31 +344,50 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	if c.noScene || c.scene == "" {
 		return s
 	}
-	if conn, err := net.DialTimeout("tcp", c.scene, 200*time.Millisecond); err == nil {
-		conn.Close()
-		logf("a scene already listens on %s", c.scene)
-		return s
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return s
 	}
 	path := filepath.Join(filepath.Dir(exe), "scene", "scene.exe")
 	_, port, _ := net.SplitHostPort(c.scene)
-	cmd := exec.Command(path, "--listen", port)
-	hideConsole(cmd)
-	if c.home != "" {
-		if f, err := os.Create(filepath.Join(c.home, "scene.log")); err == nil {
-			cmd.Stdout, cmd.Stderr = f, f
-		}
+	if dir, err := os.UserCacheDir(); err == nil { // the window's own marker (scene/Program.cs Closed)
+		s.closed = filepath.Join(dir, "delta", "scene-"+port+".closed")
 	}
-	if err := cmd.Start(); err != nil {
-		logf("scene: %v", err)
+	s.launch = func() {
+		cmd := exec.Command(path, "--listen", port)
+		hideConsole(cmd)
+		var log *os.File
+		if c.home != "" {
+			name := filepath.Join(c.home, "scene.log")
+			os.Rename(name, filepath.Join(c.home, "scene.prev.log")) // the log of a window that crashed survives its restart
+			if f, err := os.Create(name); err == nil {
+				log = f
+				cmd.Stdout, cmd.Stderr = f, f
+			}
+		}
+		if err := cmd.Start(); err != nil {
+			logf("scene: %v", err)
+			return
+		}
+		killWithMe(cmd.Process)
+		logf("scene started on %s", c.scene)
+		go func() {
+			err := cmd.Wait()
+			if log != nil {
+				log.Close()
+			}
+			logf("scene exited: %v", err) // nil when the user closed it
+			s.exited(err != nil)
+		}()
+	}
+	s.wanted = true
+	if conn, err := net.DialTimeout("tcp", c.scene, 200*time.Millisecond); err == nil {
+		conn.Close()
+		logf("a scene already listens on %s", c.scene)
 		return s
 	}
-	killWithMe(cmd.Process)
-	go cmd.Wait()
-	logf("scene started on %s", c.scene)
+	s.launched = time.Now()
+	s.launch()
 	return s
 }
 
@@ -317,8 +410,10 @@ type mouth struct {
 	mute   bool
 	queue  chan said
 	record func(event string, fields map[string]any)
-	fx     func(rate int) *warm // a fresh effect for each say call, or nil for Piper's own voice
-	busy   atomic.Bool          // the microphone's: deaf while Delta speaks or while a transcript is routed
+	fx     func(rate int) *warm                           // a fresh effect for each say call, or nil for Piper's own voice
+	lang   string                                         // the code of the language Delta speaks, for speakable
+	onClip func(say int, text string, w wav, path string) // each sentence as it starts, for remote.go, or nil
+	busy   atomic.Bool                                    // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
 	pending int // say calls not yet spoken to the end
@@ -333,6 +428,33 @@ type said struct {
 	id   int
 	cost string
 	mood string
+	ack  bool      // an acknowledgement, which gives way to what follows
+	at   time.Time // when it was queued
+}
+
+// ackLate is how long an acknowledgement may wait for the mouth: any later, it would not come at once.
+const ackLate = 1500 * time.Millisecond
+
+// ack queues a word to say at once. The mouth drops it if something waits behind it by then, such as Claude's answer.
+func (mo *mouth) ack(text string, id int) {
+	select {
+	case mo.queue <- said{text: text, id: id, cost: free, ack: true, at: time.Now()}:
+	default:
+	}
+}
+
+// unsaid says why the mouth drops what it was about to say, or "": only an acknowledgement is dropped, when something
+// waits behind it or when it comes too late.
+func unsaid(s said, waiting int, now time.Time) string {
+	switch {
+	case !s.ack:
+		return ""
+	case waiting > 0:
+		return "something else waits to be said"
+	case now.Sub(s.at) > ackLate:
+		return "too late"
+	}
+	return ""
 }
 
 func (mo *mouth) speak(text string, id int, cost, mood string) (string, error) {
@@ -343,7 +465,7 @@ func (mo *mouth) speak(text string, id int, cost, mood string) (string, error) {
 		return "", failed
 	}
 	select {
-	case mo.queue <- said{text, id, cost, mood}:
+	case mo.queue <- said{text: text, id: id, cost: cost, mood: mood}:
 	default:
 		return "", errors.New("Delta already has 32 things to say: wait until it has said them")
 	}
@@ -359,7 +481,7 @@ func (mo *mouth) fail(err error) {
 
 func (mo *mouth) run(v *voice) {
 	type clip struct {
-		path        string
+		path, text  string
 		say         int
 		cost, mood  string
 		first, last bool // of its say call
@@ -367,6 +489,10 @@ func (mo *mouth) run(v *voice) {
 	clips := make(chan clip, 8)
 	go func() {
 		for s := range mo.queue {
+			if why := unsaid(s, len(mo.queue), time.Now()); why != "" {
+				mo.record("unsaid", map[string]any{"say_id": s.id, "why": why})
+				continue
+			}
 			var cut sentences
 			parts := cut.feed(s.text)
 			if rest := cut.flush(); rest != "" {
@@ -380,12 +506,12 @@ func (mo *mouth) run(v *voice) {
 				clips <- clip{say: s.id, cost: s.cost, mood: s.mood, first: true, last: true}
 			}
 			for i, part := range parts {
-				path, err := v.say(speakable(part))
+				path, err := v.say(speakable(part, mo.lang))
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "delta: voice:", err)
 					path = ""
 				}
-				clips <- clip{path: path, say: s.id, cost: s.cost, mood: s.mood, first: i == 0, last: i == len(parts)-1}
+				clips <- clip{path: path, text: part, say: s.id, cost: s.cost, mood: s.mood, first: i == 0, last: i == len(parts)-1}
 			}
 		}
 	}()
@@ -412,6 +538,9 @@ func (mo *mouth) run(v *voice) {
 					line["mood"], mood = mood, ""
 				}
 				mo.s.send(line)
+				if mo.onClip != nil {
+					mo.onClip(c.say, c.text, w, c.path)
+				}
 			}
 			if !mo.mute {
 				play(c.path)
@@ -462,6 +591,13 @@ func (mo *mouth) finished() {
 	mo.spoke = time.Now()
 	mo.mu.Unlock()
 	mo.gate.open(time.Now())
+}
+
+// quiet says whether Delta has nothing left to say.
+func (mo *mouth) quiet() bool {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	return mo.pending == 0
 }
 
 // routed is the end of one transcript's routing: the microphone listens again, unless Delta is speaking.

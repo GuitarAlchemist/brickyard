@@ -135,7 +135,7 @@ func TestACompactionShowsFromItsStartToItsEnd(t *testing.T) {
 	}
 	h.handle(hookPayload{SessionID: "s1", Event: "PreCompact", Trigger: "auto", TranscriptPath: path})
 	h.handle(hookPayload{SessionID: "s1", Event: "PreCompact", Trigger: "auto", TranscriptPath: path})
-	if got := h.busy(); !strings.Contains(got, "compacte") {
+	if got := h.busy(); got != compactingNotice["en"] {
 		t.Fatalf("the user who speaks while Claude compacts hears %q", got)
 	}
 	if got := h.busy(); got != "" {
@@ -228,5 +228,14 @@ func TestSpeakingToClaudeWhileItCompactsIsAnsweredAtOnce(t *testing.T) {
 	}
 	if got := s.all(); got != "free: Claude compacte sa mémoire." {
 		t.Fatalf("said %q", got)
+	}
+}
+
+func TestTheCompactionNoticeIsInDeltasLanguage(t *testing.T) {
+	for code, want := range map[string]string{"": "Claude is compacting", "en": "Claude is compacting", "fr": "Claude compacte"} {
+		h := &hooks{lang: code, since: time.Now()}
+		if got := h.busy(); !strings.HasPrefix(got, want) {
+			t.Errorf("%q: %q", code, got)
+		}
 	}
 }

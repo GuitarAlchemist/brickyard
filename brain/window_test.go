@@ -26,12 +26,31 @@ func TestDeltaMovesItsWindowWhenAsked(t *testing.T) {
 		"Delta, fais-toi plus petit.":                    "smaller",
 		"Delta, restaure ta fenêtre.":                    "restore",
 		"Delta, mets-toi en haut a gauche":               "top-left",
+
+		"Delta, maximize your window.":          "maximize",
+		"Delta, minimize.":                      "minimize",
+		"Delta, move to the top left.":          "top-left",
+		"Delta, go to the bottom right corner.": "bottom-right",
+		"Delta, go to the right.":               "right",
+		"Delta, move left.":                     "left",
+		"Delta, put yourself in the middle.":    "center",
+		"Delta, move your window to the top.":   "top",
+		"Delta, hide in the notification area.": "tray",
+		"Delta, hide.":                          "tray",
+		"Delter, hide yourself, please.":        "tray",
+		"Delta, come back.":                     "show",
+		"Delta, go full screen.":                "fullscreen",
+		"Delta, stay on top.":                   "on-top",
+		"Delta, don't stay on top any more.":    "not-on-top",
+		"Delta, make yourself smaller.":         "smaller",
+		"Delta, bigger.":                        "larger",
+		"Delta, restore your window.":           "restore",
 	} {
 		if got := windowCommand(text); got != want {
 			t.Errorf("%q: %q, want %q", text, got, want)
 		}
-		if windowActions[want] == "" {
-			t.Errorf("%s: Delta has nothing to say for it", want)
+		if windowActions[want]["en"] == "" || windowActions[want]["fr"] == "" {
+			t.Errorf("%s: Delta has nothing to say for it in English or in French", want)
 		}
 	}
 }
@@ -43,10 +62,46 @@ func TestOtherSentencesLeaveTheWindowAlone(t *testing.T) {
 		"Delta, lance les tests.",
 		"Delta, mets-toi en haut à gauche, puis ouvre le README et lance les tests du cerveau.",
 		"Delta, quel temps fait-il ?",
+		"Delta, move the file to the left folder.",
+		"Delta, what's at the top of the list?",
+		"Delta, put the button on the right.",
+		"Delta, go ahead, all right.",
+		"Delta, hide the terminal.",
+		"Delta, restore the backup.",
+		"Delta, make the font bigger.",
+		"Delta, move to the top left, then open the README and run the brain tests.",
 	} {
 		if got := windowCommand(text); got != "" {
 			t.Errorf("%q: %q", text, got)
 		}
+	}
+}
+
+// « Je t'aime » or "love you", said to Delta, sends hearts to its window; the sentence then goes where it would anyway.
+func TestDeltaSendsHeartsWhenLoved(t *testing.T) {
+	for text, want := range map[string]bool{
+		"Delta, je t'aime !":         true,
+		"Delta, I love you.":         true,
+		"Love you, Delta.":           true,
+		"Delta, je t’adore.":         true,
+		"Delta, je ne t'aime pas.":   false,
+		"Delta, I don't love you.":   false,
+		"Delta, j'aime ce morceau.":  false,
+		"Delta, ouvre le fichier.":   false,
+		"Delta, I love your window.": false,
+	} {
+		var shown []map[string]any
+		m, _, _ := startServer(t, func(m *mcpServer) { m.show = func(line map[string]any) { shown = append(shown, line) } })
+		m.hear(utterance{text: text}, time.Now().Add(time.Hour))
+		hearts := len(shown) > 0 && shown[0]["hearts"] == true && shown[0]["mood"] == "joy"
+		if hearts != want {
+			t.Errorf("%q: hearts %v, shown %v", text, hearts, shown)
+		}
+	}
+	var shown []map[string]any
+	m, _, _ := startServer(t, func(m *mcpServer) { m.show = func(line map[string]any) { shown = append(shown, line) } })
+	if m.hear(utterance{text: "Je t'aime."}, time.Now().Add(time.Hour)) != "ignored" || len(shown) != 0 {
+		t.Fatalf("a « je t'aime » for someone else sent hearts: %v", shown)
 	}
 }
 
@@ -59,6 +114,9 @@ func TestDeltaOpensAndWalksItsShelf(t *testing.T) {
 		{"Delta, montre-moi les sessions.", false, "sessions"},
 		{"Delta, affiche les plugins.", false, "plugins"},
 		{"Delta, montre les marketplaces.", false, "marketplaces"},
+		{"Delta, montre-moi toutes nos conversations.", false, "conversations"},
+		{"Delta, affiche les anciennes conversations.", false, "conversations"},
+		{"Delta, on a eu des conversations hier.", false, ""},
 		{"Delta, ouvre ton menu.", false, "open"},
 		{"Delta, ferme le menu.", true, "close"},
 		{"Delta, descends.", true, "down"},
@@ -70,6 +128,25 @@ func TestDeltaOpensAndWalksItsShelf(t *testing.T) {
 		{"Delta, reviens.", true, ""},
 		{"Delta, ferme toutes les sessions.", false, ""},
 		{"Delta, combien de plugins as-tu ?", false, ""},
+
+		{"Delta, show me the sessions.", false, "sessions"},
+		{"Delta, list the plugins.", false, "plugins"},
+		{"Delta, show the marketplaces.", false, "marketplaces"},
+		{"Delta, show me our past conversations.", false, "conversations"},
+		{"Delta, the conversations were long.", false, ""},
+		{"Delta, open your menu.", false, "open"},
+		{"Delta, close the menu.", true, "close"},
+		{"Delta, go down.", true, "down"},
+		{"Down.", true, "down"},
+		{"Delta, go up.", true, "up"},
+		{"Delta, open.", true, "enter"},
+		{"Delta, go back.", true, "back"},
+		{"Delta, go down.", false, ""},
+		{"Delta, open the README file.", true, ""},
+		{"Delta, come back.", true, ""},
+		{"Delta, close all the sessions.", false, ""},
+		{"Delta, how many plugins do you have?", false, ""},
+		{"Delta, what's up?", true, ""},
 	} {
 		if got := shelfCommand(c.text, c.open); got != c.want {
 			t.Errorf("%q (open %v): %q, want %q", c.text, c.open, got, c.want)
@@ -101,6 +178,7 @@ func TestDeltaMovesItsWindowWithoutClaude(t *testing.T) {
 	var shown scenery
 	var records []map[string]any
 	m, _, out := startServer(t, func(m *mcpServer) {
+		m.lang = languages["fr"]
 		m.speak = s.speak
 		m.show = shown.show
 		m.record = func(event string, fields map[string]any) { fields["event"] = event; records = append(records, fields) }
@@ -138,6 +216,7 @@ func TestDeltaWalksItsShelfWithoutClaude(t *testing.T) {
 	var s spoken
 	var shown scenery
 	m, _, out := startServer(t, func(m *mcpServer) {
+		m.lang = languages["fr"]
 		m.speak = s.speak
 		m.show = shown.show
 	})
@@ -168,5 +247,32 @@ func TestDeltaWalksItsShelfWithoutClaude(t *testing.T) {
 	m.hear(utterance{text: "Delta, affiche les plugins."}, now.Add(20*time.Second))
 	if where := m.hear(utterance{text: "Delta, descends."}, now.Add(70*time.Second)); where != "channel" {
 		t.Fatalf("a shelf the scene closed by itself took %s", where)
+	}
+}
+
+func TestDeltaAnswersItsWindowAndShelfInEnglishByDefault(t *testing.T) {
+	var s spoken
+	var shown scenery
+	m, _, _ := startServer(t, func(m *mcpServer) {
+		m.speak = s.speak
+		m.show = shown.show
+	})
+	now := time.Now()
+	for i, c := range []struct{ text, route string }{
+		{"Delta, move to the top left.", "window"},
+		{"Delta, show me the sessions.", "shelf"},
+		{"Go down.", "shelf"},
+		{"Delta, mets-toi à droite.", "window"}, // a French request still works in an English session
+		{"Delta, close the menu.", "shelf"},
+	} {
+		if where := m.hear(utterance{text: c.text}, now.Add(time.Duration(i)*time.Second)); where != c.route {
+			t.Fatalf("%q went to %s", c.text, where)
+		}
+	}
+	if got := shown.all(); got != `{"window":"top-left"} {"shelf":"sessions"} {"shelf":"down"} {"window":"right"} {"shelf":"close"}` {
+		t.Fatalf("showed %s", got)
+	}
+	if got := s.all(); got != "free: Moving to the top left. | free: Here are the sessions. | free: Moving to the right. | free: Putting my menu away." {
+		t.Fatalf("said %q", got)
 	}
 }

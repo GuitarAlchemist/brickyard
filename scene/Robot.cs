@@ -13,7 +13,10 @@ internal sealed class Robot
     public const int EarLeft = Leds + Layers, EarRight = EarLeft + 1; // pads on the ears, lit while Delta listens
     public const int BrowLeft = EarRight + 1, BrowRight = BrowLeft + 1; // faint until an expression needs them
     public const int CornerLeft = BrowRight + 1, CornerRight = CornerLeft + 1; // the mouth's corners, up for a smile
-    public const int Parts = CornerRight + 1;
+    public const int HeartFirst = CornerRight + 1, HeartCount = 7; // hearts that rise when someone tells Delta they love it
+    public const int Parts = HeartFirst + HeartCount;
+    private const float HeartLife = 2.6f; // seconds each heart rises, the next starting HeartStep after it
+    private const float HeartStep = 0.2f;
 
     private static readonly SN.Vector3 HeadPivot = new(0f, 0.84f, 0f);
     private static readonly SN.Vector3 Cyan = new(0.35f, 0.8f, 1f);
@@ -26,6 +29,7 @@ internal sealed class Robot
     private static readonly SN.Vector3 Pale = new(0.55f, 0.85f, 1f);
     private static readonly SN.Vector3 Red = new(1f, 0.2f, 0.1f);
     private static readonly SN.Vector3 White = new(0.92f, 0.95f, 1f);
+    private static readonly SN.Vector3 Pink = new(1f, 0.1f, 0.28f);
     private const float StackBottom = 0.24f;
 
     private float listening, thinking, speaking, level, free, paid, compact, gauge, fill;
@@ -147,6 +151,23 @@ internal sealed class Robot
             foreach (var finger in new[] { -0.03f, 0.03f })
             {
                 Boxes.Add(arm, new(side * 0.04f, -0.45f, finger), new(0.03f, 0.09f, 0.02f), steel);
+            }
+        }
+
+        // A heart of red cubes about its centre, one for each heart that can rise at once.
+        string[] heart = [".XX.XX.", "XXXXXXX", "XXXXXXX", ".XXXXX.", "..XXX..", "...X..."];
+        var red = new SN.Vector3(0.55f, 0.04f, 0.1f);
+        for (var i = 0; i < HeartCount; i++)
+        {
+            for (var row = 0; row < heart.Length; row++)
+            {
+                for (var col = 0; col < heart[row].Length; col++)
+                {
+                    if (heart[row][col] == 'X')
+                    {
+                        Boxes.Add(parts[HeartFirst + i], new((col - 3) * 0.032f, (2.5f - row) * 0.032f, 0f), new(0.03f, 0.03f, 0.03f), red);
+                    }
+                }
             }
         }
 
@@ -307,6 +328,25 @@ internal sealed class Robot
         }
 
         glow[EarLeft] = glow[EarRight] = new SN.Vector4(Green, 0.06f + (1.6f * listening));
+
+        // Hearts rise from the chest, one after another and on either side of the face: each pops up, drifts and turns as
+        // it climbs past the head, and shrinks away.
+        for (var i = 0; i < HeartCount; i++)
+        {
+            var u = m.Hearts < 0f ? -1f : (m.Hearts - (i * HeartStep)) / HeartLife;
+            if (u is <= 0f or >= 1f)
+            {
+                world[HeartFirst + i] = SN.Matrix4x4.CreateScale(0.0001f);
+                glow[HeartFirst + i] = default;
+                continue;
+            }
+
+            var size = MathF.Min(1f, u * 6f) * (1f - (u * u * u * u)) * (0.8f + (0.25f * MathF.Sin(i * 1.9f)));
+            var x = ((i % 2 == 0 ? -1f : 1f) * (0.32f + (0.12f * MathF.Abs(MathF.Sin(i * 2.4f))))) + (0.06f * MathF.Sin((t * 2.2f) + i));
+            world[HeartFirst + i] = SN.Matrix4x4.CreateScale(size) * SN.Matrix4x4.CreateRotationY(0.6f * MathF.Sin((t * 2.5f) + i))
+                * SN.Matrix4x4.CreateTranslation(x, 0.55f + (1.15f * u), 0.3f + (0.12f * MathF.Cos(i * 1.7f)));
+            glow[HeartFirst + i] = new SN.Vector4(Pink, 0.9f * size);
+        }
         glow[Base] = glow[Torso] = glow[Head] = glow[ArmLeft] = glow[ArmRight] = default;
     }
 

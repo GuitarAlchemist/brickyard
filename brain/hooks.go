@@ -42,6 +42,8 @@ type hooks struct {
 	compacted  func(trigger string, seconds float64)
 	context    func(used, limit int)
 	gesture    func(g gesture) // a gesture a camera process posted (gesture.go)
+	remote     *remote         // another device's gateway (remote.go), or nil
+	lang       string          // the code of the language Delta speaks, for busy
 	logf       func(string, ...any)
 	maxCompact time.Duration // after which a compaction that no hook ended is taken as over
 
@@ -105,6 +107,12 @@ func (h *hooks) end(trigger string) {
 	}
 }
 
+// compactingNotice is what Delta says to the first sentence for Claude during a compaction, by language code.
+var compactingNotice = map[string]string{
+	"en": "Claude is compacting its memory. It will answer you in about a minute.",
+	"fr": "Claude compacte sa mémoire. Il te répondra dans une minute environ.",
+}
+
 // busy says, once per compaction, what Delta tells the user who speaks to Claude while Claude Code compacts: Claude
 // will answer, but not at once. It is "" otherwise.
 func (h *hooks) busy() string {
@@ -114,7 +122,7 @@ func (h *hooks) busy() string {
 		return ""
 	}
 	h.told = true
-	return "Claude compacte sa mémoire. Il te répondra dans une minute environ."
+	return inLanguage(compactingNotice, h.lang)
 }
 
 // measure reads how full the context is from the transcript, and tells the window when that changed, or when it has
@@ -213,7 +221,26 @@ func (h *hooks) handler() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return mux
+	if h.remote != nil {
+		h.remote.handle(mux)
+	}
+	return localOnly(mux)
+}
+
+// localOnly keeps web pages off the whole port. A page's script reaches 127.0.0.1 too, but its browser sends an Origin
+// header, and a page that rebinds its own name to 127.0.0.1 sends that name as the Host.
+func localOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = strings.Trim(r.Host, "[]")
+		}
+		if _, sent := r.Header["Origin"]; sent || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
+			http.Error(w, "Delta's brain answers this computer only", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // serve answers the hooks on addr. A brain that takes over waits for the one it replaces to free the port.

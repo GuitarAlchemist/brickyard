@@ -72,6 +72,11 @@ func readWav(path string) (wav, error) {
 	if err != nil {
 		return wav{}, err
 	}
+	return parseWav(data, path)
+}
+
+// parseWav reads a 16-bit mono PCM file's bytes; its errors name the file by path.
+func parseWav(data []byte, path string) (wav, error) {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
 		return wav{}, fmt.Errorf("%s: not a WAV file", path)
 	}

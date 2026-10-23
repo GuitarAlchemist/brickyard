@@ -10,13 +10,16 @@ using System.Text.Json;
 // "context", how full Claude's conversation is, as {"used": tokens, "limit": tokens}, where limit is where Claude Code
 // compacts it; "compacting", true while Claude Code compacts the conversation; and "window", what to do with the
 // window (Placement.Actions), which Window runs; "mood", an expression the face holds for MoodSeconds (Moods); and
-// "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs. Each changes only what it
-// names.
+// "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs; and "language", "en" or
+// "fr", the shelf's labels (Words), which the brain sends first on each connection; and "hearts", true, a burst of
+// hearts that rise from the robot for HeartSeconds; and "ignored", a sentence Delta heard and let pass for want of its
+// name, which a caption under the robot shows for IgnoredSeconds. Each changes only what it names.
 internal sealed class Link(Func<double> clock)
 {
     private const int MaxLine = 256 * 1024;
     private const int MaxEnvelope = 30_000; // ten minutes in 20 ms steps
     private const double Step = 0.02;
+    private const int MaxIgnored = 400; // the brain cuts the sentence to 200 characters, each at most two UTF-16 units
 
     private readonly Lock gate = new();
     private string state = "idle";
@@ -29,6 +32,11 @@ internal sealed class Link(Func<double> clock)
     private string mood = "neutral";
     private double moodSince = double.NegativeInfinity;
     private double heard = double.NegativeInfinity; // when the last line came
+    private double heartsSince = double.NegativeInfinity;
+    private string ignored = "";
+    private double ignoredSince = double.NegativeInfinity;
+    private int ignoredId; // counts the sentences let pass, so that the caption is drawn again for each
+    private int demoIgnored = -1; // the demo's last loop that showed the caption
 
     // The expressions the face knows; "neutral" ends the one shown.
     public static readonly string[] Moods = ["neutral", "joy", "surprise", "doubt", "sorry", "proud", "wink", "focus", "sleepy"];
@@ -36,8 +44,14 @@ internal sealed class Link(Func<double> clock)
     // How long the face holds an expression.
     public const double MoodSeconds = 6.0;
 
+    // How long a burst of hearts lasts.
+    public const double HeartSeconds = 4.0;
+
+    // How long the caption shows a sentence Delta let pass.
+    public const double IgnoredSeconds = 5.0;
+
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Ignored = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -45,13 +59,15 @@ internal sealed class Link(Func<double> clock)
     // Takes the brain's moves through the shelf, on the link's threads.
     public Action<string>? Shelf { get; set; }
 
-    public static readonly string[] ShelfMoves = ["open", "sessions", "plugins", "marketplaces", "close", "up", "down", "enter", "back"];
+    public static readonly string[] ShelfMoves = ["open", "sessions", "conversations", "plugins", "marketplaces", "close", "up", "down", "enter", "back"];
 
     // The robot's moment: the state, the voice's loudness as a fraction of the sentence's loudest step (0 outside
     // speech), what the answer costs ("free", "paid", or "" when the line did not say), how full the context is as a
     // fraction of where it is compacted (-1 when unknown), whether it is being compacted, the expression the face holds
-    // ("neutral" for none) and how long ago the brain last said anything, in seconds.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f);
+    // ("neutral" for none), how long ago the brain last said anything, in seconds, how long ago a burst of hearts
+    // began (-1 when none is rising), and the sentence Delta last let pass while its caption shows ("" otherwise), how
+    // long ago it came (-1 when none shows) and its number, which changes with each sentence.
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Ignored = "", float IgnoredAge = -1f, int IgnoredId = 0);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -85,32 +101,46 @@ internal sealed class Link(Func<double> clock)
             var level = state == "speaking" && i >= 0 && i < envelope.Length ? Math.Clamp(envelope[i] / peak, 0f, 1f) : 0f;
             var face = now - moodSince < MoodSeconds ? mood : "neutral";
             var quiet = double.IsNegativeInfinity(heard) ? 0f : (float)Math.Max(0, now - heard);
-            return new Moment(state, level, cost, context, compacting, face, quiet);
+            var hearts = now - heartsSince is >= 0 and < HeartSeconds ? (float)(now - heartsSince) : -1f;
+            var age = now - ignoredSince is >= 0 and < IgnoredSeconds ? (float)(now - ignoredSince) : -1f;
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? ignored : "", age, ignoredId);
         }
     }
 
     // --demo: idle, listening and thinking for 1.5 s each, then 3.5 s of speech-like loudness, 0.5 s idle again and
     // 2.5 s of compaction, while the context fills from empty to full and starts again after the compaction; then each
-    // expression for 1 s.
-    public const double DemoSeconds = 19.0;
+    // expression for 1 s, and the caption of a sentence let pass, which lasts into the next loop.
+    public const double DemoSeconds = 21.0;
 
     public void Demo(double now)
     {
         var t = now % DemoSeconds;
         var want = t < 1.5 ? "idle" : t < 3.0 ? "listening" : t < 4.5 ? "thinking" : t < 8.0 ? "speaking" : "idle";
         bool changed;
+        bool caption;
         lock (gate)
         {
             changed = want != state;
             context = t < 8.5 ? (float)(t / 8.5) : 0.08f;
             compacting = t is >= 8.5 and < 11.0;
-            mood = t >= 11.0 ? Moods[1 + Math.Min(Moods.Length - 2, (int)(t - 11.0))] : "neutral";
+            mood = t is >= 11.0 and < 19.0 ? Moods[1 + Math.Min(Moods.Length - 2, (int)(t - 11.0))] : "neutral";
             moodSince = now;
+            var loop = (int)(now / DemoSeconds);
+            caption = t >= 19.0 && demoIgnored != loop;
+            if (caption)
+            {
+                demoIgnored = loop;
+            }
         }
 
         if (changed)
         {
             Apply(new Change(want, want == "speaking" ? DemoEnvelope() : [], want is "thinking" or "speaking" ? "paid" : "", null, null), now);
+        }
+
+        if (caption)
+        {
+            Apply(new Change(null, [], "", null, null, Ignored: Words.Say("Can you dance?", "Est-ce que tu peux danser ?")), now);
         }
     }
 
@@ -175,6 +205,17 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
+            string? language = null;
+            if (root.TryGetProperty("language"u8, out var lg))
+            {
+                language = lg.ValueKind == JsonValueKind.String ? lg.GetString() : null;
+                if (language is null || !Words.Languages.Contains(language))
+                {
+                    error = $"the shelf speaks en or fr, not {lg}";
+                    return null;
+                }
+            }
+
             string? mood = null;
             if (root.TryGetProperty("mood"u8, out var md))
             {
@@ -186,15 +227,38 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
+            var hearts = false;
+            if (root.TryGetProperty("hearts"u8, out var hs))
+            {
+                if (hs.ValueKind != JsonValueKind.True)
+                {
+                    error = "hearts is true or absent";
+                    return null;
+                }
+
+                hearts = true;
+            }
+
+            string? ignored = null;
+            if (root.TryGetProperty("ignored"u8, out var ig))
+            {
+                ignored = ig.ValueKind == JsonValueKind.String ? ig.GetString() : null;
+                if (string.IsNullOrWhiteSpace(ignored) || ignored.Length > MaxIgnored)
+                {
+                    error = $"ignored is a sentence of at most {MaxIgnored} characters";
+                    return null;
+                }
+            }
+
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && ignored is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, ignored);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -244,7 +308,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, ignored);
         }
         catch (JsonException ex)
         {
@@ -253,7 +317,7 @@ internal sealed class Link(Func<double> clock)
         }
     }
 
-    // --selftest: the parsing and the mouth's loudness, without a window.
+    // --selftest: the parsing, the mouth's loudness and the reading of transcripts, without a window.
     public static int SelfTest()
     {
         var failures = 0;
@@ -289,6 +353,29 @@ internal sealed class Link(Func<double> clock)
             "a sentence starts with an expression");
         Check(Parse("""{"shelf":"sessions"}""", out _) is { State: null, Shelf: "sessions" }, "the shelf opens on the sessions");
         Check(Parse("""{"shelf":"delete"}""", out _) is null, "an unknown move through the shelf is refused");
+        Check(Parse("""{"shelf":"conversations"}""", out _) is { Shelf: "conversations" }, "the shelf opens on the conversations");
+        Conversations.SelfTest(Check);
+        Check(Parse("""{"language":"fr"}""", out _) is { State: null, Language: "fr" }, "the shelf speaks French");
+        Check(Parse("""{"language":"de"}""", out _) is null, "an unknown language is refused");
+        Check(Parse("""{"hearts":true,"mood":"joy"}""", out _) is { State: null, Hearts: true, Mood: "joy" }, "hearts and a smile");
+        Check(Parse("""{"hearts":"yes"}""", out _) is null, "hearts is a boolean");
+        Check(Parse("""{"ignored":"Tu peux danser ?"}""", out _) is { State: null, Ignored: "Tu peux danser ?" }, "a sentence Delta let pass");
+        Check(Parse("""{"ignored":" "}""", out _) is null && Parse("""{"ignored":3}""", out _) is null &&
+            Parse($$"""{"ignored":"{{new string('a', MaxIgnored + 1)}}"}""", out _) is null, "ignored is a short sentence");
+        Check(Parse($$"""{"ignored":"{{string.Concat(Enumerable.Repeat("😀", 200))}}"}""", out _) is { Ignored.Length: 400 }, "200 characters as the brain counts them, emoji included");
+        Words.Language = "fr";
+        var french = Words.Say("Folder", "Dossier");
+        Words.Language = "de";
+        var fallback = Words.Say("Folder", "Dossier");
+        Words.Language = "en";
+        Check(french == "Dossier" && fallback == "Folder" && Words.Say("Folder", "Dossier") == "Folder", "the labels follow the language, English by default");
+        var year = DateTime.Now.Year;
+        var english = (Words.Date(new DateTime(year, 10, 22, 19, 13, 0)), Words.Date(new DateTime(2020, 3, 1, 8, 5, 0)), Words.Number(1.5));
+        Words.Language = "fr";
+        var inFrench = (Words.Date(new DateTime(year, 10, 22, 19, 13, 0)), Words.Date(new DateTime(2020, 3, 1, 8, 5, 0)), Words.Number(1.5));
+        Words.Language = "en";
+        Check(english == ("October 22, 19:13", "March 1, 2020, 08:05", "1.5") && inFrench == ("22 octobre, 19:13", "1 mars 2020, 08:05", "1,5"),
+            "dates and numbers in both languages, without culture data");
         var link = new Link(() => 0);
         link.Apply(new Change("speaking", [0f, 0.1f, 0.05f], "free", null, null), 10.0);
         Check(link.Read(10.03) is { State: "speaking", Level: 1f, Cost: "free", Context: -1f, Compacting: false, Mood: "neutral" }, "the loudest step opens the mouth fully");
@@ -300,6 +387,16 @@ internal sealed class Link(Func<double> clock)
         Check(link.Read(11.01) is { State: "idle", Level: 0f, Cost: "", Context: 0.5f, Compacting: true, Mood: "neutral" }, "a state leaves the context and the compaction alone");
         link.Apply(new Change(null, [], "", null, null, null, "joy"), 12.0);
         Check(link.Read(12.5).Mood == "joy" && link.Read(12.0 + MoodSeconds + 0.1).Mood == "neutral", "an expression lasts a few seconds");
+        Check(link.Read(12.5).Hearts == -1f, "no hearts until asked");
+        link.Apply(new Change(null, [], "", null, null, Hearts: true), 20.0);
+        Check(Math.Abs(link.Read(21.0).Hearts - 1f) < 1e-4 && link.Read(20.0 + HeartSeconds + 0.1).Hearts == -1f, "hearts rise for a few seconds");
+        Check(link.Read(29.0) is { Ignored: "", IgnoredAge: -1f, IgnoredId: 0 }, "no caption until a sentence is let pass");
+        link.Apply(new Change(null, [], "", null, null, Ignored: "Tu peux danser ?"), 30.0);
+        var caption = link.Read(31.0);
+        Check(caption is { Ignored: "Tu peux danser ?", IgnoredId: 1 } && Math.Abs(caption.IgnoredAge - 1f) < 1e-4 &&
+            link.Read(30.0 + IgnoredSeconds + 0.1) is { Ignored: "", IgnoredAge: -1f, IgnoredId: 1 }, "the caption shows for a few seconds");
+        link.Apply(new Change(null, [], "", null, null, Ignored: "Tu peux danser ?"), 40.0);
+        Check(link.Read(40.5) is { IgnoredId: 2 }, "the same sentence again is another caption");
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
     }
@@ -309,6 +406,18 @@ internal sealed class Link(Func<double> clock)
         lock (gate)
         {
             heard = at;
+            if (change.Hearts)
+            {
+                heartsSince = at;
+            }
+
+            if (change.Ignored is { } words)
+            {
+                ignored = words;
+                ignoredSince = at;
+                ignoredId++;
+            }
+
             if (change.Mood is { } face)
             {
                 mood = face;
@@ -341,6 +450,11 @@ internal sealed class Link(Func<double> clock)
             Console.WriteLine(newState == "speaking" ? $"SCENE speaking{paying} {change.Envelope.Length * Step:F2} s at {at:F2} s" : $"SCENE {newState}{paying} at {at:F2} s");
         }
 
+        if (change.Language is { } lang)
+        {
+            Words.Language = lang;
+        }
+
         if (change.Window is { } action)
         {
             Window?.Invoke(action);
@@ -354,6 +468,16 @@ internal sealed class Link(Func<double> clock)
         if (change.Compacting is { } compactingNow)
         {
             Console.WriteLine($"SCENE {(compactingNow ? "compacting" : "compacted")} at {at:F2} s");
+        }
+
+        if (change.Hearts)
+        {
+            Console.WriteLine($"SCENE hearts at {at:F2} s");
+        }
+
+        if (change.Ignored is { } letPass)
+        {
+            Console.WriteLine($"SCENE ignored a sentence of {letPass.Length} characters at {at:F2} s");
         }
     }
 

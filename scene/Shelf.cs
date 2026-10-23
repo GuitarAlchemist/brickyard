@@ -2,7 +2,8 @@ using System.Diagnostics;
 using System.Text.Json;
 
 // Delta's shelf: a menu of what runs in Claude Code on this computer, one level at a time — the sessions, by wmux
-// workspace when wmux runs, the installed plugins and the marketplaces, each opening onto what it holds. It is read from
+// workspace when wmux runs, the past conversations by project (Conversations), the installed plugins and the
+// marketplaces, each opening onto what it holds. It is read from
 // Claude Code's own files and from wmux, never written; the one action is going to a session's pane in wmux.
 //
 // The keys, the mouse and the brain move through it from the render loop's thread, while the slow reads (wmux answers
@@ -49,7 +50,7 @@ internal sealed class Shelf
         }
     }
 
-    // Opens the shelf at its root, or at one of its sections: "sessions", "plugins" or "marketplaces".
+    // Opens the shelf at its root, or at one of its sections: "sessions", "conversations", "plugins" or "marketplaces".
     public void Show(double now, string section = "")
     {
         lock (gate)
@@ -57,7 +58,7 @@ internal sealed class Shelf
             path.Clear();
             var root = new Level("Delta") { Rows = Roots() };
             path.Add(root);
-            var at = section switch { "sessions" => 0, "plugins" => 1, "marketplaces" => 2, _ => -1 };
+            var at = section switch { "sessions" => 0, "conversations" => 1, "plugins" => 2, "marketplaces" => 3, _ => -1 };
             if (at >= 0)
             {
                 root.Selected = at;
@@ -193,18 +194,19 @@ internal sealed class Shelf
 
     private static List<Node> Roots() =>
     [
-        new("Sessions", "Les sessions Claude Code de cet ordinateur", Sessions),
-        new("Plugins", "Les plugins installés", Plugins),
-        new("Marketplaces", "Les catalogues de plugins connus", Marketplaces),
+        new("Sessions", Words.Say("This computer's Claude Code sessions", "Les sessions Claude Code de cet ordinateur"), Sessions),
+        new("Conversations", Words.Say("This computer's conversations, by project", "Les conversations de cet ordinateur, par projet"), Conversations.Projects),
+        new("Plugins", Words.Say("The installed plugins", "Les plugins installés"), Plugins),
+        new("Marketplaces", Words.Say("The plugin catalogs Claude Code knows", "Les catalogues de plugins connus"), Marketplaces),
     ];
 
-    private static string ClaudeDir() =>
+    internal static string ClaudeDir() =>
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") is { Length: > 0 } dir ? dir : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
 
     // A running Claude Code session, from its file in ~/.claude/sessions.
-    private sealed record Session(int Pid, string Id, string Name, string Cwd, string Status, string Version, long Started);
+    internal sealed record Session(int Pid, string Id, string Name, string Cwd, string Status, string Version, long Started);
 
-    private static List<Session> RunningSessions()
+    internal static List<Session> RunningSessions()
     {
         var sessions = new List<Session>();
         var dir = Path.Combine(ClaudeDir(), "sessions");
@@ -257,15 +259,17 @@ internal sealed class Shelf
     {
         var sessions = RunningSessions();
         var wmux = Wmux.Read();
+        var outside = Words.Say("Outside wmux", "Hors de wmux");
         var groups = sessions
-            .GroupBy(s => wmux.Workspaces.TryGetValue(s.Id, out var w) ? w : "Hors de wmux")
-            .OrderBy(g => g.Key == "Hors de wmux" ? 1 : 0).ThenBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase);
+            .GroupBy(s => wmux.Workspaces.TryGetValue(s.Id, out var w) ? w : outside)
+            .OrderBy(g => g.Key == outside ? 1 : 0).ThenBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase);
         var rows = new List<Node>();
         foreach (var group in groups)
         {
             var members = group.OrderBy(s => Rank(s, wmux)).ThenBy(s => s.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
             var waiting = members.Count(s => wmux.Blocked.ContainsKey(s.Id));
-            var summary = $"{members.Count} session{(members.Count > 1 ? "s" : "")}" + (waiting > 0 ? $", {waiting} t'attend{(waiting > 1 ? "ent" : "")}" : "");
+            var summary = $"{members.Count} session{(members.Count > 1 ? "s" : "")}" +
+                (waiting > 0 ? Words.Say($", {waiting} waiting for you", $", {waiting} t'attend{(waiting > 1 ? "ent" : "")}") : "");
             rows.Add(new Node(group.Key, summary, () => members.Select(s => SessionNode(s, wmux)).ToList()));
         }
 
@@ -276,24 +280,26 @@ internal sealed class Shelf
 
     private static Node SessionNode(Session s, Wmux.Snapshot wmux)
     {
-        var state = wmux.Blocked.TryGetValue(s.Id, out var why) ? "t'attend" + (why.Length > 0 ? " : " + why : "") : s.Status == "busy" ? "travaille" : "au repos";
+        var state = wmux.Blocked.TryGetValue(s.Id, out var why)
+            ? Words.Say("waiting for you" + (why.Length > 0 ? ": " + why : ""), "t'attend" + (why.Length > 0 ? " : " + why : ""))
+            : s.Status == "busy" ? Words.Say("working", "travaille") : Words.Say("idle", "au repos");
         return new Node(s.Name, state, () =>
         {
             var rows = new List<Node>();
             if (wmux.Surfaces.TryGetValue(s.Id, out var surface))
             {
-                rows.Add(new Node("Aller à cette session", "Montre son volet dans wmux", act: () => Wmux.Focus(surface)));
+                rows.Add(new Node(Words.Say("Go to this session", "Aller à cette session"), Words.Say("Shows its pane in wmux", "Montre son volet dans wmux"), act: () => Wmux.Focus(surface)));
             }
 
-            rows.Add(new Node("Dossier", s.Cwd));
-            rows.Add(new Node("État", state));
+            rows.Add(new Node(Words.Say("Folder", "Dossier"), s.Cwd));
+            rows.Add(new Node(Words.Say("State", "État"), state));
             if (s.Started > 0)
             {
-                rows.Add(new Node("Démarrée", DateTimeOffset.FromUnixTimeMilliseconds(s.Started).ToLocalTime().ToString("d MMMM, HH:mm", System.Globalization.CultureInfo.GetCultureInfo("fr-FR"))));
+                rows.Add(new Node(Words.Say("Started", "Démarrée"), Words.Date(DateTimeOffset.FromUnixTimeMilliseconds(s.Started).LocalDateTime)));
             }
 
-            rows.Add(new Node("Claude Code", s.Version.Length > 0 ? "version " + s.Version : "version inconnue"));
-            rows.Add(new Node("Processus", s.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            rows.Add(new Node("Claude Code", s.Version.Length > 0 ? "version " + s.Version : Words.Say("unknown version", "version inconnue")));
+            rows.Add(new Node(Words.Say("Process", "Processus"), s.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             return rows;
         });
     }
@@ -326,7 +332,7 @@ internal sealed class Shelf
             var version = entry.ValueKind == JsonValueKind.Object ? Text(entry, "version") : "";
             var installPath = entry.ValueKind == JsonValueKind.Object ? Text(entry, "installPath") : "";
             var on = enabled.TryGetValue(key, out var e) && e;
-            rows.Add(new Node((on ? "● " : "○ ") + name, $"{market}{(version.Length > 0 ? " · " + version : "")} · {(on ? "activé" : "désactivé")}", () => Contents(installPath, on)));
+            rows.Add(new Node((on ? "● " : "○ ") + name, $"{market}{(version.Length > 0 ? " · " + version : "")} · {(on ? Words.Say("enabled", "activé") : Words.Say("disabled", "désactivé"))}", () => Contents(installPath, on)));
         }
 
         return [.. rows.OrderBy(r => r.Label.StartsWith('○')).ThenBy(r => r.Label, StringComparer.CurrentCultureIgnoreCase)];
@@ -361,10 +367,10 @@ internal sealed class Shelf
         if (File.Exists(manifest))
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(manifest));
-            rows.Add(new Node(on ? "Activé" : "Désactivé", Text(doc.RootElement, "description")));
+            rows.Add(new Node(on ? Words.Say("Enabled", "Activé") : Words.Say("Disabled", "Désactivé"), Text(doc.RootElement, "description")));
         }
 
-        foreach (var (folder, what) in new[] { ("skills", "Skills"), ("commands", "Commandes"), ("agents", "Agents") })
+        foreach (var (folder, what) in new[] { ("skills", "Skills"), ("commands", Words.Say("Commands", "Commandes")), ("agents", "Agents") })
         {
             var at = Path.Combine(installPath, folder);
             if (!Directory.Exists(at))
@@ -430,7 +436,7 @@ internal sealed class Shelf
         var file = Path.Combine(location, ".claude-plugin", "marketplace.json");
         if (!File.Exists(file))
         {
-            return [new Node("Catalogue absent", file)];
+            return [new Node(Words.Say("No catalog", "Catalogue absent"), file)];
         }
 
         using var doc = JsonDocument.Parse(File.ReadAllText(file));

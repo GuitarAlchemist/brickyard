@@ -62,18 +62,20 @@ Which speech Delta passes on:
 
 Claude Code asks your permission the first time Claude uses Delta's `say` and `listen` tools.
 
-Delta does some things itself, without Claude, when a short sentence asks for them. These local commands are in French
-for now; in English, ask Claude, which does the same with Delta's `window` and `shelf` tools:
-- **Its window.** « Delta, mets-toi en haut à gauche », « va à droite », « au centre », « maximise ta fenêtre »,
-  « minimise-toi », « plein écran », « restaure ta fenêtre », « plus petit », « reste au premier plan ».
-  « Cache-toi » puts it in the notification area, by the clock; « Delta, reviens » or a click on its icon brings it
-  back.
-- **Its shelf**, a small menu in its window. « Delta, montre-moi les sessions » lists this computer's Claude Code
-  sessions, grouped by wmux workspace, those waiting for you first. « Montre les plugins » and « montre les
-  marketplaces » list what is installed. While the shelf is open, « descends », « monte », « ouvre » and « retour »
-  move through it, without « Delta » within 20 seconds of the last step, and « ferme le menu » closes it. Tab or M opens it with the keyboard too, then
-  the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session that runs in wmux,
-  « Aller à cette session » shows its pane.
+Delta does some things itself, without Claude, when a short sentence asks for them. It understands them in English
+and in French whatever its language, and answers in its own:
+- **Its window.** "Delta, move to the top left", "go to the right", "go to the center", "maximize your window",
+  "minimize", "full screen", "restore your window", "make yourself smaller", "stay on top". "Hide" puts it in the
+  notification area, by the clock; "Delta, come back" or a click on its icon brings it back. In French: « mets-toi en
+  haut à gauche », « maximise ta fenêtre », « cache-toi », « reviens ».
+- **Its shelf**, a small menu in its window. "Delta, show me the sessions" lists this computer's Claude Code
+  sessions, grouped by wmux workspace, those waiting for you first. "Show the conversations" lists the past ones by
+  project, the most recent first, each opening onto its last requests. "Show the plugins" and "show the marketplaces"
+  list what is installed. While the shelf is open, "go down", "go up", "open" and "back" move through it, without
+  "Delta" within 20 seconds of the last step, and "close the menu" closes it. In French: « montre-moi les sessions »,
+  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». Tab or M opens it
+  with the keyboard too, then the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session
+  that runs in wmux, "Go to this session" shows its pane. The shelf's labels follow Delta's language.
 
 What you say is transcribed on your machine. The text then goes to Claude like anything you type.
 
@@ -149,7 +151,8 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   `sorry`, is the expression Delta's face takes as it starts. `listen` waits for the next sentence. `window` moves,
   sizes or hides Delta's window, and `shelf` walks its menu.
 - It declares a Claude Code channel. A sentence that no `listen` is waiting for is pushed into the session as a
-  channel event, if it starts with "Delta" or "Claude" or comes soon after Delta spoke.
+  channel event, if it starts with "Delta" or "Claude" or comes soon after Delta spoke. One it lets pass for want of
+  its name shows for five seconds in a caption under the robot, with how to call it, so that you know it was heard.
 - With `-triage <model>`, or `"triage"` in `delta.json`, a small Ollama model sorts those sentences first. It answers
   greetings and thanks itself at no cost, drops what is meant for someone else, and passes the rest to Claude.
   Questions, sentences that start with "Claude", and answers to Claude's own questions always go to Claude. A lamp on
@@ -164,9 +167,18 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   down it, and Delta tells whoever speaks to Claude meanwhile that the answer will be late. The plugin's hooks
   ([plugins/delta/hooks/hooks.json](plugins/delta/hooks/hooks.json)) post the start and the end of a compaction to the
   brain on 127.0.0.1:8807 (`-hooks`).
+- The triage's model also answers a few questions of fact at no cost, from a sheet the brain writes at the moment
+  of the question: the date and the time, Delta's version, where Whisper runs, the small model, what Brickyard and IX
+  are. Only a question about one of those waits for it, and anything the sheet does not hold, or that asks for an
+  action, goes to Claude. The `heard` line gives `fact` and `fact_ms`.
+- When a sentence goes to Claude, Delta says a short word at once, « Une seconde. » or "Let me check.", so that the
+  first sound comes in under a second while Claude thinks. It says nothing while it is already speaking, and drops the
+  word if Claude's answer is ready first. The journal's `heard` line gives its `ack`, the `say_id` of a `say` line by
+  `ack`.
 - Delta's face has eyebrows and mouth corners besides its eyes: neutral, joy, surprise, doubt, sorry, proud, wink,
   focus and sleepy. An expression lasts six seconds. Small talk that Delta answers itself makes it smile, « bonne
-  nuit » makes it sleepy, and it dozes off after four minutes of quiet.
+  nuit » makes it sleepy, and it dozes off after four minutes of quiet. "Delta, I love you" or « je t'aime » sends
+  red hearts rising from its chest while it smiles.
 - Delta speaks with IX's warm voice: the same Piper voice through an equaliser, a gentle compressor, a touch of
   saturation and a small room (`brain\fx.go`). `-fx none` gives Piper's own voice.
 - A camera process can post hand gestures to the same address, `POST /gesture` with the same header:
@@ -174,7 +186,16 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   down look sorry; a wave opens the conversation, so that the next sentence needs no « Delta »; pointing up or down
   and swiping left or right walk the shelf while it is open. `open_palm` and `fist` are only recorded. Each gesture
   is a `gesture` line in the journal. No camera process ships yet.
-- whisper.cpp's server then runs on a free port.
+- Another device can talk to Delta through a gateway on this computer, such as IX's over WebRTC. The gateway posts
+  each sentence the device heard, a 16 kHz mono WAV of at most 30 s, to `POST /hear` on the same address, and plays
+  what Delta says from `GET /said`, one server-sent event per sentence with its WAV and the `utterance_id` it answers. Both need the hooks' header and
+  `X-Delta-Remote`, the secret the brain writes at each start to `%LOCALAPPDATA%\delta\remote.secret`. A sentence from
+  another device needs no « Delta », and the triage may answer it but not drop it; a chime tells the room, and Claude
+  has the user confirm at the computer anything destructive it asks for. The whole address refuses a request with an `Origin` header, or for another host than
+  127.0.0.1, localhost or ::1.
+- whisper.cpp's server then runs on a free port. With `"whisper_fallback"` in `delta.json`, such as the CPU build
+  behind a GPU build in `"whisper"`, the brain runs the fallback when the first cannot start or hear, or dies. The
+  journal's `ears` line says which one hears, and why the other does not.
 
 The marketplace is [.claude-plugin/marketplace.json](.claude-plugin/marketplace.json). A tag `v<version>` builds the
 release with [.github/workflows/release.yml](.github/workflows/release.yml). `/delta:setup` installs that release, for

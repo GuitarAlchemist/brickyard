@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -19,24 +21,39 @@ import (
 // earsRate is the only rate whisper.cpp takes: 16 kHz mono.
 const earsRate = 16000
 
+// earsPatience is how long a transcription may take before the server is taken for hung: the CPU build hears a
+// sentence in about 2 s, the GPU build in 0.2 s, and a graphics driver that stopped answering never does.
+const earsPatience = 30 * time.Second
+
 // ears is whisper.cpp's server, run by the brain on a loopback port and kept warm, so that each utterance costs only
 // its transcription. On the author's machine the server and its model are IX's (whisper.cpp b5454 and
-// ggml-large-v3-turbo-q5_0), used as they are.
+// ggml-large-v3-turbo-q5_0), used as they are. Given several servers, such as a GPU build and then the CPU build, the
+// ears run the first that starts and hears, and the next when the one running dies.
 type ears struct {
-	url string
-	cmd *exec.Cmd
+	url      string
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	dead     chan struct{} // closed once cmd has exited
+	server   string        // the server running now
+	rest     []string      // the servers to fall back on, in order
+	failed   []string      // why the servers before this one did not start
+	run      func(server string) error
+	fell     func(server, why string) // told when another server takes over, if set
+	patience time.Duration            // how long a transcription may take before the server is taken for hung
 }
 
 // utterance is something heard: its text, when the speaker stopped (or the line was read), and how long the
 // transcription took.
 type utterance struct {
-	text  string
-	ended time.Time
-	asr   time.Duration
+	text   string
+	ended  time.Time
+	asr    time.Duration
+	source string // "" for this computer's microphone, "remote" for another device (remote.go)
 }
 
-// startEars runs whisper-server on the loopback port, transcribing lang ("en" or "fr").
-func startEars(server, model, lang string, port, threads int, prompt string, audioCtx int) (*ears, error) {
+// startEars runs whisper-server on the loopback port, transcribing lang ("en" or "fr"): the first of servers that
+// starts and hears a second of silence, which loads the model's weights and kernels. The others are its fallbacks.
+func startEars(servers []string, model, lang string, port, threads int, prompt string, audioCtx int) (*ears, error) {
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 	if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
 		c.Close()
@@ -48,25 +65,116 @@ func startEars(server, model, lang string, port, threads int, prompt string, aud
 	if audioCtx > 0 {
 		args = append(args, "-ac", strconv.Itoa(audioCtx))
 	}
+	e := &ears{url: "http://" + addr, patience: earsPatience}
+	e.run = func(server string) error { return e.start(server, args, addr) }
+	for i, server := range servers {
+		if err := e.run(server); err != nil {
+			e.failed = append(e.failed, err.Error())
+			continue
+		}
+		e.rest = servers[i+1:]
+		return e, nil
+	}
+	return nil, fmt.Errorf("%s", strings.Join(e.failed, "; "))
+}
+
+// start runs one server and waits until it hears. Its caller holds mu, or alone has e.
+func (e *ears) start(server string, args []string, addr string) error {
 	cmd := exec.Command(server, args...)
 	hideConsole(cmd)
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return fmt.Errorf("ears: %w", err)
 	}
 	killWithMe(cmd.Process)
-	e := &ears{url: "http://" + addr, cmd: cmd}
+	dead := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(dead)
+	}()
+	e.cmd, e.dead, e.server = cmd, dead, server
 	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		select {
+		case <-dead: // a GPU build without its libraries stops at once
+			return fmt.Errorf("ears: %s stopped: %v", server, cmd.ProcessState)
+		default:
+		}
 		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
 			c.Close()
-			return e, nil
+			if _, err := e.ask(make([]float32, earsRate)); err != nil {
+				e.stop()
+				return fmt.Errorf("ears: %s: %w", server, err)
+			}
+			return nil
 		}
 	}
-	e.close()
-	return nil, fmt.Errorf("ears: whisper-server did not open %s within 60 s", addr)
+	e.stop()
+	return fmt.Errorf("ears: %s did not open %s within 60 s", server, addr)
 }
 
-// hear transcribes 16 kHz mono samples.
+// where says where the server running now transcribes, as its folder names it: a build in a folder named for CUDA or
+// Vulkan is taken for the graphics card's.
+func (e *ears) where() string {
+	e.mu.Lock()
+	server := strings.ToLower(e.server)
+	e.mu.Unlock()
+	if strings.Contains(server, "cuda") || strings.Contains(server, "vulkan") {
+		return "on the graphics card"
+	}
+	return "on the processor"
+}
+
+// hear transcribes 16 kHz mono samples. When the server died or hung, the next one takes over and hears them, as it
+// does a sentence that failed while another sentence's failure brought the next one.
 func (e *ears) hear(samples []float32) (string, error) {
+	e.mu.Lock()
+	asked := e.server
+	e.mu.Unlock()
+	text, err := e.ask(samples)
+	if err != nil && e.fallBack(asked, err) {
+		return e.ask(samples)
+	}
+	return text, err
+}
+
+// fallBack runs the next server if the one asked died, or hung while another can take over, and says whether another
+// runs now.
+func (e *ears) fallBack(asked string, why error) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.server != asked {
+		return true
+	}
+	if e.dead == nil {
+		return false
+	}
+	gone := fmt.Sprintf("%s died: %v", e.server, why)
+	var timeout net.Error
+	if errors.As(why, &timeout) && timeout.Timeout() && len(e.rest) > 0 {
+		gone = fmt.Sprintf("%s did not answer within %v", e.server, e.patience)
+		e.stop()
+	}
+	select {
+	case <-e.dead:
+	case <-time.After(time.Second): // it runs: the request failed, not the server
+		return false
+	}
+	for len(e.rest) > 0 {
+		server := e.rest[0]
+		e.rest = e.rest[1:]
+		if err := e.run(server); err != nil {
+			gone += "; " + err.Error()
+			continue
+		}
+		if e.fell != nil {
+			e.fell(server, gone)
+		}
+		return true
+	}
+	return false
+}
+
+// ask posts the samples to the server running now.
+func (e *ears) ask(samples []float32) (string, error) {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	file, _ := form.CreateFormFile("file", "heard.wav")
@@ -74,7 +182,8 @@ func (e *ears) hear(samples []float32) (string, error) {
 	form.WriteField("response_format", "json")
 	form.WriteField("temperature", "0.0")
 	form.Close()
-	resp, err := http.Post(e.url+"/inference", form.FormDataContentType(), &body)
+	client := http.Client{Timeout: e.patience}
+	resp, err := client.Post(e.url+"/inference", form.FormDataContentType(), &body)
 	if err != nil {
 		return "", err
 	}
@@ -93,8 +202,18 @@ func (e *ears) hear(samples []float32) (string, error) {
 }
 
 func (e *ears) close() {
-	e.cmd.Process.Kill()
-	e.cmd.Wait()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.rest = nil
+	e.stop()
+}
+
+// stop kills the server running now and waits for it to exit.
+func (e *ears) stop() {
+	if e.cmd != nil {
+		e.cmd.Process.Kill()
+		<-e.dead
+	}
 }
 
 // cleanHeard folds the transcript's spaces and drops what Whisper writes over silence or noise: a sound in brackets

@@ -6,20 +6,23 @@ import "fmt"
 // Whisper's -l, the Piper voice setup.ps1 installs, the language Claude is asked to answer in, and the standalone
 // mode's persona.
 type language struct {
-	code    string // Whisper's -l, and "language" in delta.json
-	name    string // as Claude is told it
-	voice   string // the Piper voice setup.ps1 installs for it, under <home>\voices
-	hello   string // said once at start-up, which loads the voice model
-	persona string // the standalone mode's system prompt
+	code    string   // Whisper's -l, and "language" in delta.json
+	name    string   // as Claude is told it
+	voice   string   // the Piper voice setup.ps1 installs for it, under <home>\voices
+	hello   string   // said once at start-up, which loads the voice model
+	acks    []string // what Delta says at once when a sentence goes to Claude, in turn
+	persona string   // the standalone mode's system prompt
 }
 
 var languages = map[string]language{
 	"en": {code: "en", name: "English", voice: "en_US-ljspeech-medium.onnx", hello: "Hello.",
+		acks: []string{"Let me check.", "One second.", "Let me see.", "Let me think."},
 		persona: "You are Delta, the little robot who runs Brickyard, a software factory driven by voice. " +
 			"You speak English, aloud: one or two short sentences, warm and precise, with no lists, no markdown and no " +
 			"emoji. For now you can only talk: you cannot build, run or change anything yet. " +
 			"If someone asks you to, say so simply and offer to talk about it."},
 	"fr": {code: "fr", name: "French", voice: "fr_FR-siwis-medium.onnx", hello: "Bonjour.",
+		acks: []string{"Je regarde.", "Une seconde.", "Voyons voir.", "Je réfléchis."},
 		persona: "Tu es Delta, le petit robot qui dirige Brickyard, une usine à logiciels qu'on pilote à la voix. " +
 			"Tu parles français, à l'oral : une ou deux phrases courtes, chaleureuses et précises, sans liste, sans markdown, " +
 			"sans emoji. Pour l'instant tu sais seulement converser : tu ne peux encore rien construire, lancer ni modifier. " +
