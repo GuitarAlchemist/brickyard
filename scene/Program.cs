@@ -522,8 +522,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 10, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 10 }], // one image each
+            MaxSets = 11, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 11 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -628,6 +628,12 @@ internal static unsafe class Stage
                 link.Apply(new Link.Change(null, [], "", null, null, Mic: turnOn), clock.Elapsed.TotalSeconds);
             }
         }
+
+        // The guest badge at the top centre while guests watch from afar (Panel.GuestBadge).
+        var guestSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? guestTexture = null;
+        Panel.Card? guestBadge = null;
+        var guestDrawn = (Watching: 0, Height: 0, Language: "");
 
         void NextLanguage()
         {
@@ -923,6 +929,13 @@ internal static unsafe class Stage
                 phoneTexture = Upload(phone, phoneSet, phoneTexture);
             }
 
+            if (moment.Guests > 0 && !splashing && guestDrawn != (moment.Guests, extent.Height, Words.Language))
+            {
+                guestDrawn = (moment.Guests, extent.Height, Words.Language);
+                guestBadge = Panel.GuestBadge(moment.Guests, extent.Height);
+                guestTexture = Upload(guestBadge, guestSet, guestTexture);
+            }
+
             if (!splashing && micDrawn != (moment.MicOff, extent.Height))
             {
                 micDrawn = (moment.MicOff, extent.Height);
@@ -1051,6 +1064,15 @@ internal static unsafe class Stage
                         cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&dot, sizeof(SplashPush)));
                         cb.Draw(6, 1, 0, 0);
                     }
+                }
+
+                if (moment.Guests > 0 && guestBadge is not null && guestTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var push = new SplashPush(Rect((extent.Width - guestBadge.Width) / 2, CardMargin(), guestBadge.Width, guestBadge.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [guestSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
                 }
 
                 if (micButton is not null && micTexture is not null)
@@ -1240,6 +1262,7 @@ internal static unsafe class Stage
         phoneTexture?.Dispose();
         languageTexture?.Dispose();
         micTexture?.Dispose();
+        guestTexture?.Dispose();
         pairingTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();

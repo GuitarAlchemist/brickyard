@@ -424,3 +424,27 @@ func TestASilentRecordingIsHeardAsNothing(t *testing.T) {
 		t.Errorf("Whisper was asked %d times", asked)
 	}
 }
+
+// The gateway says how many guests watch the window from afar, for the window to say so.
+func TestTheWindowLearnsWhenGuestsWatch(t *testing.T) {
+	var told []int
+	r := &remote{secret: "s3cret", watch: func(guests int) { told = append(told, guests) }}
+	srv := remoteServer(t, r)
+	for body, want := range map[string]int{`{"watching":2}`: http.StatusNoContent, `{}`: http.StatusBadRequest, `{"watching":-1}`: http.StatusBadRequest,
+		`{"watching":"2"}`: http.StatusBadRequest, `{"watching":100}`: http.StatusBadRequest} {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/guests", strings.NewReader(body))
+		req.Header.Set(hookHeader, "1")
+		req.Header.Set(remoteHeader, "s3cret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("%s: %d, want %d", body, resp.StatusCode, want)
+		}
+	}
+	if !slices.Equal(told, []int{2}) {
+		t.Errorf("told %v", told)
+	}
+}

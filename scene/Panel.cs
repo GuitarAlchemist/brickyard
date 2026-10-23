@@ -164,6 +164,23 @@ internal static class Panel
         return new Card(rgba, size, size, []);
     }
 
+    // While guests the user invited watch the window from afar: a red light and how many, so that nobody is seen without
+    // knowing it.
+    public static Card GuestBadge(int watching, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = watching == 1 ? Words.Say("A guest is watching", "Un invité regarde") : Words.Say($"{watching} guests are watching", $"{watching} invités regardent");
+        var wide = Splash.Text(label, Px(14), out var w, out _, true) is null ? 0 : w;
+        var (height, light) = (PhoneSize(windowHeight), Px(10));
+        var width = Px(Pad) + light + Px(8) + wide + Px(Pad);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 205);
+        Fill(rgba, width, Px(Pad), (height - light) / 2, light, light, (230, 70, 70), 255);
+        Text(rgba, width, height, label, Px(14), true, Px(Pad) + light + Px(8), (height - Px(18)) / 2, (230, 236, 242));
+        return new Card(rgba, width, height, []);
+    }
+
     // The microphone button, left of the language button: a microphone, struck through in red while it is off.
     public static Card MicButton(bool off, int windowHeight)
     {

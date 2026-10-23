@@ -27,6 +27,8 @@ import (
 //	POST /hear  a 16 kHz mono 16-bit WAV of at most 30 s; 202 {"utterance_id","text","route"}, 503 until Delta hears
 //	GET  /said  server-sent events, one per sentence as it starts playing: {"say_id","text","seconds","t_ms","wav_b64"}
 //	POST /link  {"url"}, the https link of at most 106 bytes that a phone opens to pair with the gateway; 204
+//	POST /guests {"watching"}, how many guests the gateway lets watch the window from afar, 0 to 99, at each change and
+//	            every 30 s while any watch; 204. The window says so until 60 s after the last post.
 //
 // A sentence from /hear is routed as one addressed to Delta, since holding the device's button addressed it. Its heard
 // line and channel event carry source "remote". A chime tells the room when Delta says nothing back at once, nor is
@@ -51,6 +53,7 @@ type remote struct {
 	route  func(u utterance) (id int, route string) // routes a transcript as hear does
 	chime  func()                                   // tells the room a sentence came from another device
 	pair   func(rows []string)                      // shows a pairing link's QR code, one string of 0 and 1 per row
+	watch  func(guests int)                         // shows how many guests watch the window from afar, or nil
 
 	mu         sync.Mutex
 	transcribe func(samples []float32) (text, lang string, err error) // nil until Delta's ears are ready
@@ -92,6 +95,7 @@ func (r *remote) handle(mux *http.ServeMux) {
 	mux.HandleFunc("/hear", r.hear)
 	mux.HandleFunc("/said", r.said)
 	mux.HandleFunc("/link", r.link)
+	mux.HandleFunc("/guests", r.guests)
 }
 
 // allowed answers 403 unless the request has the method, the hooks' header and the secret.
@@ -235,6 +239,24 @@ func (r *remote) link(w http.ResponseWriter, req *http.Request) {
 	}
 	if r.pair != nil {
 		r.pair(rows)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// guests takes how many guests the gateway lets watch the window from afar, so that nobody is seen without knowing it.
+func (r *remote) guests(w http.ResponseWriter, req *http.Request) {
+	if !r.allowed(w, req, http.MethodPost) {
+		return
+	}
+	var body struct {
+		Watching *int `json:"watching"`
+	}
+	if err := json.NewDecoder(io.LimitReader(req.Body, 4096)).Decode(&body); err != nil || body.Watching == nil || *body.Watching < 0 || *body.Watching > 99 {
+		http.Error(w, `{"watching"}, from 0 to 99, please`, http.StatusBadRequest)
+		return
+	}
+	if r.watch != nil {
+		r.watch(*body.Watching)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

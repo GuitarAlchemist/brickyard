@@ -602,6 +602,14 @@ row or more, the same words whatever the punctuation, and the `heard` line says 
 the same text. Two copies stay, since people repeat themselves. Left to measure: the fallback back on with the CUDA
 build only, on a mumble and a long silence.
 
+## A badge when a guest watches (2026-10-23)
+
+brickyard-remote-b2's plan A lets a guest the user invites watch Delta's window from afar, through a tunnel, without
+a microphone. So that nobody is seen without knowing it, the gateway posts `POST /guests {"watching": n}`, guests
+only, at each change and every 30 s while any watch, with the hooks' header and `X-Delta-Remote`. The window shows
+« Un invité regarde », or how many, at its top centre, until 60 s after the last post: a gateway that dies cannot
+leave the badge up for ever, nor hide a guest for more than a minute. The journal's `guests` line says each change.
+
 ## Two languages, and a button to pick them (2026-10-23)
 
 Looking at the pairing card, the user missed a way to change the language from the window, then asked for the whole

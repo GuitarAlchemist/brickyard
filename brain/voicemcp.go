@@ -246,6 +246,13 @@ func runMCP(c mcpConfig) {
 		rm.secret = secret
 		logf("remote: a gateway's secret is in %s", path)
 	}
+	var watching atomic.Int64
+	rm.watch = func(guests int) { // the window's badge clears itself 60 s after the last post (Link.GuestsSeconds)
+		s.send(map[string]any{"guests": guests})
+		if watching.Swap(int64(guests)) != int64(guests) {
+			m.note("guests", map[string]any{"watching": guests})
+		}
+	}
 	rm.pair = func(rows []string) { // the journal says that a link came, never which
 		s.send(map[string]any{"pairing": map[string]any{"rows": rows, "seconds": pairingSeconds}})
 		m.note("pairing", map[string]any{"seconds": pairingSeconds})
