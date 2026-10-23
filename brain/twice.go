@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -55,10 +56,9 @@ func (m *mcpServer) heardTwice(u utterance, now time.Time) bool {
 	return false
 }
 
-// routedNow keeps a sentence that went somewhere for twiceWithin.
-func (m *mcpServer) routedNow(u utterance, now time.Time) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+// routing keeps a sentence about to be routed for twiceWithin, as soon as it is heard: two microphones send their
+// copies a fraction of a second apart, while the first may still wait for the triage. The caller holds m.mu.
+func (m *mcpServer) routing(u utterance, now time.Time) {
 	kept := m.lately[:0]
 	for _, r := range m.lately {
 		if now.Sub(r.at) < twiceWithin {
@@ -66,4 +66,11 @@ func (m *mcpServer) routedNow(u utterance, now time.Time) {
 		}
 	}
 	m.lately = append(kept, routed{sentenceWords(u.text), u.source, now})
+}
+
+// forgetRouted takes back a sentence routing recorded, once the wake gate ignored it.
+func (m *mcpServer) forgetRouted(u utterance, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lately = slices.DeleteFunc(m.lately, func(r routed) bool { return r.at.Equal(now) && r.source == u.source })
 }

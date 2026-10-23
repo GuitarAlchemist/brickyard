@@ -452,8 +452,8 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	defer func() {
 		fields["route"] = route
 		m.note("heard", fields)
-		if route != "ignored" && route != "duplicate" {
-			m.routedNow(u, now)
+		if route == "ignored" { // a copy the wake gate ignored here must not hide the phone's, which needs no wake word
+			m.forgetRouted(u, now)
 		}
 		if m.tell != nil && route != "duplicate" && !carriesNothing(u.text) { // what Delta heard, and where it went
 			reason, _ := fields["reason"].(string)
@@ -466,6 +466,7 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 		fields["reason"] = "heard by the other device too"
 		return id, route
 	}
+	m.routing(u, now) // at once, since the other device's copy may come while this one is still routed
 	if len(m.waiting) > 0 {
 		l := m.waiting[0]
 		m.waiting = m.waiting[1:]

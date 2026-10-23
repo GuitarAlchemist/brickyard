@@ -627,3 +627,24 @@ func TestAnAnswerIsSaidInTheLanguageOfItsQuestion(t *testing.T) {
 		t.Fatalf("%s %s %s", m.spokenIn(said-2), m.spokenIn(said-1), m.spokenIn(said))
 	}
 }
+
+// The phone's copy of a sentence can come while the computer's is still being routed, as utterances 14 and 15 did,
+// live, 0.1 s apart: it is dropped all the same.
+func TestACopyThatComesWhileTheFirstIsRoutedGoesOnce(t *testing.T) {
+	second := ""
+	var m *mcpServer
+	m, _, out := startServer(t, func(s *mcpServer) {
+		s.pushed = func() {
+			if second == "" {
+				second = m.hear(utterance{text: "Est-ce qu'on peut essayer la version qui passe par le tunnel ?", source: "remote"}, time.Now())
+			}
+		}
+	})
+	if where := m.hear(utterance{text: "Delta, est-ce qu'on peut essayer la version qui passe par le tunnel ?"}, time.Now()); where != "channel" {
+		t.Fatalf("went to %s", where)
+	}
+	next(t, out)
+	if second != "duplicate" {
+		t.Fatalf("the phone's copy went to %s", second)
+	}
+}
