@@ -156,6 +156,7 @@ func runMCP(c mcpConfig) {
 	m.speak = mo.speak
 	m.ack, m.quiet = mo.ack, mo.quiet
 	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
+		m.tell = s.send
 		m.show = func(line map[string]any) { // a request for the window or its shelf brings back a window the user closed
 			s.summon()
 			s.send(line)

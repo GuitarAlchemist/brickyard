@@ -154,6 +154,15 @@ func windowCommand(text string) string {
 	return ""
 }
 
+// shorten cuts text to at most n runes, ending with an ellipsis when it cut.
+func shorten(text string, n int) string {
+	runes := []rune(text)
+	if len(runes) <= n {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:n-1])) + "…"
+}
+
 // plainWords are a sentence's words, lowered and without accents, its hyphens and apostrophes made spaces.
 func plainWords(text string) []string {
 	fold := strings.NewReplacer("à", "a", "â", "a", "ä", "a", "é", "e", "è", "e", "ê", "e", "ë", "e", "î", "i", "ï", "i",

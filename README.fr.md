@@ -49,6 +49,9 @@ Ce que Delta transmet par le canal :
 - les phrases suivantes, pendant 15 secondes ;
 - votre réponse, dans les 20 secondes après ses dernières paroles.
 
+Une phrase qu'il laisse passer faute de « Delta » s'affiche cinq secondes sous le robot, avec la façon de l'appeler :
+vous savez ainsi qu'il l'a entendue.
+
 Il ignore une phrase qui dit « je ne te parle pas », ou qui appelle d'abord une autre session de l'auteur : Brutal,
 Gaïa, Indigo, Amber, Codex ou IX. La conversation s'arrête alors.
 

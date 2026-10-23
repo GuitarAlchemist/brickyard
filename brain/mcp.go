@@ -105,6 +105,7 @@ type mcpServer struct {
 	busy       func() string                                                   // what Delta says when Claude cannot answer soon, if anything
 	record     func(event string, fields map[string]any)                       // the journal, if any
 	show       func(line map[string]any)                                       // sends Delta's window a line, if it has one (window.go)
+	tell       func(line map[string]any)                                       // the same, without bringing back a window the user closed
 	listenMin  time.Duration
 	listenMax  time.Duration
 	gate       wakeGate
@@ -392,6 +393,9 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	fields["reason"] = why
 	if !admitted {
 		route = "ignored"
+		if why == "not addressed to Delta" && m.tell != nil && !carriesNothing(u.text) { // heard, and how to call Delta
+			m.tell(map[string]any{"ignored": shorten(u.text, 200)})
+		}
 		return id, route
 	}
 	if loving(u.text) && m.show != nil { // hearts rise from Delta's chest, and it smiles; the sentence goes on as any other

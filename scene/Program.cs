@@ -5,8 +5,8 @@
 //
 //	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--shelf SECTION] [--hidden] [--immediate] [--cap N] | --selftest
 //
-// --demo plays idle, listening, thinking, speaking, a compaction and each expression in a loop without the brain, while
-// the context gauge fills, and --shots DIR saves a PNG of each. The scene
+// --demo plays idle, listening, thinking, speaking, a compaction, each expression and the caption of a sentence let pass
+// in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
 //
@@ -150,7 +150,7 @@ internal static unsafe class Stage
         var shelfAtStart = Option(args, "--shelf");
         Words.Language = Option(args, "--lang") ?? "en";
         const double S = Splash.Seconds;
-        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m))];
+        (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored")];
         if (shots.Length > 0 && !demo)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
@@ -522,8 +522,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 3,
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 3 }],
+            MaxSets = 4, // the logo, the notice, the shelf's card and the caption
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 4 }],
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -586,6 +586,31 @@ internal static unsafe class Stage
         var cardVersion = -1;
         var cardHeight = 0;
         int CardMargin() => Math.Max(12, extent.Height / 48);
+
+        // The caption under the robot (Panel.Caption) for a sentence Delta let pass, drawn again for each and for a new size.
+        var captionSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? captionTexture = null;
+        Panel.Card? caption = null;
+        var captionId = 0;
+        var captionSize = (0, 0);
+
+        // Uploads a drawn card into a new texture that set samples, once no frame in flight reads the old one.
+        Texture Upload(Panel.Card drawn, VkDescriptorSet set, Texture? old)
+        {
+            device.WaitIdle();
+            device.ResetCommandPool(uploadPool, VkCommandPoolResetFlags.None);
+            uploader.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+            var fresh = new Texture(device, physical, uploader, drawn.Rgba, drawn.Width, drawn.Height);
+            uploader.End();
+            var uploaderHandle = uploader.Handle;
+            queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploaderHandle }], default);
+            device.WaitIdle();
+            fresh.FreeStaging();
+            old?.Dispose();
+            var image = new VkDescriptorImageInfo { Sampler = sampler, ImageView = fresh.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = set, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &image }], []);
+            return fresh;
+        }
         link.Shelf = command =>
         {
             var at = clock.Elapsed.TotalSeconds;
@@ -789,19 +814,15 @@ internal static unsafe class Stage
                 cardVersion = shelf.Version;
                 cardHeight = extent.Height;
                 card = Panel.Draw(shelf.Levels, extent.Height);
-                device.WaitIdle(); // the old card may still be read by a frame in flight
-                device.ResetCommandPool(uploadPool, VkCommandPoolResetFlags.None);
-                uploader.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
-                var fresh = new Texture(device, physical, uploader, card.Rgba, card.Width, card.Height);
-                uploader.End();
-                var uploaderHandle = uploader.Handle;
-                queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploaderHandle }], default);
-                device.WaitIdle();
-                fresh.FreeStaging();
-                cardTexture?.Dispose();
-                cardTexture = fresh;
-                var cardImage = new VkDescriptorImageInfo { Sampler = sampler, ImageView = cardTexture.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
-                device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = cardSet, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &cardImage }], []);
+                cardTexture = Upload(card, cardSet, cardTexture);
+            }
+
+            if (moment.IgnoredAge >= 0f && !splashing && (moment.IgnoredId != captionId || (extent.Width, extent.Height) != captionSize))
+            {
+                captionId = moment.IgnoredId;
+                captionSize = (extent.Width, extent.Height);
+                caption = Panel.Caption(moment.Ignored, extent.Width, extent.Height);
+                captionTexture = Upload(caption, captionSet, captionTexture);
             }
 
             var slot = frame % FramesInFlight;
@@ -868,6 +889,17 @@ internal static unsafe class Stage
                     var margin = CardMargin();
                     var push = new SplashPush(Rect(margin, margin, card.Width, card.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [cardSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (moment.IgnoredAge >= 0f && caption is not null && captionTexture is not null)
+                {
+                    // Centred at the bottom; it comes in over 0.2 s and fades over the last 0.8 s.
+                    var fade = Math.Clamp(Math.Min(moment.IgnoredAge / 0.2f, ((float)Link.IgnoredSeconds - moment.IgnoredAge) / 0.8f), 0f, 1f);
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var push = new SplashPush(Rect((extent.Width - caption.Width) / 2, extent.Height - caption.Height - CardMargin(), caption.Width, caption.Height), new SN.Vector4(1f, 1f, 1f, fade));
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [captionSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -1015,6 +1047,7 @@ internal static unsafe class Stage
         }
 
         cardTexture?.Dispose();
+        captionTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);
 
         device.DestroyDescriptorPool(descriptorPool, null);

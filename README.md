@@ -151,7 +151,8 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   `sorry`, is the expression Delta's face takes as it starts. `listen` waits for the next sentence. `window` moves,
   sizes or hides Delta's window, and `shelf` walks its menu.
 - It declares a Claude Code channel. A sentence that no `listen` is waiting for is pushed into the session as a
-  channel event, if it starts with "Delta" or "Claude" or comes soon after Delta spoke.
+  channel event, if it starts with "Delta" or "Claude" or comes soon after Delta spoke. One it lets pass for want of
+  its name shows for five seconds in a caption under the robot, with how to call it, so that you know it was heard.
 - With `-triage <model>`, or `"triage"` in `delta.json`, a small Ollama model sorts those sentences first. It answers
   greetings and thanks itself at no cost, drops what is meant for someone else, and passes the rest to Claude.
   Questions, sentences that start with "Claude", and answers to Claude's own questions always go to Claude. A lamp on
