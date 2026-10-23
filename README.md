@@ -166,6 +166,10 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   down it, and Delta tells whoever speaks to Claude meanwhile that the answer will be late. The plugin's hooks
   ([plugins/delta/hooks/hooks.json](plugins/delta/hooks/hooks.json)) post the start and the end of a compaction to the
   brain on 127.0.0.1:8807 (`-hooks`).
+- When a sentence goes to Claude, Delta says a short word at once, « Une seconde. » or "Let me check.", so that the
+  first sound comes in under a second while Claude thinks. It says nothing while it is already speaking, and drops the
+  word if Claude's answer is ready first. The journal's `heard` line gives its `ack`, the `say_id` of a `say` line by
+  `ack`.
 - Delta's face has eyebrows and mouth corners besides its eyes: neutral, joy, surprise, doubt, sorry, proud, wink,
   focus and sleepy. An expression lasts six seconds. Small talk that Delta answers itself makes it smile, « bonne
   nuit » makes it sleepy, and it dozes off after four minutes of quiet. "Delta, I love you" or « je t'aime » sends
