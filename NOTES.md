@@ -527,12 +527,25 @@ dropped acknowledgement, is forgotten 64 sentences later. Left for later, as bru
 the brain restarts, a device that misses an event cannot tell, and the `channel` route says nothing of when an answer
 will come.
 
+## Ears that hang (2026-10-23)
+
+From brutal's review of the fallback. The ears asked whisper-server without a timeout, so a GPU build that stopped
+answering, as a graphics driver can, left Delta deaf for good: the fallback ran only when the server's process ended.
+A transcription now has 30 s; past that, while another server can take over, the brain kills the one that hung and
+hears the sentence with the next. Two more cases from the same review: a sentence that failed while another's failure
+was bringing the next server now waits for it and is heard, rather than lost; and the `ears` note names each server
+with its own failure, where a chain of servers that could not start gave the first the last one's error.
+
 ## Known problems
 
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
   the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
 - The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice
   sooner.
+- A sentence from another device gets its chime, its acknowledgement and `/hear`'s 202 only once routed: up to 4 s
+  for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
+- The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
+  streamed, other people's words would show too. There is no switch to turn it off yet.
 - The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
   second, and there is one per workspace.
 

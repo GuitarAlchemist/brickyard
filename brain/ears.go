@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net"
@@ -20,20 +21,25 @@ import (
 // earsRate is the only rate whisper.cpp takes: 16 kHz mono.
 const earsRate = 16000
 
+// earsPatience is how long a transcription may take before the server is taken for hung: the CPU build hears a
+// sentence in about 2 s, the GPU build in 0.2 s, and a graphics driver that stopped answering never does.
+const earsPatience = 30 * time.Second
+
 // ears is whisper.cpp's server, run by the brain on a loopback port and kept warm, so that each utterance costs only
 // its transcription. On the author's machine the server and its model are IX's (whisper.cpp b5454 and
 // ggml-large-v3-turbo-q5_0), used as they are. Given several servers, such as a GPU build and then the CPU build, the
 // ears run the first that starts and hears, and the next when the one running dies.
 type ears struct {
-	url    string
-	mu     sync.Mutex
-	cmd    *exec.Cmd
-	dead   chan struct{} // closed once cmd has exited
-	server string        // the server running now
-	rest   []string      // the servers to fall back on, in order
-	failed []string      // why the servers before this one did not start
-	run    func(server string) error
-	fell   func(server, why string) // told when another server takes over, if set
+	url      string
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	dead     chan struct{} // closed once cmd has exited
+	server   string        // the server running now
+	rest     []string      // the servers to fall back on, in order
+	failed   []string      // why the servers before this one did not start
+	run      func(server string) error
+	fell     func(server, why string) // told when another server takes over, if set
+	patience time.Duration            // how long a transcription may take before the server is taken for hung
 }
 
 // utterance is something heard: its text, when the speaker stopped (or the line was read), and how long the
@@ -59,7 +65,7 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 	if audioCtx > 0 {
 		args = append(args, "-ac", strconv.Itoa(audioCtx))
 	}
-	e := &ears{url: "http://" + addr}
+	e := &ears{url: "http://" + addr, patience: earsPatience}
 	e.run = func(server string) error { return e.start(server, args, addr) }
 	for i, server := range servers {
 		if err := e.run(server); err != nil {
@@ -117,37 +123,50 @@ func (e *ears) where() string {
 	return "on the processor"
 }
 
-// hear transcribes 16 kHz mono samples. When the server died, the next one takes over and hears them.
+// hear transcribes 16 kHz mono samples. When the server died or hung, the next one takes over and hears them, as it
+// does a sentence that failed while another sentence's failure brought the next one.
 func (e *ears) hear(samples []float32) (string, error) {
+	e.mu.Lock()
+	asked := e.server
+	e.mu.Unlock()
 	text, err := e.ask(samples)
-	if err != nil && e.fallBack(err) {
+	if err != nil && e.fallBack(asked, err) {
 		return e.ask(samples)
 	}
 	return text, err
 }
 
-// fallBack runs the next server if the one running died, and says whether one runs now.
-func (e *ears) fallBack(why error) bool {
+// fallBack runs the next server if the one asked died, or hung while another can take over, and says whether another
+// runs now.
+func (e *ears) fallBack(asked string, why error) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.server != asked {
+		return true
+	}
 	if e.dead == nil {
 		return false
+	}
+	gone := fmt.Sprintf("%s died: %v", e.server, why)
+	var timeout net.Error
+	if errors.As(why, &timeout) && timeout.Timeout() && len(e.rest) > 0 {
+		gone = fmt.Sprintf("%s did not answer within %v", e.server, e.patience)
+		e.stop()
 	}
 	select {
 	case <-e.dead:
 	case <-time.After(time.Second): // it runs: the request failed, not the server
 		return false
 	}
-	gone := e.server
 	for len(e.rest) > 0 {
 		server := e.rest[0]
 		e.rest = e.rest[1:]
 		if err := e.run(server); err != nil {
-			why = err
+			gone += "; " + err.Error()
 			continue
 		}
 		if e.fell != nil {
-			e.fell(server, fmt.Sprintf("%s died: %v", gone, why))
+			e.fell(server, gone)
 		}
 		return true
 	}
@@ -163,7 +182,8 @@ func (e *ears) ask(samples []float32) (string, error) {
 	form.WriteField("response_format", "json")
 	form.WriteField("temperature", "0.0")
 	form.Close()
-	resp, err := http.Post(e.url+"/inference", form.FormDataContentType(), &body)
+	client := http.Client{Timeout: e.patience}
+	resp, err := client.Post(e.url+"/inference", form.FormDataContentType(), &body)
 	if err != nil {
 		return "", err
 	}
