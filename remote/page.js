@@ -115,8 +115,15 @@ async function connect() {
   if (!ctx || ctx.state !== 'running') sound.hidden = false; // a first touch, before talking, unlocks sound and microphone
 }
 
-// A touch on the scene makes it big, another makes it small again, so the conversation keeps the screen.
-video.onclick = () => video.classList.toggle('big');
+// A touch on the scene makes it big, another makes it small again, so the conversation keeps the screen. On a tablet
+// (page.css: both sides at least 600 px), the page also goes full screen, without the browser's bars, and comes back.
+const tablet = matchMedia('(min-width: 600px) and (min-height: 600px)');
+video.onclick = () => {
+  const big = video.classList.toggle('big');
+  if (!tablet.matches) return;
+  if (big && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  if (!big && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+};
 
 // Sound. Browsers start audio only after a touch, so the context is made on the first one. A finger that touches the
 // screen does not allow it yet, lifting it does (HTML's activation-triggering events): so each lift, or a key, starts

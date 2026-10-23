@@ -658,6 +658,15 @@ The same Chrome check, two touches: before any, `/said` without the header; the 
 the sound running and the stream at `plays=own`; the second records 2.61 s, and its answer plays. The header's Go test
 went red first. IX's live check (`--autoplay-policy=no-user-gesture-required`) passes its eleven expectations again.
 
+## The page on a tablet (2026-10-23)
+
+The user paired a tablet, and the page showed Delta's window small: 28 % of the height at most, as on a phone. Where
+both sides are at least 600 px, a tablet or a computer, Delta's window now takes the screen: in landscape the
+conversation is a column beside it, in portrait it goes under it, at 18 px. A touch on the window hides the
+conversation, or brings it back, and on a tablet also puts the page full screen, without the browser's bars. Measured
+in headless Chrome, with the window's 1280×720 test card: at 1280×800 the window is 880×760 and the column 384 px; at
+800×1280 the window is 784×441; at 390×844, a phone, it is 358×201, as before.
+
 ## Known problems
 
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
