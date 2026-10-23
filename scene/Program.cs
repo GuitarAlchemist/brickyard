@@ -606,6 +606,13 @@ internal static unsafe class Stage
         Panel.Card? pairingCard = null;
         var pairingDrawn = (Id: -1, Left: -1, Width: 0, Height: 0, Language: "");
         var pairingShown = false;
+        var pairingOpened = 0.0; // when the card last opened: it closes by itself a minute later, since a device that
+                                 // only watches the window, such as a tablet, cannot close it
+        void ShowPairing(bool show)
+        {
+            pairingShown = show;
+            pairingOpened = clock.Elapsed.TotalSeconds;
+        }
         (int X, int Y) PhoneAt() => (extent.Width - Panel.PhoneSize(extent.Height) - CardMargin(), CardMargin());
         // The language button left of the phone icon (Panel.LanguageButton): a click, or L, picks the next setting, which
         // the brain applies and echoes back; with no brain, the window takes it at once.
@@ -740,7 +747,7 @@ internal static unsafe class Stage
 
             if (key == GlfwKey.P)
             {
-                pairingShown = !pairingShown;
+                ShowPairing(!pairingShown);
             }
             else if (key == GlfwKey.L)
             {
@@ -800,7 +807,7 @@ internal static unsafe class Stage
             var icon = Panel.PhoneSize(extent.Height);
             if (action == GlfwButtonAction.Press && (Over(w, PhoneAt(), icon, icon) || (pairingShown && pairingCard is not null && Over(w, PairingAt(), pairingCard.Width, pairingCard.Height))))
             {
-                pairingShown = !pairingShown;
+                ShowPairing(!pairingShown);
             }
             else if (action == GlfwButtonAction.Press && languageButton is not null && Over(w, LanguageAt(), languageButton.Width, languageButton.Height))
             {
@@ -957,6 +964,11 @@ internal static unsafe class Stage
                 leaseTexture = Upload(leaseCard, leaseSet, leaseTexture);
                 leaseDot = Panel.Dot(extent.Height);
                 leaseDotTexture = Upload(leaseDot, leaseDotSet, leaseDotTexture);
+            }
+
+            if (pairingShown && !demo && clock.Elapsed.TotalSeconds - pairingOpened > 60.0)
+            {
+                pairingShown = false;
             }
 
             var secondsLeft = (int)Math.Ceiling(moment.PairingLeft);
