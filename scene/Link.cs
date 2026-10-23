@@ -49,6 +49,7 @@ internal sealed class Link(Func<double> clock)
     private NetworkStream? talking; // the brain connected now, which Tell writes back to
     private double leaseUntil = double.NegativeInfinity; // until when Delta listens without its name
     private double leaseLength; // how long that was when it began, for the ring
+    private bool micOff; // the user turned the computer's microphone off from the window
 
     // The expressions the face knows; "neutral" ends the one shown.
     public static readonly string[] Moods = ["neutral", "joy", "surprise", "doubt", "sorry", "proud", "wink", "focus", "sleepy"];
@@ -63,7 +64,7 @@ internal sealed class Link(Func<double> clock)
     public static double HeardSeconds(string text) => Math.Clamp(3.0 + (text.Length / 15.0), 5.0, 12.0);
 
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null, bool? Mic = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -81,7 +82,7 @@ internal sealed class Link(Func<double> clock)
     // long ago it came (-1 when none shows) and its number, which changes with each sentence; and the pairing QR code's
     // rows while its code lives (null otherwise), the seconds it still lives (0 once it expired, -1 before any came) and
     // the link's number; and for how many seconds more Delta listens without its name (0 when it needs it), of how many.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f);
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f, bool MicOff = false);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -119,7 +120,7 @@ internal sealed class Link(Func<double> clock)
             var age = now - heardSince >= 0 && now - heardSince < HeardSeconds(heardText) ? (float)(now - heardSince) : -1f;
             var left = pairingId == 0 ? -1f : (float)Math.Max(0, pairingUntil - now);
             var lease = (float)Math.Max(0, leaseUntil - now);
-            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f);
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f, micOff);
         }
     }
 
@@ -339,15 +340,27 @@ internal sealed class Link(Func<double> clock)
                 lease = le.GetDouble();
             }
 
+            bool? mic = null;
+            if (root.TryGetProperty("mic"u8, out var mi))
+            {
+                if (mi.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                {
+                    error = "mic is true or false";
+                    return null;
+                }
+
+                mic = mi.GetBoolean();
+            }
+
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null && mic is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -397,7 +410,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic);
         }
         catch (JsonException ex)
         {
@@ -490,6 +503,7 @@ internal sealed class Link(Func<double> clock)
         Check(Parse($$$"""{"heard":{"text":"{{{string.Concat(Enumerable.Repeat("😀", 400))}}}","to":"claude"}}""", out _) is { Heard.Length: 800 }, "400 characters as the brain counts them, emoji included");
         Check(Parse("""{"language":"fr+en"}""", out _) is { Language: "fr+en" } && Parse("""{"language":"fr+fr"}""", out _) is null &&
             Parse("""{"language":"fr+en+de"}""", out _) is null, "Delta speaks one language, or two");
+        Check(Parse("""{"mic":false}""", out _) is { State: null, Mic: false } && Parse("""{"mic":"off"}""", out _) is null, "the microphone is on or off");
         Words.Speak("en+fr");
         Check(Words.Language == "en" && Words.Setting == "en+fr" && Words.Next("en+fr") == "fr" && Words.Next("fr") == "fr+en", "the button goes through the settings in turn");
         Words.Speak("en");
@@ -560,6 +574,11 @@ internal sealed class Link(Func<double> clock)
             if (change.Hearts)
             {
                 heartsSince = at;
+            }
+
+            if (change.Mic is { } on)
+            {
+                micOff = !on;
             }
 
             if (change.Lease is { } seconds)

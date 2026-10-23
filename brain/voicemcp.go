@@ -147,10 +147,21 @@ func runMCP(c mcpConfig) {
 	}
 
 	s := startScene(c, logf)
-	s.greet(map[string]any{"language": settingOf(langs)}) // the window's words (Words.cs), and its language button
+	var muted atomic.Bool // the user turned the computer's microphone off from the window
+	greet := func() {     // what a window must know whatever it missed: its words (Words.cs), and its two buttons
+		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load()})
+	}
+	greet()
 	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code, langOf: m.spokenIn}
 	mo.voiceIn = otherVoices(c, lang.code, logf, m.note)
-	s.asked = func(event map[string]any) { // the window's language button
+	s.asked = func(event map[string]any) { // the window's language and microphone buttons
+		if on, ok := event["mic"].(bool); ok {
+			muted.Store(!on)
+			greet()
+			s.send(map[string]any{"mic": on})
+			m.note("mic", map[string]any{"on": on, "by": "window"})
+			return
+		}
 		setting, ok := event["language"].(string)
 		if !ok {
 			return
@@ -161,7 +172,7 @@ func runMCP(c mcpConfig) {
 			return
 		}
 		m.speakIn(ls)
-		s.greet(map[string]any{"language": settingOf(ls)})
+		greet()
 		s.send(map[string]any{"language": settingOf(ls)})
 		if err := saveLanguage(c.home, settingOf(ls)); err != nil {
 			logf("delta.json: %v", err)
@@ -305,7 +316,7 @@ func runMCP(c mcpConfig) {
 		}
 		rm.hearWith(e.hearIn)
 		heard := make(chan utterance)
-		go listen(e, s, &mo.busy, heard, false)
+		go listen(e, s, &mo.busy, &muted, heard, false)
 		for u := range heard {
 			where := "nothing"
 			if u.text != "" {

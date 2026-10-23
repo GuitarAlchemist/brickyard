@@ -341,7 +341,7 @@ func cleanHeard(text string) string {
 
 // listen turns the microphone into utterances: it tells the scene when someone starts speaking, transcribes what they
 // said once they stop, and hears nothing while Delta is busy answering.
-func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels bool) {
+func listen(e *ears, s *scene, busy, muted *atomic.Bool, out chan<- utterance, levels bool) {
 	frames := make(chan []float32, 64)
 	m, err := openMic(frames)
 	if err != nil {
@@ -360,7 +360,7 @@ func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels b
 				peak, count = 0, 0
 			}
 		}
-		if busy.Load() {
+		if busy.Load() || (muted != nil && muted.Load()) { // deaf while Delta speaks, and while the user turned it off
 			cut.reset()
 			continue
 		}

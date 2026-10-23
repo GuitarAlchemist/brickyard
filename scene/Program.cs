@@ -522,8 +522,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 9, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language button
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 9 }], // one image each
+            MaxSets = 10, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 10 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -614,6 +614,21 @@ internal static unsafe class Stage
         Panel.Card? languageButton = null;
         var languageDrawn = (Setting: "", Height: 0);
         (int X, int Y) LanguageAt() => (PhoneAt().X - (languageButton?.Width ?? 0) - Math.Max(6, extent.Height / 96), CardMargin());
+        // The microphone button left of the language button (Panel.MicButton): a click turns the computer's microphone off
+        // or on again, as the brain echoes back.
+        var micSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? micTexture = null;
+        Panel.Card? micButton = null;
+        var micDrawn = (Off: false, Height: 0);
+        (int X, int Y) MicAt() => (LanguageAt().X - Panel.PhoneSize(extent.Height) - Math.Max(6, extent.Height / 96), CardMargin());
+        void ToggleMic(bool turnOn)
+        {
+            if (!link.Tell($$"""{"mic":{{(turnOn ? "true" : "false")}}}"""))
+            {
+                link.Apply(new Link.Change(null, [], "", null, null, Mic: turnOn), clock.Elapsed.TotalSeconds);
+            }
+        }
+
         void NextLanguage()
         {
             var next = Words.Next(Words.Setting);
@@ -785,6 +800,10 @@ internal static unsafe class Stage
             {
                 NextLanguage();
             }
+            else if (action == GlfwButtonAction.Press && micButton is not null && Over(w, MicAt(), micButton.Width, micButton.Height))
+            {
+                ToggleMic(micDrawn.Off);
+            }
             else if (action == GlfwButtonAction.Press && RowAt(w) is var row and >= 0)
             {
                 var at = clock.Elapsed.TotalSeconds;
@@ -902,6 +921,13 @@ internal static unsafe class Stage
                 phoneDrawn = (moment.Pairing is not null, extent.Height);
                 phone = Panel.Phone(extent.Height, phoneDrawn.Live);
                 phoneTexture = Upload(phone, phoneSet, phoneTexture);
+            }
+
+            if (!splashing && micDrawn != (moment.MicOff, extent.Height))
+            {
+                micDrawn = (moment.MicOff, extent.Height);
+                micButton = Panel.MicButton(moment.MicOff, extent.Height);
+                micTexture = Upload(micButton, micSet, micTexture);
             }
 
             if (!splashing && languageDrawn != (Words.Setting, extent.Height))
@@ -1025,6 +1051,16 @@ internal static unsafe class Stage
                         cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&dot, sizeof(SplashPush)));
                         cb.Draw(6, 1, 0, 0);
                     }
+                }
+
+                if (micButton is not null && micTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (micX, micY) = MicAt();
+                    var push = new SplashPush(Rect(micX, micY, micButton.Width, micButton.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [micSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
                 }
 
                 if (languageButton is not null && languageTexture is not null)
@@ -1203,6 +1239,7 @@ internal static unsafe class Stage
         captionTexture?.Dispose();
         phoneTexture?.Dispose();
         languageTexture?.Dispose();
+        micTexture?.Dispose();
         pairingTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();

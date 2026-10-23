@@ -36,6 +36,8 @@ You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a m
      left of the phone icon in Delta's window, or press L. It goes through FR, FR·EN, EN and EN·FR: with two, Delta
      hears both and answers each sentence in the language it was spoken in, with that language's Piper voice, which
      it looks for beside the first one; without it, Delta says it in its first voice. `delta.json` keeps the choice.
+   - The microphone button left of it turns the computer's microphone off, struck through in red, and on again. A
+     phone paired through the gateway still reaches Delta. Each new brain starts with the microphone on.
    - If you already have Piper, whisper.cpp or the model, give Claude their paths instead.
    - Each download is checked against its SHA-256.
 3. Talk to Delta, in either of two ways:

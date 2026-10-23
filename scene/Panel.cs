@@ -164,6 +164,33 @@ internal static class Panel
         return new Card(rgba, size, size, []);
     }
 
+    // The microphone button, left of the language button: a microphone, struck through in red while it is off.
+    public static Card MicButton(bool off, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var size = PhoneSize(windowHeight);
+        var rgba = new byte[size * size * 4];
+        Fill(rgba, size, 0, 0, size, size, (12, 14, 18), 205);
+        (int, int, int) light = (214, 220, 226);
+        var (line, cx) = (Math.Max(2, Px(2)), size / 2);
+        Fill(rgba, size, cx - Px(5), Px(8), Px(10), Px(15), light, 255); // the capsule
+        Fill(rgba, size, cx - Px(9), Px(18), line, Px(7), light, 255); // the stand's cup
+        Fill(rgba, size, cx + Px(9) - line, Px(18), line, Px(7), light, 255);
+        Fill(rgba, size, cx - Px(9), Px(25) - line, Px(18), line, light, 255);
+        Fill(rgba, size, cx - (line / 2), Px(25), line, Px(6), light, 255); // its foot
+        Fill(rgba, size, cx - Px(6), Px(31), Px(12), line, light, 255);
+        if (off)
+        {
+            for (var i = Px(6); i < size - Px(6); i++)
+            {
+                Fill(rgba, size, i - line, i - line, 2 * line, 2 * line, (230, 70, 70), 255);
+            }
+        }
+
+        return new Card(rgba, size, size, []);
+    }
+
     // The language button, left of the phone icon: what Delta hears and speaks, such as FR, or FR·EN when bilingual.
     public static Card LanguageButton(string setting, int windowHeight)
     {

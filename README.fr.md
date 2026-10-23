@@ -32,6 +32,8 @@ Il vous faut Windows 10 ou 11 en 64 bits, une carte graphique dont le pilote pre
      EN·FR : avec deux langues, Delta entend les deux et répond à chaque phrase dans la langue où elle a été dite, avec
      la voix Piper de cette langue, qu'il cherche à côté de la première ; sans elle, il le dit avec sa première voix.
      `delta.json` garde le choix.
+   - Le bouton du micro, à sa gauche, coupe le micro de l'ordinateur, barré de rouge, puis le rallume. Un téléphone
+     jumelé par la passerelle parle toujours à Delta. Chaque nouveau cerveau démarre micro allumé.
 3. Parlez à Delta, de l'une de ces deux façons :
    - **Votre voix arrive toute seule.** Relancez Claude Code avec le
      [canal](https://code.claude.com/docs/fr/channels) de Delta, puis commencez vos phrases par « Delta » :

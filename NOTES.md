@@ -625,6 +625,11 @@ matched Hugging Face's.
 
 Not done: the triage's small talk and the persona still answer in Delta's own language, and the compaction notice too.
 
+The user then asked, from the phone, for a way to mute the microphone. A button left of the language button sends
+`{"mic":false}` or `{"mic":true}` the same way; the brain's microphone loop then drops what it hears, as while Delta
+speaks, echoes the state to the window, which strikes the microphone through in red, and journals `mic`. It is not
+saved: a new brain hears again. `/hear` from a phone is not muted, which is the point of muting the computer.
+
 ## A conversation that lasts while it goes on (2026-10-23)
 
 The user forgot « Delta » and could not tell what would happen: from utterance 58 on, a dozen sentences went
