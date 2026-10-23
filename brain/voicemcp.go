@@ -78,6 +78,7 @@ func runMCP(c mcpConfig) {
 	if c.triage != "" {
 		m.triage = ollamaTriage(c.ollama, c.triage, lang)
 		m.triageMax = 4 * time.Second
+		m.facts, m.smallModel = ollamaFacts(c.ollama, c.triage, lang), c.triage
 		go func() {
 			start := time.Now()
 			if err := warmTriage(m.triage, lang); err != nil {
@@ -243,6 +244,9 @@ func runMCP(c mcpConfig) {
 			servers = append(servers, c.whisperFallback)
 		}
 		e, err := startEars(servers, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
+		if err == nil {
+			m.hearsOn = e.where
+		}
 		hearing.Lock()
 		if err != nil {
 			notHearing = fmt.Errorf("Delta cannot hear: %v. The delta:setup skill installs what is missing.", err)

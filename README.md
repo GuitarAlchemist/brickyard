@@ -166,6 +166,10 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   down it, and Delta tells whoever speaks to Claude meanwhile that the answer will be late. The plugin's hooks
   ([plugins/delta/hooks/hooks.json](plugins/delta/hooks/hooks.json)) post the start and the end of a compaction to the
   brain on 127.0.0.1:8807 (`-hooks`).
+- The triage's model also answers a few questions of fact at no cost, from a sheet the brain writes at the moment
+  of the question: the date and the time, Delta's version, where Whisper runs, the small model, what Brickyard and IX
+  are. Only a question about one of those waits for it, and anything the sheet does not hold, or that asks for an
+  action, goes to Claude. The `heard` line gives `fact` and `fact_ms`.
 - When a sentence goes to Claude, Delta says a short word at once, « Une seconde. » or "Let me check.", so that the
   first sound comes in under a second while Claude thinks. It says nothing while it is already speaking, and drops the
   word if Claude's answer is ready first. The journal's `heard` line gives its `ack`, the `say_id` of a `say` line by
