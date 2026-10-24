@@ -522,7 +522,7 @@ internal sealed class Link(Func<double> clock)
             Parse("""{"language":"fr+en+de"}""", out _) is null, "Delta speaks one language, or two");
         Check(Parse("""{"mic":false}""", out _) is { State: null, Mic: false } && Parse("""{"mic":"off"}""", out _) is null, "the microphone is on or off");
         Words.Speak("en+fr");
-        Check(Words.Language == "en" && Words.Setting == "en+fr" && Words.Next("en+fr") == "fr" && Words.Next("fr") == "fr+en", "the button goes through the settings in turn");
+        Check(Words.Language == "en" && Words.Setting == "en+fr" && Words.Next("en+fr") == "en" && Words.Next("en") == "fr" && Words.Next("fr") == "fr+en", "the button goes through French, both and English");
         Words.Speak("en");
         Words.Language = "fr";
         var french = Words.Say("Folder", "Dossier");

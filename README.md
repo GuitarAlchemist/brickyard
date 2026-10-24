@@ -33,7 +33,7 @@ You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a m
    - The first time, that is about 700 MB: Delta, Piper and a voice for that language, whisper.cpp, and a Whisper
      model.
    - To change the language later, run `/delta:setup` again and ask for the other one, or click the language button
-     left of the phone icon in Delta's window, or press L. It goes through FR, FR·EN, EN and EN·FR: with two, Delta
+     left of the phone icon in Delta's window, or press L. It goes through FR, FR·EN and EN: with two, Delta
      hears both and answers each sentence in the language it was spoken in, with that language's Piper voice, which
      it looks for beside the first one; without it, Delta says it in its first voice. `delta.json` keeps the choice.
      You can also ask it aloud, which a phone needs: "speak English only", « parle seulement français », « passe en
