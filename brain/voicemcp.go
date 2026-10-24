@@ -645,7 +645,8 @@ func (mo *mouth) run(v *voice) {
 				}
 			}
 			if err == nil {
-				line := map[string]any{"state": "speaking", "seconds": w.seconds, "envelope": w.envelope, "cost": c.cost}
+				line := map[string]any{"state": "speaking", "seconds": w.seconds, "envelope": w.envelope, "cost": c.cost,
+					"heard": map[string]any{"text": shorten(c.text, 400), "to": "said"}} // the caption shows each sentence as Delta says it
 				if mood != "" {
 					line["mood"], mood = mood, ""
 				}

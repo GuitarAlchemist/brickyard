@@ -13,7 +13,8 @@ using System.Text.Json;
 // "shelf", a move through the shelf of sessions and plugins (ShelfMoves), which Shelf runs; and "language", "en" or
 // "fr", the shelf's labels (Words), which the brain sends first on each connection; and "hearts", true, a burst of
 // hearts that rise from the robot for HeartSeconds; and "heard", {"text", "to"}, a sentence Delta heard and for whom
-// it was (claude, delta, wake when Delta needed its name, dropped, someone else, or whom it called), which a caption
+// it was (claude, delta, wake when Delta needed its name, dropped, someone else, or whom it called), or said, a sentence
+// Delta says as it starts saying it, which a caption
 // under the robot shows for HeardSeconds; and "pairing", {"rows", "seconds"}, the QR code of the
 // link a phone opens to pair with Delta's gateway, one string of 0 and 1 per row, and how long its code lives, which
 // the phone icon's card shows on a click; and "lease", for how many seconds Delta listens without hearing its name,
@@ -572,6 +573,7 @@ internal sealed class Link(Func<double> clock)
         Check(Parse("""{"hearts":"yes"}""", out _) is null, "hearts is a boolean");
         Check(Parse("""{"heard":{"text":"Tu peux danser ?","to":"wake"}}""", out _) is { State: null, Heard: "Tu peux danser ?", HeardTo: "wake" }, "a sentence Delta let pass");
         Check(Parse("""{"heard":{"text":"Lance les tests.","to":"claude"}}""", out _) is { Heard: "Lance les tests.", HeardTo: "claude" }, "a sentence for Claude");
+        Check(Parse("""{"state":"speaking","envelope":[0.1],"heard":{"text":"Je lance les tests.","to":"said"}}""", out _) is { State: "speaking", Heard: "Je lance les tests.", HeardTo: "said" }, "a sentence Delta says, with its speech");
         Check(Parse("""{"heard":{"text":" ","to":"wake"}}""", out _) is null && Parse("""{"heard":"Tu peux danser ?"}""", out _) is null &&
             Parse("""{"heard":{"text":"Tu peux danser ?"}}""", out _) is null &&
             Parse($$$"""{"heard":{"text":"{{{new string('a', MaxHeard + 1)}}}","to":"wake"}}""", out _) is null, "heard is a sentence and for whom");
