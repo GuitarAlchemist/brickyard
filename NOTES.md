@@ -721,6 +721,17 @@ Still to see live:
 - the badge in Delta's window with the real brain;
 - the delay the relay adds.
 
+## The guest's page in English and French (2026-10-24)
+
+The user asked that the page a guest opens be in English as well as French. It speaks the first of the browser's
+languages it knows, French or English, and English otherwise. Both languages carry every message on the page:
+connecting, watching, the reconnect button, and each refusal (invitation used, no valid invitation, invitation ended,
+two guests already, relay down). guest.test.js checks it with `node --test`: it went red first on the French-only page
+(`document is not defined`), as the page had no logic apart from the browser. In headless Chrome on a static copy,
+`--lang=en-US` and `de-DE` show « Refused: 404 » and « Reconnect » with `lang="en"`, and `fr-CA` shows « Refusé : 404 »
+and « Se reconnecter » with `lang="fr"`. The 404 is the static server's, which has no `/ice`. Still to see live: a
+guest's phone in English, through the tunnel.
+
 ## Known problems
 
 - Stopping the gateway with `Stop-Process` leaves its ffmpeg running, which keeps `err.log` open and goes on
