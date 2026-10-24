@@ -3,12 +3,13 @@
 // {"state":"idle"}, "listening", "thinking", or {"state":"speaking","seconds":S,"envelope":[...]} with the voice's
 // loudness every 20 ms, which opens the mouth as the sentence plays.
 //
-//	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--shelf SECTION] [--hidden] [--immediate] [--cap N] | --selftest
+//	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--shelf SECTION] [--hidden] [--immediate] [--cap N] [--quality auto|flat|low] | --selftest
 //
 // --demo plays idle, listening, thinking, speaking, a compaction, each expression, the caption of a sentence let pass
 // and the pairing card in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
+// --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws.
 //
 // It opens on BRUTAL's logo and copyright notice for 2.6 s, as BRUTAL's licence asks (Splash.cs); --demo's states and
 // --shots' times start after it, and --shots also saves the splash.
@@ -29,11 +30,24 @@ using SN = System.Numerics;
 return Stage.Run(args);
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct Vertex(SN.Vector3 pos, SN.Vector3 normal, SN.Vector3 color)
+// A box's vertex: where it is, its face's normal, colour and material, the face's first axis (its second is the normal
+// crossed with it) and the face's edge: where the vertex lies along both axes, -1 or 1, and the face's half-size along
+// them, in metres.
+internal struct Vertex(SN.Vector3 pos, SN.Vector3 normal, SN.Vector3 color, Material material, SN.Vector3 tangent, SN.Vector4 edge)
 {
     public SN.Vector3 Pos = pos;
     public SN.Vector3 Normal = normal;
     public SN.Vector3 Color = color;
+    public Material Material = material;
+    public SN.Vector3 Tangent = tangent;
+    public SN.Vector4 Edge = edge;
+}
+
+// What the Low shader reads once a frame, 16 bytes: the camera's position.
+[StructLayout(LayoutKind.Sequential)]
+internal struct Frame(SN.Vector3 eye)
+{
+    public SN.Vector4 Eye = new(eye, 1f);
 }
 
 // What each draw pushes, 128 bytes: the part's clip transform, the three rows of its world transform (for the light)
@@ -69,10 +83,16 @@ internal static unsafe class Stage
         layout(location = 0) in vec3 inPos;
         layout(location = 1) in vec3 inNormal;
         layout(location = 2) in vec3 inColor;
+        layout(location = 3) in uint inMaterial;
+        layout(location = 4) in vec3 inTangent;
+        layout(location = 5) in vec4 inEdge;
         layout(push_constant) uniform Push { mat4 mvp; vec4 row0; vec4 row1; vec4 row2; vec4 glow; } pc;
         layout(location = 0) out vec3 vNormal;
         layout(location = 1) out vec3 vColor;
         layout(location = 2) out vec3 vWorld;
+        layout(location = 3) flat out uint vMaterial;
+        layout(location = 4) out vec3 vTangent;
+        layout(location = 5) out vec4 vEdge;
         void main()
         {
             vec4 p = vec4(inPos, 1.0);
@@ -80,6 +100,9 @@ internal static unsafe class Stage
             vWorld = vec3(dot(pc.row0, p), dot(pc.row1, p), dot(pc.row2, p));
             vNormal = vec3(dot(pc.row0.xyz, inNormal), dot(pc.row1.xyz, inNormal), dot(pc.row2.xyz, inNormal));
             vColor = inColor;
+            vMaterial = inMaterial;
+            vTangent = vec3(dot(pc.row0.xyz, inTangent), dot(pc.row1.xyz, inTangent), dot(pc.row2.xyz, inTangent));
+            vEdge = inEdge;
         }
         """;
 
@@ -105,6 +128,124 @@ internal static unsafe class Stage
             outColor = vec4(vColor * light * (0.1 + 0.9 * pool) * high + pc.glow.rgb * pc.glow.a, 1.0);
         }
         """;
+
+    // The Low lighting: Flat's three lights, with rounded edges, each material's highlights and reflections of the hall
+    // (Material in Mesh.cs), the robot's shadow and the dark where things meet the floor, and a shoulder for what grows
+    // too bright.
+    private const string LowFragmentShader = """
+        #version 450
+        layout(location = 0) in vec3 vNormal;
+        layout(location = 1) in vec3 vColor;
+        layout(location = 2) in vec3 vWorld;
+        layout(location = 3) flat in uint vMaterial;
+        layout(location = 4) in vec3 vTangent;
+        layout(location = 5) in vec4 vEdge;
+        layout(push_constant) uniform Push { mat4 mvp; vec4 row0; vec4 row1; vec4 row2; vec4 glow; } pc;
+        layout(set = 0, binding = 0) uniform Frame { vec4 eye; } frame;
+        layout(location = 0) out vec4 outColor;
+
+        // Per material: its reflectance head-on (a metal's is its colour), its gloss (Blinn-Phong's exponent), whether
+        // it is a metal, and how much a grazing view adds to its reflection, little on rough surfaces.
+        const vec4 materials[6] = vec4[](
+            vec4(0.02, 6.0, 0.0, 0.12),   // matte: brick, concrete, wood
+            vec4(0.05, 90.0, 0.0, 0.8),   // enamel and paint
+            vec4(0.0, 40.0, 1.0, 1.0),    // brushed aluminium
+            vec4(0.0, 24.0, 1.0, 0.8),    // steel
+            vec4(0.02, 4.0, 0.0, 0.1),    // rubber
+            vec4(0.04, 260.0, 0.0, 1.0)); // glass, screens and lamps
+
+        // The distance from p to a rectangle of half-size h about the origin, negative inside.
+        float box(vec2 p, vec2 h)
+        {
+            vec2 d = abs(p) - h;
+            return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+        }
+
+        // What the hall shows a glossy surface in direction r: the lit floor below, the brick around, the dark roof
+        // above, and less of all of it behind the camera, where nothing is built.
+        vec3 hall(vec3 r)
+        {
+            vec3 ground = vec3(0.11, 0.095, 0.08);
+            vec3 wall = vec3(0.06, 0.035, 0.025);
+            vec3 roof = vec3(0.012, 0.013, 0.016);
+            vec3 c = r.y < 0.0 ? mix(wall, ground, smoothstep(0.0, -0.35, r.y)) : mix(wall, roof, smoothstep(0.05, 0.6, r.y));
+            return c * (r.z < 0.0 ? 1.0 : 0.7);
+        }
+
+        // Below 0.6 as it is; above, rolling off towards 1 instead of clipping.
+        vec3 shoulder(vec3 x)
+        {
+            const float a = 0.6;
+            return mix(x, a + (1.0 - a) * (1.0 - exp(-(x - a) / (1.0 - a))), step(a, x));
+        }
+
+        void main()
+        {
+            vec3 face = normalize(vNormal);
+            vec3 v = normalize(frame.eye.xyz - vWorld);
+
+            // Rounded edges: within 8 mm of a face's edge, less on thin parts and never under a pixel, the normal leans
+            // towards the next face, halfway there at the edge itself, so that the edges catch the light.
+            vec3 across = normalize(vTangent - face * dot(vTangent, face));
+            vec2 toEdge = (1.0 - abs(vEdge.xy)) * vEdge.zw;
+            vec2 width = max(min(vec2(0.008), 0.35 * vEdge.zw), fwidth(toEdge));
+            vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(vEdge.xy);
+            vec3 n = normalize(face + lean.x * across + lean.y * cross(face, across));
+            vec4 m = materials[min(vMaterial, 5u)];
+            vec3 keyDir = normalize(vec3(-0.45, 0.8, 0.55));
+            vec3 fillDir = normalize(vec3(0.7, 0.25, 0.3));
+            vec3 keyColor = vec3(1.0, 0.86, 0.68);
+            vec3 fillColor = vec3(0.35, 0.45, 0.6) * 0.35;
+
+            // On the floor: the robot's shadow from the key light, as a column 1.25 m high whose penumbra widens away
+            // from its foot, and the dark where the robot, the pallet, the cabinet and the wall stand. On the wall: the
+            // dark where it meets the floor.
+            float shade = 1.0;
+            float ao = 1.0;
+            if (face.y > 0.9 && vWorld.y < 0.01)
+            {
+                vec2 p = vWorld.xz;
+                vec2 reach = -keyDir.xz / keyDir.y * 1.25;
+                float t = clamp(dot(p, reach) / dot(reach, reach), 0.0, 1.0);
+                float soft = 0.04 + 0.3 * t;
+                shade = mix(1.0, smoothstep(-soft, soft, box(p - t * reach, vec2(0.24, 0.19))), 0.8);
+                ao = mix(0.4, 1.0, smoothstep(0.0, 0.22, box(p, vec2(0.27, 0.28))))
+                    * mix(0.55, 1.0, smoothstep(0.0, 0.18, box(p - vec2(-2.1, -1.5), vec2(0.5, 0.4))))
+                    * mix(0.5, 1.0, smoothstep(0.0, 0.2, box(p - vec2(2.2, -1.9), vec2(0.45, 0.25))))
+                    * mix(0.55, 1.0, smoothstep(0.0, 0.45, p.y + 3.3));
+            }
+            else if (vWorld.z < -3.25)
+            {
+                ao = mix(0.55, 1.0, smoothstep(0.0, 0.4, vWorld.y));
+            }
+
+            float key = max(dot(n, keyDir), 0.0);
+            float fill = max(dot(n, fillDir), 0.0);
+            float bounce = 0.5 - 0.5 * n.y;
+            vec3 light = (keyColor * key * shade + fillColor * fill + vec3(0.12, 0.1, 0.09) * bounce + 0.03) * ao;
+
+            // Blinn-Phong highlights of both lights, roughly normalised so that a tighter one is brighter, and the hall
+            // reflected, both weighed by Schlick's Fresnel.
+            vec3 f0 = mix(vec3(m.x), vColor, m.z);
+            vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0) * m.w;
+            float norm = (m.y + 8.0) / 25.0;
+            vec3 highlight = keyColor * pow(max(dot(n, normalize(keyDir + v)), 0.0), m.y) * key * shade
+                + fillColor * pow(max(dot(n, normalize(fillDir + v)), 0.0), m.y) * fill;
+            vec3 lit = vColor * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
+
+            // A pool of light around the robot; the hall falls into the dark beyond it and above it.
+            float pool = 1.0 - smoothstep(0.8, 6.0, length(vWorld.xz - vec2(0.0, -0.3)));
+            float high = 1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y);
+            outColor = vec4(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, 1.0);
+        }
+        """;
+
+    // How the scene is lit (--quality): Flat as it was first drawn, or Low (LowFragmentShader).
+    private enum Quality
+    {
+        Flat,
+        Low,
+    }
 
     // The splash: a textured rectangle with no vertex buffer, its six corners picked by the vertex's index.
     private const string SplashVertexShader = """
@@ -146,6 +287,13 @@ internal static unsafe class Stage
         var vsync = !args.Contains("--immediate");
         var cap = int.TryParse(Option(args, "--cap"), out var capValue) ? capValue : hidden ? 60 : 0;
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
+        var qualityAsked = Option(args, "--quality") ?? "auto";
+        if (qualityAsked is not ("auto" or "flat" or "low"))
+        {
+            Console.Error.WriteLine($"SCENE refused: --quality takes auto, flat or low, not {qualityAsked}");
+            return 2;
+        }
+
         var shotsDir = Option(args, "--shots");
         var shelfAtStart = Option(args, "--shelf");
         Words.Speak(Option(args, "--lang") ?? "en");
@@ -197,7 +345,9 @@ internal static unsafe class Stage
             Glfw.WindowHint(GlfwWindowHint.Visible, 0);
         }
 
-        var window = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = "Brickyard", Size = new int2(Width, Height) });
+        // A demo's window has its own title, so that the phone's gateway, which shows the one window titled Brickyard,
+        // never takes it for Delta's (remote/window_windows.go).
+        var window = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = demo ? "Brickyard demo" : "Brickyard", Size = new int2(Width, Height) });
 
         // Instance with the extensions GLFW needs to present, and the window's surface.
         var glfwExtensions = Glfw.GetRequiredInstanceExtensions(out var extensionCount);
@@ -250,6 +400,22 @@ internal static unsafe class Stage
             return 1;
         }
 
+        // The lighting: what --quality asks for, else Low on any GPU and Flat when the CPU draws, as a software
+        // renderer does.
+        var properties = physical.GetProperties();
+        var gpu = Marshal.PtrToStringUTF8((nint)properties.DeviceName) ?? "this GPU";
+        var (quality, because) = qualityAsked switch
+        {
+            "flat" => (Quality.Flat, "--quality asks for it"),
+            "low" => (Quality.Low, "--quality asks for it"),
+            _ when properties.DeviceType == VkPhysicalDeviceType.Cpu => (Quality.Flat, $"{gpu} draws on the CPU"),
+            _ => (Quality.Low, $"{gpu} is a {properties.DeviceType switch { VkPhysicalDeviceType.DiscreteGpu => "discrete", VkPhysicalDeviceType.IntegratedGpu => "integrated", VkPhysicalDeviceType.VirtualGpu => "virtual", _ => "other" }} GPU"),
+        };
+        // Low draws four samples a pixel, which every Vulkan GPU offers, and resolves them into the swapchain's image.
+        var samples = quality == Quality.Low ? VkSampleCountFlags._4Bit : VkSampleCountFlags._1Bit;
+        var msaa = samples != VkSampleCountFlags._1Bit;
+        Console.WriteLine($"SCENE quality {quality.ToString().ToLowerInvariant()} because {because}{(msaa ? ", with 4x MSAA" : "")}");
+
         var priority = 1.0f;
         var queueInfo = new VkDeviceQueueCreateInfo { QueueFamilyIndex = family, QueueCount = 1, QueuePriorities = &priority };
         var device = physical.CreateDevice(new Device.CreateInfo
@@ -296,28 +462,32 @@ internal static unsafe class Stage
         var depthImage = default(VkImage);
         var depthMemory = default(VkDeviceMemory);
         var depthView = default(VkImageView);
+        var msaaImage = default(VkImage);
+        var msaaMemory = default(VkDeviceMemory);
+        var msaaView = default(VkImageView);
         var views = Array.Empty<VkImageView>();
         var framebuffers = Array.Empty<VkFramebuffer>();
         var renderDone = Array.Empty<VkSemaphore>();
 
-        // One subpass: colour to present, depth cleared and discarded.
+        // One subpass: colour to present, depth cleared and discarded. With MSAA, the colour's samples are discarded too
+        // once resolved into the swapchain's image, the third attachment.
         Span<VkAttachmentDescription> attachments =
         [
             new()
             {
                 Format = surfaceFormat.Format,
-                Samples = VkSampleCountFlags._1Bit,
+                Samples = samples,
                 LoadOp = VkAttachmentLoadOp.Clear,
-                StoreOp = VkAttachmentStoreOp.Store,
+                StoreOp = msaa ? VkAttachmentStoreOp.DontCare : VkAttachmentStoreOp.Store,
                 StencilLoadOp = VkAttachmentLoadOp.DontCare,
                 StencilStoreOp = VkAttachmentStoreOp.DontCare,
                 InitialLayout = VkImageLayout.Undefined,
-                FinalLayout = VkImageLayout.PresentSrcKHR,
+                FinalLayout = msaa ? VkImageLayout.ColorAttachmentOptimal : VkImageLayout.PresentSrcKHR,
             },
             new()
             {
                 Format = depthFormat,
-                Samples = VkSampleCountFlags._1Bit,
+                Samples = samples,
                 LoadOp = VkAttachmentLoadOp.Clear,
                 StoreOp = VkAttachmentStoreOp.DontCare,
                 StencilLoadOp = VkAttachmentLoadOp.DontCare,
@@ -325,14 +495,27 @@ internal static unsafe class Stage
                 InitialLayout = VkImageLayout.Undefined,
                 FinalLayout = VkImageLayout.DepthStencilAttachmentOptimal,
             },
+            new()
+            {
+                Format = surfaceFormat.Format,
+                Samples = VkSampleCountFlags._1Bit,
+                LoadOp = VkAttachmentLoadOp.DontCare,
+                StoreOp = VkAttachmentStoreOp.Store,
+                StencilLoadOp = VkAttachmentLoadOp.DontCare,
+                StencilStoreOp = VkAttachmentStoreOp.DontCare,
+                InitialLayout = VkImageLayout.Undefined,
+                FinalLayout = VkImageLayout.PresentSrcKHR,
+            },
         ];
         var colorRef = new VkAttachmentReference { Attachment = 0, Layout = VkImageLayout.ColorAttachmentOptimal };
         var depthRef = new VkAttachmentReference { Attachment = 1, Layout = VkImageLayout.DepthStencilAttachmentOptimal };
+        var resolveRef = new VkAttachmentReference { Attachment = 2, Layout = VkImageLayout.ColorAttachmentOptimal };
         var subpass = new VkSubpassDescription
         {
             PipelineBindPoint = VkPipelineBindPoint.Graphics,
             ColorAttachmentCount = 1,
             ColorAttachments = &colorRef,
+            ResolveAttachments = msaa ? &resolveRef : null,
             DepthStencilAttachment = &depthRef,
         };
         var dependency = new VkSubpassDependency
@@ -345,7 +528,7 @@ internal static unsafe class Stage
         };
         var renderPass = device.CreateRenderPass(new VkRenderPassCreateInfo
         {
-            AttachmentCount = attachments.Length,
+            AttachmentCount = msaa ? 3 : 2,
             Attachments = (VkAttachmentDescription*)Unsafe.AsPointer(ref attachments[0]),
             SubpassCount = 1,
             Subpasses = &subpass,
@@ -404,7 +587,7 @@ internal static unsafe class Stage
                 Extent = new VkExtent3D { Width = extent.Width, Height = extent.Height, Depth = 1 },
                 MipLevels = 1,
                 ArrayLayers = 1,
-                Samples = VkSampleCountFlags._1Bit,
+                Samples = samples,
                 Tiling = VkImageTiling.Optimal,
                 Usage = VkImageUsageFlags.DepthStencilAttachmentBit,
                 SharingMode = VkSharingMode.Exclusive,
@@ -413,20 +596,39 @@ internal static unsafe class Stage
             depthMemory = device.AllocateMemory(physical, depthImage, VkMemoryPropertyFlags.DeviceLocalBit, null);
             device.BindImageMemory(depthImage, depthMemory, ByteSize.Zero);
             depthView = device.CreateImageView(View(depthImage, depthFormat, VkImageAspectFlags.DepthBit), null);
+            if (msaa)
+            {
+                msaaImage = device.CreateImage(new VkImageCreateInfo
+                {
+                    ImageType = VkImageType._2D,
+                    Format = surfaceFormat.Format,
+                    Extent = new VkExtent3D { Width = extent.Width, Height = extent.Height, Depth = 1 },
+                    MipLevels = 1,
+                    ArrayLayers = 1,
+                    Samples = samples,
+                    Tiling = VkImageTiling.Optimal,
+                    Usage = VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.TransientAttachmentBit,
+                    SharingMode = VkSharingMode.Exclusive,
+                    InitialLayout = VkImageLayout.Undefined,
+                }, null);
+                msaaMemory = device.AllocateMemory(physical, msaaImage, VkMemoryPropertyFlags.DeviceLocalBit, null);
+                device.BindImageMemory(msaaImage, msaaMemory, ByteSize.Zero);
+                msaaView = device.CreateImageView(View(msaaImage, surfaceFormat.Format, VkImageAspectFlags.ColorBit), null);
+            }
 
             views = new VkImageView[images.Length];
             framebuffers = new VkFramebuffer[images.Length];
             renderDone = new VkSemaphore[images.Length];
-            var pair = stackalloc VkImageView[] { default, depthView };
+            var targets = stackalloc VkImageView[] { msaaView, depthView, default };
             for (var i = 0; i < images.Length; i++)
             {
                 views[i] = device.CreateImageView(View(images[i], surfaceFormat.Format, VkImageAspectFlags.ColorBit), null);
-                pair[0] = views[i];
+                targets[msaa ? 2 : 0] = views[i];
                 framebuffers[i] = device.CreateFramebuffer(new VkFramebufferCreateInfo
                 {
                     RenderPass = renderPass,
-                    AttachmentCount = 2,
-                    Attachments = pair,
+                    AttachmentCount = msaa ? 3 : 2,
+                    Attachments = targets,
                     Width = extent.Width,
                     Height = extent.Height,
                     Layers = 1,
@@ -450,6 +652,12 @@ internal static unsafe class Stage
             device.DestroyImageView(depthView, null);
             device.DestroyImage(depthImage, null);
             device.FreeMemory(depthMemory, null);
+            if (msaa)
+            {
+                device.DestroyImageView(msaaView, null);
+                device.DestroyImage(msaaImage, null);
+                device.FreeMemory(msaaMemory, null);
+            }
             images = [];
         }
 
@@ -462,12 +670,39 @@ internal static unsafe class Stage
         // Shaders, compiled from GLSL at start-up.
         var compileClock = Stopwatch.StartNew();
         var vertexModule = Shader(device, VertexShader, ShaderKind.VertexShader, "scene.vert");
-        var fragmentModule = Shader(device, FragmentShader, ShaderKind.FragmentShader, "scene.frag");
+        var fragmentModule = quality == Quality.Low
+            ? Shader(device, LowFragmentShader, ShaderKind.FragmentShader, "low.frag")
+            : Shader(device, FragmentShader, ShaderKind.FragmentShader, "scene.frag");
         Console.WriteLine($"SCENE shaders compiled in {compileClock.Elapsed.TotalMilliseconds:F0} ms");
 
         var pushRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<Push>() };
-        var layout = device.CreatePipelineLayout([], [pushRange], null);
-        var pipeline = Pipeline(device, layout, renderPass, vertexModule, fragmentModule);
+        // The Low shader's Frame: a uniform buffer per frame in flight, in one host-visible buffer at 256-byte steps,
+        // the largest offset alignment Vulkan allows.
+        const int frameStep = 256;
+        var frameLayout = device.CreateDescriptorSetLayout(new DescriptorSetLayoutEx.CreateInfo
+        {
+            Bindings = [new VkDescriptorSetLayoutBinding { DescriptorType = VkDescriptorType.UniformBuffer, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit }],
+        }, null);
+        var framePool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
+        {
+            MaxSets = FramesInFlight,
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight }],
+        }, null);
+        var frameSize = new ByteSize((nuint)(frameStep * FramesInFlight));
+        var frameBuffer = device.CreateBuffer(new VkBufferCreateInfo { Size = frameSize, Usage = VkBufferUsageFlags.UniformBufferBit, SharingMode = VkSharingMode.Exclusive }, null);
+        var frameMemory = device.AllocateMemory(physical, frameBuffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
+        device.BindBufferMemory(frameBuffer, frameMemory, memoryOffset: ByteSize.Zero);
+        var frameMapped = (byte*)device.MapMemory<byte>(new MapInfo(frameMemory) { Region = new MapRegion { Size = frameSize } });
+        var frameSets = new VkDescriptorSet[FramesInFlight];
+        for (var i = 0; i < FramesInFlight; i++)
+        {
+            frameSets[i] = device.AllocateDescriptorSet(framePool, frameLayout);
+            var bufferInfo = new VkDescriptorBufferInfo { Buffer = frameBuffer, Offset = new ByteSize64((ulong)(i * frameStep)), Range = ByteSize.Of<Frame>() };
+            device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = frameSets[i], DescriptorCount = 1, DescriptorType = VkDescriptorType.UniformBuffer, BufferInfo = &bufferInfo }], []);
+        }
+
+        var layout = device.CreatePipelineLayout([frameLayout], [pushRange], null);
+        var pipeline = Pipeline(device, layout, renderPass, samples, vertexModule, fragmentModule);
 
         // The hall, still, and the robot's parts, each moved by its own matrix.
         var hallVertices = Brickwork.Build();
@@ -527,7 +762,7 @@ internal static unsafe class Stage
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
-        var splashPipeline = Pipeline(device, splashLayout, renderPass, splashVertex, splashFragment, overlay: true);
+        var splashPipeline = Pipeline(device, splashLayout, renderPass, samples, splashVertex, splashFragment, overlay: true);
 
         var logoPixels = Png.Load(logoPath, out var logoSourceWidth, out var logoSourceHeight);
         var logoWidth = extent.Width / 2;
@@ -974,6 +1209,7 @@ internal static unsafe class Stage
                 continue;
             }
 
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
 
@@ -1006,6 +1242,7 @@ internal static unsafe class Stage
             else
             {
                 cb.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
+                cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 for (var i = 0; i < parts.Length; i++)
                 {
@@ -1254,6 +1491,11 @@ internal static unsafe class Stage
         device.DestroyShaderModule(splashFragment, null);
         device.DestroyPipeline(pipeline, null);
         device.DestroyPipelineLayout(layout, null);
+        device.DestroyDescriptorPool(framePool, null);
+        device.DestroyDescriptorSetLayout(frameLayout, null);
+        device.UnmapMemory(frameMemory);
+        device.DestroyBuffer(frameBuffer, null);
+        device.FreeMemory(frameMemory, null);
         device.DestroyShaderModule(vertexModule, null);
         device.DestroyShaderModule(fragmentModule, null);
         Teardown();
@@ -1355,7 +1597,7 @@ internal static unsafe class Stage
     }
 
     // The scene's pipeline, or with overlay the splash's: no vertex buffer, no depth, alpha blended.
-    private static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false)
+    private static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkSampleCountFlags samples, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false)
     {
         var entry = "main"u8;
         fixed (byte* entryName = entry)
@@ -1371,12 +1613,15 @@ internal static unsafe class Stage
                 new() { Location = 0, Binding = 0, Format = VkFormat.R32G32B32SFloat, Offset = ByteSize.Zero },
                 new() { Location = 1, Binding = 0, Format = VkFormat.R32G32B32SFloat, Offset = ByteSize.Of<float>(3) },
                 new() { Location = 2, Binding = 0, Format = VkFormat.R32G32B32SFloat, Offset = ByteSize.Of<float>(6) },
+                new() { Location = 3, Binding = 0, Format = VkFormat.R32UInt, Offset = ByteSize.Of<float>(9) },
+                new() { Location = 4, Binding = 0, Format = VkFormat.R32G32B32SFloat, Offset = ByteSize.Of<float>(10) },
+                new() { Location = 5, Binding = 0, Format = VkFormat.R32G32B32A32SFloat, Offset = ByteSize.Of<float>(13) },
             };
             var vertexInput = overlay ? new VkPipelineVertexInputStateCreateInfo() : new VkPipelineVertexInputStateCreateInfo
             {
                 VertexBindingDescriptionCount = 1,
                 VertexBindingDescriptions = &binding,
-                VertexAttributeDescriptionCount = 3,
+                VertexAttributeDescriptionCount = 6,
                 VertexAttributeDescriptions = attributes,
             };
             var assembly = new VkPipelineInputAssemblyStateCreateInfo { Topology = VkPrimitiveTopology.TriangleList };
@@ -1388,7 +1633,7 @@ internal static unsafe class Stage
                 FrontFace = VkFrontFace.CounterClockwise,
                 LineWidth = 1f,
             };
-            var multisample = new VkPipelineMultisampleStateCreateInfo { RasterizationSamples = VkSampleCountFlags._1Bit };
+            var multisample = new VkPipelineMultisampleStateCreateInfo { RasterizationSamples = samples };
             var depth = new VkPipelineDepthStencilStateCreateInfo { DepthTestEnable = !overlay, DepthWriteEnable = !overlay, DepthCompareOp = VkCompareOp.Less };
             var blendAttachment = new VkPipelineColorBlendAttachmentState
             {

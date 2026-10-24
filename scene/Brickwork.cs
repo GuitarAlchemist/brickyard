@@ -11,13 +11,13 @@ internal static class Brickwork
         var o = new List<Vertex>();
 
         // Slabs two metres square, a little uneven in tone, over a dark bed that shows in the joints.
-        Boxes.Add(o, new(0f, -0.08f, -2f), new(18f, 0.1f, 16f), new(0.015f, 0.015f, 0.015f));
+        Boxes.Add(o, new(0f, -0.08f, -2f), new(18f, 0.1f, 16f), new SN.Vector3(0.015f, 0.015f, 0.015f));
         for (var i = -4; i <= 4; i++)
         {
             for (var j = -5; j <= 2; j++)
             {
                 var tone = 0.07f + (0.03f * Hash(i, j));
-                Boxes.Add(o, new(2f * i, -0.02f, 2f * j), new(1.975f, 0.04f, 1.975f), new(tone, tone * 0.96f, tone * 0.9f));
+                Boxes.Add(o, new(2f * i, -0.02f, 2f * j), new(1.975f, 0.04f, 1.975f), new SN.Vector3(tone, tone * 0.96f, tone * 0.9f));
             }
         }
 
@@ -34,7 +34,7 @@ internal static class Brickwork
         }
 
         // The wall: bricks proud of the mortar behind them, one in ten darker, a few sandier.
-        Boxes.Add(o, new(0f, 2.3f, -3.55f), new(12.5f, 4.6f, 0.2f), new(0.12f, 0.11f, 0.1f));
+        Boxes.Add(o, new(0f, 2.3f, -3.55f), new(12.5f, 4.6f, 0.2f), new SN.Vector3(0.12f, 0.11f, 0.1f));
         for (var r = 0; r < 27; r++)
         {
             for (var c = -14; c <= 14; c++)
@@ -83,13 +83,13 @@ internal static class Brickwork
         }
 
         // A steel cabinet with four drawer handles and a small screen.
-        Boxes.Add(o, new(2.2f, 0.65f, -1.9f), new(0.9f, 1.3f, 0.5f), new(0.045f, 0.075f, 0.06f));
+        Boxes.Add(o, new(2.2f, 0.65f, -1.9f), new(0.9f, 1.3f, 0.5f), new Finish(new(0.045f, 0.075f, 0.06f), Material.Enamel));
         for (var k = 0; k < 4; k++)
         {
-            Boxes.Add(o, new(2.2f, 0.2f + (0.2f * k), -1.645f), new(0.7f, 0.02f, 0.012f), new(0.18f, 0.18f, 0.17f));
+            Boxes.Add(o, new(2.2f, 0.2f + (0.2f * k), -1.645f), new(0.7f, 0.02f, 0.012f), new Finish(new(0.18f, 0.18f, 0.17f), Material.Steel));
         }
 
-        Boxes.Add(o, new(2.2f, 1.08f, -1.646f), new(0.36f, 0.22f, 0.01f), new(0.08f, 0.3f, 0.34f));
+        Boxes.Add(o, new(2.2f, 1.08f, -1.646f), new(0.36f, 0.22f, 0.01f), new Finish(new(0.08f, 0.3f, 0.34f), Material.Glass));
         return [.. o];
     }
 

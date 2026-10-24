@@ -646,6 +646,35 @@ and the dots are one small texture drawn twelve times, tinted lit or dim each fr
 someone else, Brutal or Gaïa among them, still ends the conversation at once, and the ring with it. The cost is the
 one the old rule avoided: talk that goes on and on goes on to Claude, now in sight.
 
+## The robot's look, a first level (2026-10-23)
+
+The user asked for a better-looking robot that falls back on weaker machines. The scene now has two lighting levels,
+picked at start by `--quality auto|flat|low`, and says which and why: `SCENE quality low because NVIDIA GeForce RTX
+5080 is a discrete GPU, with 4x MSAA`. Auto takes Low on any GPU and Flat, the lighting as it was, when the CPU draws,
+as a software renderer does. Low keeps Flat's three lights, its pool and its colours, and adds:
+
+- rounded edges: within 8 mm of a face's edge, less on thin parts and never under a pixel, the normal leans towards
+  the next face, so that the Mac minis, the head and the bricks catch the light on their edges. Each vertex carries
+  its face's first axis and where it lies on the face, 68 bytes a vertex where it was 36;
+- a material per surface (enamel, brushed aluminium, steel, rubber, glass, matte), with Blinn-Phong highlights of both
+  lights, Schlick's Fresnel and a reflection of the hall: lit floor below, brick around, dark roof above;
+- the robot's shadow on the floor from the key light, as a column 1.25 m high whose penumbra widens away from its foot,
+  and the dark where the robot, the pallet, the cabinet and the wall meet the floor;
+- a shoulder above 0.6, which leaves the darks and the colours tuned without a curve as they were and rolls the
+  highlights off towards 1; the glow is added after it, and the cards, the buttons and the splash never pass through it;
+- 4x MSAA resolved into the swapchain's image, so the edges no longer step, and `--shots` reads the resolved image.
+
+The camera's position comes in a uniform buffer per frame in flight, in its own descriptor pool, since the push
+constants are full at 128 bytes. A demo's window is now titled « Brickyard demo »: one titled « Brickyard » beside
+Delta's left the tablet with no picture at 19:41, since the gateway shows the one window of that title.
+
+Measured on the RTX 5080, alternating with the build before, `--demo --hidden --cap 60 --seconds 20`: p99 17.3 to 19.2
+ms for the old build, 18.4 to 20.3 for Low and 18.0 to 19.2 for Flat, the max 21.5 to 26.3 for all three, apart from
+two runs, one old and one Low, with a stall of 196 and 78 ms each. Uncapped, 2143 frames a second before and 2017
+with Low, 0.37 against 0.43 ms at p50. Visible with vsync, beside Delta's own window, all three builds show p95 33.3 ms
+and max about 50 ms: frames that miss a vsync came before this change. `--shots` before and after: the splash is the
+same to the pixel, and the cards and the QR stay sharp.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
@@ -679,6 +708,9 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
 
 ## To verify
 
+- The Low level on an integrated GPU and over Remote Desktop: its cost, MSAA included, and whether auto should take
+  Flat there.
+- The visible frames that miss a vsync, p95 33 ms with or without Low, beside Delta's window.
 - The warm voice by ear, live, against Piper's own (`-fx none`).
 - The spoken window and shelf commands with Whisper's real transcripts: misheard verbs fall through to Claude.
 

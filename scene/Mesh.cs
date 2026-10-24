@@ -46,11 +46,29 @@ internal sealed unsafe class Mesh : IDisposable
     }
 }
 
+// What a surface is made of, which the Low shader's highlights and reflections follow (Stage); Flat draws them all alike.
+internal enum Material : uint
+{
+    Matte,
+    Enamel,
+    Aluminium,
+    Steel,
+    Rubber,
+    Glass,
+}
+
+// A surface's colour and what it is made of.
+internal readonly record struct Finish(SN.Vector3 Color, Material Material);
+
 internal static class Boxes
 {
-    // A box of the given size centred on c, as 12 triangles with one normal per face.
-    public static void Add(List<Vertex> o, SN.Vector3 c, SN.Vector3 size, SN.Vector3 color)
+    // A box of the given size centred on c, as 12 triangles with one normal per face. Each vertex also carries its face's
+    // first axis and where it lies on the face, for the Low shader's rounded edges.
+    public static void Add(List<Vertex> o, SN.Vector3 c, SN.Vector3 size, SN.Vector3 color) => Add(o, c, size, new Finish(color, Material.Matte));
+
+    public static void Add(List<Vertex> o, SN.Vector3 c, SN.Vector3 size, Finish finish)
     {
+        var (color, material) = finish;
         var h = size / 2f;
         ReadOnlySpan<(SN.Vector3 N, SN.Vector3 U, SN.Vector3 V)> faces =
         [
@@ -63,12 +81,14 @@ internal static class Boxes
         ];
         foreach (var (n, u, v) in faces)
         {
-            SN.Vector3 Corner(float su, float sv) => c + (h * (n + (su * u) + (sv * v)));
+            var hu = SN.Vector3.Dot(h, SN.Vector3.Abs(u));
+            var hv = SN.Vector3.Dot(h, SN.Vector3.Abs(v));
+            Vertex Corner(float su, float sv) => new(c + (h * (n + (su * u) + (sv * v))), n, color, material, u, new(su, sv, hu, hv));
             var p00 = Corner(-1, -1);
             var p10 = Corner(1, -1);
             var p11 = Corner(1, 1);
             var p01 = Corner(-1, 1);
-            o.AddRange([new(p00, n, color), new(p10, n, color), new(p11, n, color), new(p00, n, color), new(p11, n, color), new(p01, n, color)]);
+            o.AddRange([p00, p10, p11, p00, p11, p01]);
         }
     }
 }
