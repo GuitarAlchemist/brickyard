@@ -46,6 +46,11 @@ internal static class Courses
 
             var index = Pages(dir).FirstOrDefault(p => Path.GetFileNameWithoutExtension(p) == "index");
             var title = index is null ? name : Read(index).Title is { Length: > 0 } t ? t : name;
+            if (title.LastIndexOf(" — ", StringComparison.Ordinal) is > 0 and var dash && !title[(dash + 3)..].Contains(' '))
+            {
+                title = title[..dash]; // the course page's own name, such as « — Mission »
+            }
+
             var url = Site + prefix + name + "/";
             courses.Add((title, new Shelf.Node(title, Words.Say($"{lessons.Count} lessons", $"{lessons.Count} leçons"), () => Lessons(lessons, url))));
         }
@@ -139,7 +144,7 @@ internal static class Courses
             foreach (var (folder, title, lesson) in new[] { ("guitar", "Guitar", "Scales"), (Path.Combine("fr", "guitar"), "Guitare", "Gammes") })
             {
                 Directory.CreateDirectory(Path.Combine(docs, folder));
-                File.WriteAllText(Path.Combine(docs, folder, "index.md"), $"---\ntitle: {title}\n---\n");
+                File.WriteAllText(Path.Combine(docs, folder, "index.md"), $"---\ntitle: {title} — Mission\n---\n");
                 File.WriteAllText(Path.Combine(docs, folder, "02-scales.md"), $"---\ntitle: \"2. {lesson}\"\ndescription: Modes\nsidebar:\n  order: 2\n---\n\n## One\n\n```\n## not a heading\n```\n\n## Two\n");
                 File.WriteAllText(Path.Combine(docs, folder, "01-notes.mdx"), "---\ntitle: 1. Notes\nsidebar:\n  order: 1\n---\n");
             }
