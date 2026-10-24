@@ -87,6 +87,7 @@ internal static class Panel
             "claude" => (Words.Say("For Claude", "Pour Claude"), (89, 204, 255)),
             "delta" => (Words.Say("Delta answers", "Delta répond"), (90, 220, 130)),
             "said" => (Words.Say("Delta says", "Delta dit"), (120, 230, 200)),
+            "hearing" => (Words.Say("You are saying…", "Tu dis…"), (214, 220, 226)),
             "dropped" or "someone else" => (Words.Say("Not for Delta, it seems", "Pas pour Delta, semble-t-il"), (150, 160, 170)),
             _ => (Words.Say($"For {to}", $"Pour {to}"), (150, 160, 170)),
         };

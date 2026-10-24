@@ -341,6 +341,9 @@ func cleanHeard(text string) string {
 	return text
 }
 
+// partialEvery is how often, in 20 ms frames of speech, the caption's partial transcript is renewed: every second.
+const partialEvery = 50
+
 // listen turns the microphone into utterances: it tells the scene when someone starts speaking, transcribes what they
 // said once they stop, and hears nothing while Delta is busy answering.
 // hearing, if set, is told +1 as a sentence starts and -1 when it ends without reaching out, for a phone's copy of it
@@ -363,6 +366,11 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int)
 	}
 	peak, count := 0.0, 0
 	meter, ticks, shown := 0.0, 0, 0.0 // the window's microphone meter, the loudest frame of every 100 ms
+	// While someone speaks, the caption shows what they have said so far, transcribed again every partialEvery: only
+	// while transcribing is quick, as on a GPU, since the sentence's own transcript waits for the partial one.
+	var said atomic.Int64 // changes as each sentence starts and ends, so that a late partial transcript is dropped
+	var partial atomic.Bool
+	next, quick := 0, true
 	for frame := range frames {
 		if levels { // every 2 s, the loudest frame and the room's noise as the endpoint measures it
 			peak, count = max(peak, rms(frame)), count+1
@@ -385,6 +393,7 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int)
 			cut.reset()
 			if inSpeech {
 				inSpeech = false
+				said.Add(1)
 				heard(-1)
 			}
 			continue
@@ -393,10 +402,25 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int)
 		switch event {
 		case speechStarted:
 			inSpeech = true
+			said.Add(1)
+			next = partialEvery
 			heard(1)
 			s.send(map[string]any{"state": "listening"})
+		case noSpeechEvent:
+			if !inSpeech || !quick || len(cut.speech) < next*frameSamples || !partial.CompareAndSwap(false, true) {
+				continue
+			}
+			next = len(cut.speech)/frameSamples + partialEvery
+			samples, sentence := slices.Clone(cut.speech), said.Load()
+			go func() {
+				defer partial.Store(false)
+				if text, _, err := e.ask(samples); err == nil && text != "" && said.Load() == sentence {
+					s.send(map[string]any{"heard": map[string]any{"text": shorten(text, 400), "to": "hearing"}})
+				}
+			}()
 		case speechEnded:
 			inSpeech = false
+			said.Add(1)
 			if speech == nil {
 				heard(-1)
 				s.send(map[string]any{"state": "idle"})
@@ -410,6 +434,7 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "brain:", err)
 			}
+			quick = time.Since(t0) < time.Second
 			out <- utterance{text: text, ended: ended, asr: time.Since(t0), lang: lang, level: voicedLevel(speech)}
 		}
 	}
