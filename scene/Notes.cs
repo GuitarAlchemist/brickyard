@@ -89,6 +89,8 @@ internal static class Notes
             changes.Length == 5 && changes.All(c => !c.Text.Contains('`') && !c.Text.Contains("**")), "a development build shows the notes of its release");
         check(For("v0.5.0") is { Release: "0.5.0" } && For("dev-v99.0.0-1-gabcdef0") is { Release: var latest } && Version.Parse(latest) >= new Version(0, 6, 0),
             "a version without notes shows the latest");
+        check(Panel.ReleaseNotes("v0.6.0", 1280, 720) is { Width: > 0 } && Panel.ReleaseNotes("dev-v0.6.0-42-g8fa47f3", 640, 360) is { Width: > 0 },
+            "the notes' card draws, with or without a line about the build and more changes than fit");
         check(Changes("# x\n\n## What changed\n\n- **Lead.** Its [text](https://example.com)\n  goes `on`.\n- No lead.\n\nAfter.\n- not an item\n") is
             [{ Lead: "Lead.", Text: "Its text goes on." }, { Lead: "", Text: "No lead." }], "a list of changes reads as words");
     }

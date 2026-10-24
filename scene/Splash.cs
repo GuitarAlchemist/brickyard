@@ -53,11 +53,11 @@ internal static class Splash
     }
 
     // A line of white text whose alpha is GDI's antialiased coverage, in the system's Segoe UI, semibold if asked, or
-    // null off Windows.
+    // null off Windows or for no text, which GDI gives no bitmap.
     public static byte[]? Text(string text, int pixels, out int width, out int height, bool bold = false)
     {
         width = height = 0;
-        if (!OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows() || text.Length == 0)
         {
             return null;
         }
