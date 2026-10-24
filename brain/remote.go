@@ -54,6 +54,7 @@ type remote struct {
 	chime  func()                                   // tells the room a sentence came from another device
 	pair   func(rows []string)                      // shows a pairing link's QR code, one string of 0 and 1 per row
 	watch  func(guests int)                         // shows how many guests watch the window from afar, or nil
+	inEars func(delta int)                          // told +1 as a sentence is transcribed, -1 if it is not routed, or nil
 
 	mu         sync.Mutex
 	transcribe func(samples []float32) (text, lang string, err error) // nil until Delta's ears are ready
@@ -135,16 +136,26 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	start := time.Now()
+	inEars := func(delta int) {
+		if r.inEars != nil {
+			r.inEars(delta)
+		}
+	}
+	inEars(1) // a copy the headset heard waits for this one (twice.go)
 	text, lang := "", ""
 	if voiced(sound.samples) >= minVoiced { // Whisper invents words over silence, such as a page whose sound was off sends
 		if text, lang, err = transcribe(sound.samples); err != nil {
+			inEars(-1)
 			http.Error(w, "transcription: "+err.Error(), http.StatusBadGateway)
 			return
 		}
 	}
-	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote", lang: lang}
+	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote", lang: lang,
+		level: voicedLevel(sound.samples)}
 	id, where := 0, "nothing"
-	if u.text != "" {
+	if u.text == "" {
+		inEars(-1)
+	} else {
 		id, where = r.route(u)
 		if r.chime != nil && where != "channel" && where != "local" && where != "duplicate" {
 			r.chime()

@@ -51,8 +51,9 @@ type utterance struct {
 	text   string
 	ended  time.Time
 	asr    time.Duration
-	source string // "" for this computer's microphone, "remote" for another device (remote.go)
-	lang   string // the language it was spoken in, as Whisper heard it, or "" when nobody asked
+	source string  // "" for this computer's microphone, "remote" for another device (remote.go)
+	lang   string  // the language it was spoken in, as Whisper heard it, or "" when nobody asked
+	level  float64 // how loud its voiced frames were (voicedLevel): the closer the microphone, the louder
 }
 
 // startEars runs whisper-server on the loopback port, transcribing lang ("en" or "fr"): the first of servers that
@@ -341,7 +342,9 @@ func cleanHeard(text string) string {
 
 // listen turns the microphone into utterances: it tells the scene when someone starts speaking, transcribes what they
 // said once they stop, and hears nothing while Delta is busy answering.
-func listen(e *ears, s *scene, busy, muted *atomic.Bool, out chan<- utterance, levels bool) {
+// hearing, if set, is told +1 as a sentence starts and -1 when it ends without reaching out, for a phone's copy of it
+// to wait for this one (twice.go).
+func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int), out chan<- utterance, levels bool) {
 	frames := make(chan []float32, 64)
 	m, err := openMic(frames)
 	if err != nil {
@@ -351,6 +354,12 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, out chan<- utterance, l
 	defer m.close()
 	fmt.Println("listening on the default microphone")
 	var cut endpoint
+	inSpeech := false
+	heard := func(delta int) {
+		if hearing != nil {
+			hearing(delta)
+		}
+	}
 	peak, count := 0.0, 0
 	for frame := range frames {
 		if levels { // every 2 s, the loudest frame and the room's noise as the endpoint measures it
@@ -362,14 +371,22 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, out chan<- utterance, l
 		}
 		if busy.Load() || (muted != nil && muted.Load()) { // deaf while Delta speaks, and while the user turned it off
 			cut.reset()
+			if inSpeech {
+				inSpeech = false
+				heard(-1)
+			}
 			continue
 		}
 		event, speech := cut.feed(frame)
 		switch event {
 		case speechStarted:
+			inSpeech = true
+			heard(1)
 			s.send(map[string]any{"state": "listening"})
 		case speechEnded:
+			inSpeech = false
 			if speech == nil {
+				heard(-1)
 				s.send(map[string]any{"state": "idle"})
 				continue
 			}
@@ -381,7 +398,7 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, out chan<- utterance, l
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "brain:", err)
 			}
-			out <- utterance{text: text, ended: ended, asr: time.Since(t0), lang: lang}
+			out <- utterance{text: text, ended: ended, asr: time.Since(t0), lang: lang, level: voicedLevel(speech)}
 		}
 	}
 }

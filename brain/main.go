@@ -211,7 +211,7 @@ func main() {
 		}
 	}()
 	if *useMic {
-		go listen(e, s, &busy, nil, heard, *micLevels)
+		go listen(e, s, &busy, nil, nil, heard, *micLevels)
 	}
 	for u := range heard {
 		busy.Store(true)

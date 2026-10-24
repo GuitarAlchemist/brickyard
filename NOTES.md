@@ -664,16 +664,42 @@ and the dots are one small texture drawn twelve times, tinted lit or dim each fr
 someone else, Brutal or Gaïa among them, still ends the conversation at once, and the ring with it. The cost is the
 one the old rule avoided: talk that goes on and on goes on to Claude, now in sight.
 
+## The louder copy goes (2026-10-23)
+
+The six live pairs (pid 117856, utterances 17/18 to 38/39) came 0.16 to 0.48 s apart, from the headset and the
+phone, each misheard its own way; half came phone first. Brutal's review set the rule: one speaker in one room, so time
+decides and words only check.
+
+- **Two sentences from different devices within 1.5 s (copiesWithin) are one** if they share a word once accents are
+  folded and numbers up to ten written in letters (« 1 » and « un »). The 8 s rule, 4 words in 5, stays for a phone
+  copy that comes later.
+- **A copy that comes while the other device is still hearing waits for that one**, at most 2 s (holdMax). The brain
+  counts the sentences each device's ears are transcribing (inEars): the computer's from the endpoint's start of speech
+  until the sentence is routed, a phone's from `/hear`'s arrival until its transcript is routed. Nobody waits while
+  only one device hears. A count that never comes down is reset when its wait runs out.
+- **The louder copy goes**, by a tenth at least: its RMS over the voiced frames (voicedLevel), since the microphone
+  closer to the mouth hears it louder. Then the longer transcript, then the first. The answer then plays where the
+  user spoke: on the phone when its copy went and it plays its own answers, on the computer otherwise.
+- **The journal says why.** Each heard line has its `level`. The dropped copy has route `duplicate`, the reason « heard
+  louder by the other device », and `copy_of` with the copy that went: its source, level and text. The copy that went
+  has `beat` with the dropped one.
+- When the computer's copy, said without « Delta », beats the phone's, it still goes: the phone's button addressed
+  Delta.
+
+Not known yet: whether a phone's automatic gain makes its copy louder when the user speaks into the headset. The levels
+in the journal will tell, in the live test with brutal: the same sentence on both, the phone alone, the headset alone.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
   sentence over the silence (utterances 66 and 69, live), which Claude answered. `/hear` now hears as nothing a
   recording with fewer than 12 frames of 20 ms loud enough for speech, the endpoint's own bar, without asking
   Whisper; brickyard-remote-b2's page no longer sends one.
-- With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
-  writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
-  one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two
-  acknowledgements, and at times two answers, one on each device. The user asked that one device be heard at a time.
+- (Fixed on delta-face, for 0.6.1) With the headset and the phone both open, each microphone sent its own copy of a
+  sentence, 0.1 to 0.5 s apart. Whisper wrote the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and
+  « Delta, on fait quoi ensuite ? »), or one cut it where the other did not, so the 4-in-5 rule dropped none of them,
+  seen live on 2026-10-23: two acknowledgements, and at times two answers, one on each device. The user asked that one
+  device be heard at a time. See « The louder copy goes ».
 - Talk to people in the room without « Delta » keeps a conversation open and goes to Claude, 30 s at a time; the ring
   shows it, and a sentence for someone else, Brutal or Gaïa among them, ends it.
 - A phone reloaded while one of its answers is on the way has forgotten its question and has no sound yet: it shows

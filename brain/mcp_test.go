@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -562,7 +563,7 @@ func TestASentenceHeardByTwoDevicesGoesOnce(t *testing.T) {
 	if r := route("Oui.", "", later.Add(3*time.Second)); r != "channel" {
 		t.Fatalf("an answer: %s", r)
 	}
-	if r := route("Oui.", "remote", later.Add(4*time.Second)); r == "duplicate" {
+	if r := route("Oui.", "remote", later.Add(6*time.Second)); r == "duplicate" { // 1.5 s apart at most is one (twice.go)
 		t.Fatal("a short answer said on each device is two answers")
 	}
 }
@@ -646,5 +647,142 @@ func TestACopyThatComesWhileTheFirstIsRoutedGoesOnce(t *testing.T) {
 	next(t, out)
 	if second != "duplicate" {
 		t.Fatalf("the phone's copy went to %s", second)
+	}
+}
+
+// The six pairs the headset and the phone sent live, 0.16 to 0.48 s apart (pid 117856), each one sentence.
+var livePairs = []struct {
+	first, source, second string
+	apart                 time.Duration
+}{
+	{"Quand je parle dans le casque et ne pas parler dans le téléphone et vice versa, ça serait génial.", "",
+		"Ne pas parler dans le téléphone et vice-versa, ça serait génial.", 405 * time.Millisecond},
+	{"Là en même temps tu vois j'ai dit indigo donc normalement tu n'aurais pas du répondre.", "remote",
+		"Non, Delta, tu vois, j'ai dit Indigo, donc normalement, tu n'aurais pas dû répondre.", 481 * time.Millisecond},
+	{"OK pour le 1 go.", "", "Pour le un goût.", 279 * time.Millisecond},
+	{"C'est pas pour toi.", "", "Non, c'est pas pour toi.", 196 * time.Millisecond},
+	{"Aïta, on ne sait quoi ensuite ?", "remote", "Delta, on fait quoi ensuite ?", 197 * time.Millisecond},
+	{"Alors tu vois c'est le rôle, des fois c'est le téléphone qui me répond, des fois c'est le desktop.", "remote",
+		"Delta, alors tu vois c'est drôle, des fois c'est le téléphone qui me répond, des fois c'est le desktop.", 164 * time.Millisecond},
+}
+
+// Each live pair goes to Claude once, whichever device's copy came first.
+func TestTwoCopiesThatComeAtOnceGoOnce(t *testing.T) {
+	for _, p := range livePairs {
+		if !likeSentence(foldedWords(p.first), foldedWords(p.second)) {
+			t.Errorf("%q and %q are not one sentence", p.first, p.second)
+		}
+	}
+	if likeSentence(foldedWords("Delta, quelle heure est-il ?"), foldedWords("Mets de la musique.")) {
+		t.Error("two sentences that share no word are two")
+	}
+	var mu sync.Mutex
+	routes := map[string]string{}
+	m, _, _ := startServer(t, func(m *mcpServer) {
+		m.record = func(event string, fields map[string]any) {
+			if event == "heard" {
+				mu.Lock()
+				routes[fields["text"].(string)] = fields["route"].(string)
+				mu.Unlock()
+			}
+		}
+	})
+	start := time.Now()
+	for i, p := range livePairs {
+		at := start.Add(time.Duration(i) * time.Minute)
+		m.gate.open(at) // live, each came in the conversation
+		other := "remote"
+		if p.source == "remote" {
+			other = ""
+		}
+		m.hear(utterance{text: p.first, source: p.source}, at)
+		m.hear(utterance{text: p.second, source: other}, at.Add(p.apart))
+		mu.Lock()
+		first, second := routes[p.first], routes[p.second]
+		mu.Unlock()
+		if second == "channel" || first == "duplicate" {
+			t.Errorf("%q went to %s, then %q to %s", p.first, first, p.second, second)
+		}
+	}
+}
+
+// When the user speaks into both devices at once, the copy that comes while the other device still hears the
+// sentence waits for that one, and the louder copy goes: the headset's when the user speaks into it, the phone's when
+// the user speaks into the phone with the computer's microphone across the room.
+func TestTheLouderOfTwoCopiesGoes(t *testing.T) {
+	var mu sync.Mutex
+	heard := map[string]map[string]any{}
+	m, _, out := startServer(t, func(m *mcpServer) {
+		m.holdMax = 2 * time.Second
+		m.record = func(event string, fields map[string]any) {
+			if event == "heard" {
+				mu.Lock()
+				heard[fields["text"].(string)] = fields
+				mu.Unlock()
+			}
+		}
+	})
+	waiting := func() {
+		for end := time.Now().Add(time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) {
+			m.mu.Lock()
+			n := len(m.copies)
+			m.mu.Unlock()
+			if n > 0 {
+				return
+			}
+		}
+		t.Fatal("no copy waits")
+	}
+	both := func(first, second utterance, at time.Time) (string, string) {
+		m.earsHear(second.source, 1) // the other device hears it still
+		done := make(chan string)
+		go func() { done <- m.hear(first, at) }()
+		waiting()
+		route := m.hear(second, at.Add(200*time.Millisecond))
+		return route, <-done
+	}
+
+	now := time.Now()
+	headset, phone := both(utterance{text: "Aïta, on ne sait quoi ensuite ?", source: "remote", level: 0.03},
+		utterance{text: "Delta, on fait quoi ensuite ?", level: 0.2}, now)
+	if headset != "channel" || phone != "duplicate" {
+		t.Fatalf("spoken into the headset: the headset's copy went to %s, the phone's to %s", headset, phone)
+	}
+	next(t, out)
+	mu.Lock()
+	lost := heard["Aïta, on ne sait quoi ensuite ?"]
+	mu.Unlock()
+	if lost["copy_of"].(map[string]any)["source"] != "computer" || lost["level"] != 0.03 {
+		t.Errorf("the phone's copy: %v", lost)
+	}
+
+	later := now.Add(time.Minute)
+	phone, headset = both(utterance{text: "Delta, tu peux relancer les tests ?", level: 0.02},
+		utterance{text: "Delta, tu peux relancer les tests ?", source: "remote", level: 0.15}, later)
+	if phone != "channel" || headset != "duplicate" {
+		t.Fatalf("spoken into the phone: the phone's copy went to %s, the computer's to %s", phone, headset)
+	}
+	next(t, out)
+
+	// The headset's copy, without Delta's name, goes when the phone's lost to it: the phone's button addressed Delta.
+	quiet := later.Add(time.Hour)
+	headset, phone = both(utterance{text: "On fait quoi ensuite ?", source: "remote", level: 0.03},
+		utterance{text: "On fait quoi ensuite ?", level: 0.2}, quiet)
+	if headset != "channel" || phone != "duplicate" {
+		t.Fatalf("without Delta's name: the headset's copy went to %s, the phone's to %s", headset, phone)
+	}
+	next(t, out)
+
+	// A phone's sentence waits no longer than holdMax for a copy that does not come.
+	m.holdMax = 50 * time.Millisecond
+	m.earsHear("", 1)
+	if where := m.hear(utterance{text: "Delta, et la météo ?", source: "remote"}, quiet.Add(time.Hour)); where != "channel" {
+		t.Fatalf("went to %s", where)
+	}
+	m.mu.Lock()
+	stuck := m.inEars[""]
+	m.mu.Unlock()
+	if stuck != 0 {
+		t.Errorf("the headset's count stays at %d", stuck)
 	}
 }

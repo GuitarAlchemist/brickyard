@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -151,6 +152,9 @@ type mcpServer struct {
 	lately  []routed       // the sentences routed in the last seconds, to know one that two devices heard (twice.go)
 	asked   bool           // Claude's last words asked the user something: the answer goes to Claude untriaged
 	shelfAt time.Time      // when the shelf last moved, by voice or by Claude; zero once closed
+	inEars  map[string]int // the sentences each source's ears are transcribing, by source (twice.go)
+	copies  []*heardCopy   // the sentences waiting a moment for the other device's copy (twice.go)
+	holdMax time.Duration  // how long they wait at most; not at all when zero
 	heardIn map[int]string // the language of each sentence heard, by utterance id, the last 64
 	saidIn  map[int]string // the language of each say call, by say_id, the last 64
 
@@ -459,6 +463,7 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	text, repeats := collapseRepeats(u.text)
 	u.text = text
+	twin, won := m.awaitCopy(u, now) // the other device's copy of it, which came at once, if any
 	m.mu.Lock()
 	m.heard++
 	h := heardText{id: m.heard, text: u.text}
@@ -479,6 +484,16 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	if repeats > 0 { // Whisper wrote a sentence over and over
 		fields["repeats_collapsed"] = repeats
 	}
+	if u.level > 0 {
+		fields["level"] = math.Round(u.level*1e4) / 1e4
+	}
+	if twin != nil {
+		key := "copy_of"
+		if won {
+			key = "beat"
+		}
+		fields[key] = map[string]any{"source": sourceName(twin.source), "level": math.Round(twin.level*1e4) / 1e4, "text": shorten(twin.text, 120)}
+	}
 	defer func() {
 		fields["route"] = route
 		m.note("heard", fields)
@@ -490,6 +505,15 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 			m.tell(map[string]any{"heard": map[string]any{"text": shorten(u.text, 400), "to": heardBy(route, reason)}})
 		}
 	}()
+	if twin != nil && !won {
+		m.mu.Unlock()
+		route = "duplicate"
+		fields["reason"] = "heard louder by the other device"
+		return id, route
+	}
+	if twin != nil && twin.source == "remote" { // the phone's button addressed Delta, whichever copy goes
+		m.gate.open(now)
+	}
 	if m.heardTwice(u, now) { // the computer's microphone and a phone both heard it
 		m.mu.Unlock()
 		route = "duplicate"

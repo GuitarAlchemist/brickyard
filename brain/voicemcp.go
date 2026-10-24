@@ -191,6 +191,7 @@ func runMCP(c mcpConfig) {
 		mo.fx = fx
 	}
 	m.speak = mo.speak
+	m.holdMax = 2 * time.Second // a phone's copy came 0.2 to 0.5 s from the headset's, live
 	m.ack, m.quiet = mo.ack, mo.quiet
 	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
 		m.tell = s.send
@@ -224,7 +225,7 @@ func runMCP(c mcpConfig) {
 	h.gesture = func(g gesture) { m.gesture(g, time.Now()) }
 
 	// Another device speaks to Delta and hears it through a gateway on this computer, such as IX's (remote.go).
-	rm := &remote{route: func(u utterance) (int, string) {
+	rm := &remote{inEars: func(delta int) { m.earsHear("remote", delta) }, route: func(u utterance) (int, string) {
 		id, where := m.heardAs(u, time.Now())
 		logf("heard %q from another device in %d ms: %s", u.text, u.asr.Milliseconds(), where)
 		if where == "ignored" || where == "dropped" || where == "local" {
@@ -326,11 +327,13 @@ func runMCP(c mcpConfig) {
 		}
 		rm.hearWith(e.hearIn)
 		heard := make(chan utterance)
-		go listen(e, s, &mo.busy, &muted, heard, false)
+		go listen(e, s, &mo.busy, &muted, func(delta int) { m.earsHear("", delta) }, heard, false)
 		for u := range heard {
 			where := "nothing"
 			if u.text != "" {
 				where = m.hear(u, time.Now())
+			} else {
+				m.earsHear("", -1)
 			}
 			logf("heard %q in %d ms: %s", u.text, u.asr.Milliseconds(), where)
 			if where == "nothing" || where == "ignored" || where == "dropped" || where == "local" {
