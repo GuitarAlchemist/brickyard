@@ -992,7 +992,21 @@ internal static unsafe class Stage
         }
 
         var reason = "window closed";
-        window.OnKey += (w, key, scancode, action, mods) =>
+        // Runs what a key, a click or a scroll asks, or draws a card; an exception there skips it, in the log, rather than
+        // closing the window.
+        void Guard(string what, Action act)
+        {
+            try
+            {
+                act();
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"SCENE {what} failed and was skipped: {e}");
+            }
+        }
+
+        window.OnKey += (w, key, scancode, action, mods) => Guard("a key", () =>
         {
             if (action == GlfwKeyAction.Release)
             {
@@ -1053,7 +1067,7 @@ internal static unsafe class Stage
                 reason = "Esc";
                 w.ShouldClose = true;
             }
-        };
+        });
 
         // A row under the cursor, in the card's pixels, from the window's coordinates.
         int RowAt(GlfwWindow w)
@@ -1089,7 +1103,7 @@ internal static unsafe class Stage
             return x >= corner.X && x < corner.X + width && y >= corner.Y && y < corner.Y + height;
         }
 
-        window.OnMouseButton += (w, button, action, mods) =>
+        window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
             var icon = Panel.PhoneSize(extent.Height);
             if (action == GlfwButtonAction.Press && (Over(w, PhoneAt(), icon, icon) || (pairingShown && pairingCard is not null && Over(w, PairingAt(), pairingCard.Width, pairingCard.Height))))
@@ -1132,14 +1146,14 @@ internal static unsafe class Stage
                 shelf.Select(at, row);
                 shelf.Enter(at);
             }
-        };
-        window.OnScroll += (w, offset) =>
+        });
+        window.OnScroll += (w, offset) => Guard("a scroll", () =>
         {
             if (shelf.Open && offset.Y != 0)
             {
                 shelf.Move(clock.Elapsed.TotalSeconds, offset.Y > 0 ? -1 : 1);
             }
-        };
+        });
 
         Console.WriteLine($"SCENE present mode {presentMode}, {images.Length} swapchain images, {extent.Width}x{extent.Height}{(cap > 0 ? $", capped at {cap} fps" : "")}");
         if (cap > 0 && OperatingSystem.IsWindows())
@@ -1222,121 +1236,124 @@ internal static unsafe class Stage
                 continue; // the projection follows the new size
             }
 
-            if (shelf.Open && !splashing && (shelf.Version != cardVersion || extent.Height != cardHeight))
+            Guard("a card", () =>
             {
-                cardVersion = shelf.Version;
-                cardHeight = extent.Height;
-                card = Panel.Draw(shelf.Levels, extent.Height);
-                cardTexture = Upload(card, cardSet, cardTexture);
-            }
-
-            if (moment.HeardAge >= 0f && !splashing && (moment.HeardId != captionId || (extent.Width, extent.Height) != captionSize))
-            {
-                captionId = moment.HeardId;
-                captionSize = (extent.Width, extent.Height);
-                caption = Panel.Caption(moment.Heard, moment.HeardTo, extent.Width, extent.Height);
-                captionTexture = Upload(caption, captionSet, captionTexture);
-            }
-
-            if (!splashing && phoneDrawn != (moment.Pairing is not null, moment.Devices > 0, extent.Height))
-            {
-                phoneDrawn = (moment.Pairing is not null, moment.Devices > 0, extent.Height);
-                phone = Panel.Phone(extent.Height, phoneDrawn.Live, phoneDrawn.Connected);
-                phoneTexture = Upload(phone, phoneSet, phoneTexture);
-            }
-
-            if (moment.Guests > 0 && !splashing && guestDrawn != (moment.Guests, moment.GuestsHear, extent.Height, Words.Language))
-            {
-                guestDrawn = (moment.Guests, moment.GuestsHear, extent.Height, Words.Language);
-                guestBadge = Panel.GuestBadge(moment.Guests, moment.GuestsHear, extent.Height);
-                guestTexture = Upload(guestBadge, guestSet, guestTexture);
-            }
-
-            if (!splashing && moment.Version != "" && versionDrawn != (moment.Version, extent.Height, Words.Language))
-            {
-                versionDrawn = (moment.Version, extent.Height, Words.Language);
-                versionLabel = Panel.VersionLabel(moment.Version, extent.Height);
-                versionTexture = Upload(versionLabel, versionSet, versionTexture);
-            }
-
-            if (notesShown && !splashing && notesDrawn != (moment.Version, extent.Width, extent.Height, Words.Language))
-            {
-                notesDrawn = (moment.Version, extent.Width, extent.Height, Words.Language);
-                notesCard = Panel.ReleaseNotes(moment.Version, extent.Width, extent.Height);
-                if (notesCard is not null)
+                if (shelf.Open && !splashing && (shelf.Version != cardVersion || extent.Height != cardHeight))
                 {
-                    notesTexture = Upload(notesCard, notesSet, notesTexture);
+                    cardVersion = shelf.Version;
+                    cardHeight = extent.Height;
+                    card = Panel.Draw(shelf.Levels, extent.Height);
+                    cardTexture = Upload(card, cardSet, cardTexture);
                 }
-            }
 
-            if (!splashing && meterTexture is null)
-            {
-                meterTexture = Upload(Panel.Blank(), meterSet, null);
-            }
+                if (moment.HeardAge >= 0f && !splashing && (moment.HeardId != captionId || (extent.Width, extent.Height) != captionSize))
+                {
+                    captionId = moment.HeardId;
+                    captionSize = (extent.Width, extent.Height);
+                    caption = Panel.Caption(moment.Heard, moment.HeardTo, extent.Width, extent.Height);
+                    captionTexture = Upload(caption, captionSet, captionTexture);
+                }
 
-            if (!splashing && micDrawn != (moment.MicOff, extent.Height))
-            {
-                micDrawn = (moment.MicOff, extent.Height);
-                micButton = Panel.MicButton(moment.MicOff, extent.Height);
-                micTexture = Upload(micButton, micSet, micTexture);
-            }
+                if (!splashing && phoneDrawn != (moment.Pairing is not null, moment.Devices > 0, extent.Height))
+                {
+                    phoneDrawn = (moment.Pairing is not null, moment.Devices > 0, extent.Height);
+                    phone = Panel.Phone(extent.Height, phoneDrawn.Live, phoneDrawn.Connected);
+                    phoneTexture = Upload(phone, phoneSet, phoneTexture);
+                }
 
-            if (!splashing && languageDrawn != (Words.Setting, extent.Height))
-            {
-                languageDrawn = (Words.Setting, extent.Height);
-                languageButton = Panel.LanguageButton(Words.Setting, extent.Height);
-                languageTexture = Upload(languageButton, languageSet, languageTexture);
-            }
+                if (moment.Guests > 0 && !splashing && guestDrawn != (moment.Guests, moment.GuestsHear, extent.Height, Words.Language))
+                {
+                    guestDrawn = (moment.Guests, moment.GuestsHear, extent.Height, Words.Language);
+                    guestBadge = Panel.GuestBadge(moment.Guests, moment.GuestsHear, extent.Height);
+                    guestTexture = Upload(guestBadge, guestSet, guestTexture);
+                }
 
-            if (moment.Lease > 0f && !splashing && leaseDrawn != (extent.Height, Words.Language))
-            {
-                leaseDrawn = (extent.Height, Words.Language);
-                leaseCard = Panel.Lease(extent.Height);
-                leaseTexture = Upload(leaseCard, leaseSet, leaseTexture);
-                leaseDot = Panel.Dot(extent.Height);
-                leaseDotTexture = Upload(leaseDot, leaseDotSet, leaseDotTexture);
-            }
+                if (!splashing && moment.Version != "" && versionDrawn != (moment.Version, extent.Height, Words.Language))
+                {
+                    versionDrawn = (moment.Version, extent.Height, Words.Language);
+                    versionLabel = Panel.VersionLabel(moment.Version, extent.Height);
+                    versionTexture = Upload(versionLabel, versionSet, versionTexture);
+                }
 
-            if (pairingShown && !demo && clock.Elapsed.TotalSeconds - pairingOpened > 60.0)
-            {
-                pairingShown = false;
-            }
+                if (notesShown && !splashing && notesDrawn != (moment.Version, extent.Width, extent.Height, Words.Language))
+                {
+                    notesDrawn = (moment.Version, extent.Width, extent.Height, Words.Language);
+                    notesCard = Panel.ReleaseNotes(moment.Version, extent.Width, extent.Height);
+                    if (notesCard is not null)
+                    {
+                        notesTexture = Upload(notesCard, notesSet, notesTexture);
+                    }
+                }
 
-            var secondsLeft = (int)Math.Ceiling(moment.PairingLeft);
-            if (pairingShown && !splashing && pairingDrawn != (moment.PairingId, secondsLeft, extent.Width, extent.Height, Words.Language))
-            {
-                pairingDrawn = (moment.PairingId, secondsLeft, extent.Width, extent.Height, Words.Language);
-                pairingCard = Panel.Pairing(moment.Pairing, secondsLeft, moment.PairingId > 0 && moment.Pairing is null, extent.Width, extent.Height);
-                pairingTexture = Upload(pairingCard, pairingSet, pairingTexture);
-            }
+                if (!splashing && meterTexture is null)
+                {
+                    meterTexture = Upload(Panel.Blank(), meterSet, null);
+                }
 
-            if (!splashing && inviteDrawn != (extent.Height, Words.Language))
-            {
-                inviteDrawn = (extent.Height, Words.Language);
-                inviteButton = Panel.InviteButton(extent.Height);
-                inviteTexture = Upload(inviteButton, inviteSet, inviteTexture);
-            }
+                if (!splashing && micDrawn != (moment.MicOff, extent.Height))
+                {
+                    micDrawn = (moment.MicOff, extent.Height);
+                    micButton = Panel.MicButton(moment.MicOff, extent.Height);
+                    micTexture = Upload(micButton, micSet, micTexture);
+                }
 
-            if (moment.InvitationId != invitationSeen) // an invitation came, or why none did
-            {
-                invitationSeen = moment.InvitationId;
-                invitationShown = true;
-                notesShown = false;
-                invitationOpened = clock.Elapsed.TotalSeconds;
-                pairingShown = false;
-            }
+                if (!splashing && languageDrawn != (Words.Setting, extent.Height))
+                {
+                    languageDrawn = (Words.Setting, extent.Height);
+                    languageButton = Panel.LanguageButton(Words.Setting, extent.Height);
+                    languageTexture = Upload(languageButton, languageSet, languageTexture);
+                }
 
-            if (invitationShown && (clock.Elapsed.TotalSeconds - invitationOpened > 60.0 || (moment.Guests > 0 && moment.Invitation?.Rows is not null)))
-            {
-                invitationShown = false;
-            }
+                if (moment.Lease > 0f && !splashing && leaseDrawn != (extent.Height, Words.Language))
+                {
+                    leaseDrawn = (extent.Height, Words.Language);
+                    leaseCard = Panel.Lease(extent.Height);
+                    leaseTexture = Upload(leaseCard, leaseSet, leaseTexture);
+                    leaseDot = Panel.Dot(extent.Height);
+                    leaseDotTexture = Upload(leaseDot, leaseDotSet, leaseDotTexture);
+                }
 
-            if (invitationShown && !splashing && moment.Invitation is { } brought && invitationDrawn != (moment.InvitationId, extent.Width, extent.Height, Words.Language))
-            {
-                invitationDrawn = (moment.InvitationId, extent.Width, extent.Height, Words.Language);
-                invitationCard = Panel.Invitation(brought, DateTime.Now.AddSeconds(moment.InvitationLeft), extent.Width, extent.Height);
-                invitationTexture = Upload(invitationCard, invitationSet, invitationTexture);
-            }
+                if (pairingShown && !demo && clock.Elapsed.TotalSeconds - pairingOpened > 60.0)
+                {
+                    pairingShown = false;
+                }
+
+                var secondsLeft = (int)Math.Ceiling(moment.PairingLeft);
+                if (pairingShown && !splashing && pairingDrawn != (moment.PairingId, secondsLeft, extent.Width, extent.Height, Words.Language))
+                {
+                    pairingDrawn = (moment.PairingId, secondsLeft, extent.Width, extent.Height, Words.Language);
+                    pairingCard = Panel.Pairing(moment.Pairing, secondsLeft, moment.PairingId > 0 && moment.Pairing is null, extent.Width, extent.Height);
+                    pairingTexture = Upload(pairingCard, pairingSet, pairingTexture);
+                }
+
+                if (!splashing && inviteDrawn != (extent.Height, Words.Language))
+                {
+                    inviteDrawn = (extent.Height, Words.Language);
+                    inviteButton = Panel.InviteButton(extent.Height);
+                    inviteTexture = Upload(inviteButton, inviteSet, inviteTexture);
+                }
+
+                if (moment.InvitationId != invitationSeen) // an invitation came, or why none did
+                {
+                    invitationSeen = moment.InvitationId;
+                    invitationShown = true;
+                    notesShown = false;
+                    invitationOpened = clock.Elapsed.TotalSeconds;
+                    pairingShown = false;
+                }
+
+                if (invitationShown && (clock.Elapsed.TotalSeconds - invitationOpened > 60.0 || (moment.Guests > 0 && moment.Invitation?.Rows is not null)))
+                {
+                    invitationShown = false;
+                }
+
+                if (invitationShown && !splashing && moment.Invitation is { } brought && invitationDrawn != (moment.InvitationId, extent.Width, extent.Height, Words.Language))
+                {
+                    invitationDrawn = (moment.InvitationId, extent.Width, extent.Height, Words.Language);
+                    invitationCard = Panel.Invitation(brought, DateTime.Now.AddSeconds(moment.InvitationLeft), extent.Width, extent.Height);
+                    invitationTexture = Upload(invitationCard, invitationSet, invitationTexture);
+                }
+            });
 
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
