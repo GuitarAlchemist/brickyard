@@ -1,6 +1,7 @@
 // delta-remote shows Delta's window to one device at a time, over WebRTC.
 //
 //	delta-remote [-ip <address>] [-port 8810] [-udp 8811] [-cert <file> -key <file> -name <host>] [-forget-devices]
+//	             [-guest-host <name> [-guest-port 8812] [-turn <file>]]
 //
 // Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within 100 s. Then a new code
 // replaces it, as soon as a device uses it too: Delta's window shows the current one as a QR, and link.txt holds it. A
@@ -10,6 +11,10 @@
 // network could stand in for the gateway while you accept that warning. Give a certificate the device trusts, such as
 // the one `tailscale cert` makes for this machine's tailnet name, with -cert, -key and -name, to rule that out.
 // It listens on one address only, and WebRTC uses that address and one UDP port.
+//
+// With -guest-host, a paired device can also invite guests from outside the network to watch, and only watch: a
+// Cloudflare tunnel brings https://<guest-host> to the guests' entry on 127.0.0.1:<guest-port>, which serves nothing
+// else (guests.go), and their video goes through Cloudflare's TURN relay, with the key held in -turn.
 package main
 
 import (
@@ -30,6 +35,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -39,6 +45,8 @@ type options struct {
 	title, exe, ffmpeg          string
 	brain, brainSecret          string
 	forget                      bool
+	guestHost, turnFile         string
+	guestPort                   int
 }
 
 func main() {
@@ -56,6 +64,10 @@ func main() {
 	flag.StringVar(&o.brainSecret, "brain-secret", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta", "remote.secret"),
 		"the secret the brain writes at each start")
 	flag.BoolVar(&o.forget, "forget-devices", false, "unpair every device first")
+	flag.StringVar(&o.guestHost, "guest-host", "", "the host name a tunnel brings to the guests' entry; default: no guests")
+	flag.IntVar(&o.guestPort, "guest-port", 8812, "the guests' entry, on 127.0.0.1 only, for the tunnel")
+	flag.StringVar(&o.turnFile, "turn", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta-remote", "turn.json"),
+		`Cloudflare's TURN key for the guests' video, as {"id": "…", "token": "…"}`)
 	flag.Parse()
 
 	if err := run(o); err != nil {
@@ -111,6 +123,26 @@ func run(o options) error {
 		return err
 	}
 	s.onPeer = c.run
+
+	if o.guestHost != "" {
+		// Guests are not on this network: their WebRTC goes through the relay, from this address and any UDP port.
+		gse := webrtc.SettingEngine{}
+		gse.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+		gse.SetIPFilter(func(a net.IP) bool { return a.Equal(ip) })
+		gse.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+		s.guestAPI = webrtc.NewAPI(webrtc.WithSettingEngine(gse))
+		s.guestHost = o.guestHost
+		s.ice = cloudflareRelay(o.turnFile)
+		s.watching = make(chan int, 1)
+		go s.announce()
+		guests := &http.Server{
+			Addr:              net.JoinHostPort("127.0.0.1", strconv.Itoa(o.guestPort)),
+			Handler:           s.guestHandler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() { logf("the guests' entry: %v", guests.ListenAndServe()) }()
+		fmt.Printf("Guests invited from a paired device watch at https://%s, through a tunnel to %s\n", o.guestHost, guests.Addr)
+	}
 
 	s.linkFile = filepath.Join(home, "link.txt")
 	link := fmt.Sprintf("https://%s/#code=%s", s.host, s.issueCode())

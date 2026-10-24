@@ -27,6 +27,7 @@ type fakeBrain struct {
 	bad   []string // why a request was refused
 	said  []string // SSE data lines /said sends
 	plays []string // X-Delta-Plays of each /said request
+	seen  []int    // each number of guests /guests was told
 }
 
 func newFakeBrain(t *testing.T) *fakeBrain {
@@ -50,6 +51,11 @@ func newFakeBrain(t *testing.T) *fakeBrain {
 			var req struct{ URL string }
 			json.NewDecoder(r.Body).Decode(&req)
 			b.links = append(b.links, req.URL)
+			w.WriteHeader(http.StatusNoContent)
+		case "/guests":
+			var req struct{ Watching int }
+			json.NewDecoder(r.Body).Decode(&req)
+			b.seen = append(b.seen, req.Watching)
 			w.WriteHeader(http.StatusNoContent)
 		case "/said":
 			b.plays = append(b.plays, r.Header.Get("X-Delta-Plays"))

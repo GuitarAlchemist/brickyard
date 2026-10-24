@@ -75,10 +75,19 @@ func (b *brain) said(ctx context.Context, plays bool) (*http.Response, error) {
 
 // link shows url as a QR in Delta's window; "" takes it away.
 func (b *brain) link(url string) error {
-	body, _ := json.Marshal(map[string]string{"url": url})
+	return b.post("/link", map[string]string{"url": url})
+}
+
+// guests shows how many guests watch in Delta's window, or takes the badge away for 0.
+func (b *brain) guests(n int) error {
+	return b.post("/guests", map[string]int{"watching": n})
+}
+
+func (b *brain) post(path string, v any) error {
+	body, _ := json.Marshal(v)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, err := b.request(ctx, http.MethodPost, "/link", bytes.NewReader(body))
+	req, err := b.request(ctx, http.MethodPost, path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -89,7 +98,7 @@ func (b *brain) link(url string) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return errors.New("the brain answered " + resp.Status + " to /link")
+		return errors.New("the brain answered " + resp.Status + " to " + path)
 	}
 	return nil
 }

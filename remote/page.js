@@ -7,6 +7,9 @@ const call = document.getElementById('call');
 const sound = document.getElementById('sound');
 const log = document.getElementById('log');
 const video = document.getElementById('scene');
+const guests = document.getElementById('guests');
+const invite = document.getElementById('invite');
+const end = document.getElementById('end');
 const say = (text) => { state.textContent = text; };
 let online = ''; // what the state line says of the connection, shown again once other news is stale
 
@@ -112,8 +115,34 @@ async function connect() {
   await pc.setRemoteDescription(await r.json());
   listen();
   controls.hidden = false;
+  guests.hidden = false;
   if (!ctx || ctx.state !== 'running') sound.hidden = false; // a first touch, before talking, unlocks sound and microphone
 }
+
+// An invitation for someone outside the Wi-Fi: a link with which one guest watches Delta's window through the tunnel,
+// two hours at most, and nothing a guest does reaches Delta. The phone's share sheet sends it; the link also goes in the
+// conversation, to copy where sharing is not offered.
+invite.onclick = async () => {
+  const r = await fetch('/invite', { method: 'POST' });
+  if (r.status === 404) { say('Les invités ne sont pas activés sur la passerelle.'); guests.hidden = true; return; }
+  if (!r.ok) { say('Invitation refusée : ' + r.status); return; }
+  const { link } = await r.json();
+  end.hidden = false;
+  const note = document.createElement('p');
+  note.className = 'bubble ack';
+  note.textContent = 'Invitation, valable une fois dans l’heure : ' + link;
+  log.append(note);
+  note.scrollIntoView({ block: 'end' });
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Delta', text: 'Regarde Delta en direct', url: link }); } catch (e) { /* closed */ }
+  }
+};
+
+end.onclick = async () => {
+  const r = await fetch('/guests/end', { method: 'POST' });
+  say(r.ok ? 'Les invités ne voient plus rien, et les invitations ne servent plus.' : 'Refusé : ' + r.status);
+  if (r.ok) end.hidden = true;
+};
 
 // A touch on the scene makes it big, another makes it small again, so the conversation keeps the screen. On a tablet
 // (page.css: both sides at least 600 px), the page also goes full screen, without the browser's bars, and comes back.

@@ -61,3 +61,9 @@ button { font: inherit; padding: 12px 20px; border-radius: 8px; border: 0; backg
   #controls { flex-direction: column; }
   #call.on { flex: none; }
 }
+#guests { display: flex; gap: 8px; width: 100%; max-width: 520px; }
+#guests button { flex: 1; padding: 10px 16px; background: #4a5568; }
+
+/* A guest's page (guest.html): the window alone, as large as the screen leaves it. */
+body.guest { display: flex; flex-direction: column; justify-content: center; }
+body.guest video { max-width: none; width: 100%; height: auto; max-height: calc(100dvh - 90px); }

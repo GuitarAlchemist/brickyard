@@ -35,13 +35,23 @@ const pagePolicy = "default-src 'none'; script-src 'self'; style-src 'self'; con
 // server answers one device at a time: it serves the page, pairs devices and takes a paired device's WebRTC offer,
 // to send it Delta's window as H.264. Every request must name the gateway's own host (no DNS rebinding), and a POST
 // must come from the page's own origin when it says where it comes from. The pairing code reaches the page in the
-// link's #fragment, which the browser sends to no server.
+// link's #fragment, which the browser sends to no server. Beside the device, up to two guests watch through the
+// guests' entry (guests.go).
 type server struct {
 	host  string // host:port the device uses, as it appears in Host
 	pair  *pairing
 	api   *webrtc.API
 	video *webrtc.TrackLocalStaticRTP
 	now   func() time.Time
+
+	guestHost string                          // the guests' host behind the tunnel, delta.<domain>; "": no guests
+	guestAPI  *webrtc.API                     // WebRTC for guests, who are not on this network
+	book      *guestBook                      // their invitations and cookies
+	ice       func() ([]iceServer, error)     // the relay's addresses and credentials for one guest
+	watching  chan int                        // the number of guests who watch, for announce; nil: nobody is told
+	pending   int                             // under mu: guests' offers being answered
+	guests    map[*webrtc.PeerConnection]bool // under mu: each guest's connection, true once connected
+	told      int                             // under mu: how many guests announce was last given
 
 	brain *brain // nil: no voice and no QR
 
@@ -50,10 +60,11 @@ type server struct {
 	linkFile string        // where the link that pairs now is kept, for the script that started the gateway; "": none
 	life     time.Duration // how often that code is renewed
 
-	mu     sync.Mutex
-	peer   *webrtc.PeerConnection
-	live   bool                 // the capture runs for peer
-	onPeer func(connected bool) // starts and stops the capture
+	mu      sync.Mutex
+	peer    *webrtc.PeerConnection
+	live    bool                 // peer is connected
+	watched bool                 // the capture runs, for peer or a guest
+	onPeer  func(connected bool) // starts and stops the capture
 }
 
 // newServer makes a server whose WebRTC stays on this machine, for the tests: see loopbackOnly.
@@ -84,13 +95,18 @@ func newServerWith(home string, se webrtc.SettingEngine) (*server, error) {
 	if err != nil {
 		return nil, err
 	}
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
 	return &server{
-		pair:   p,
-		api:    webrtc.NewAPI(webrtc.WithSettingEngine(se)),
-		video:  v,
-		now:    time.Now,
-		life:   renewEvery,
-		onPeer: func(bool) {},
+		pair:     p,
+		api:      api,
+		video:    v,
+		now:      time.Now,
+		guestAPI: api,
+		book:     newGuestBook(),
+		ice:      func() ([]iceServer, error) { return nil, nil },
+		guests:   map[*webrtc.PeerConnection]bool{},
+		life:     renewEvery,
+		onPeer:   func(bool) {},
 	}, nil
 }
 
@@ -132,18 +148,36 @@ func (s *server) showLink(code string) {
 	}
 }
 
+// static serves one of the embedded files under the page's policy.
+func static(kind string, body []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", kind)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", pagePolicy)
+		w.Write(body)
+	}
+}
+
+// checked lets through to h only the requests that name host, and the POSTs that come from host's pages or say
+// nothing of where they come from.
+func checked(host string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != host {
+			http.Error(w, "unknown host", http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); r.Method != http.MethodGet && o != "" && o != "https://"+host && o != "http://"+host {
+			http.Error(w, "foreign origin", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
-	static := func(kind string, body []byte) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", kind)
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Referrer-Policy", "no-referrer")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("Content-Security-Policy", pagePolicy)
-			w.Write(body)
-		}
-	}
 	mux.HandleFunc("GET /{$}", static("text/html; charset=utf-8", pageHTML))
 	mux.HandleFunc("GET /page.js", static("text/javascript; charset=utf-8", pageJS))
 	mux.HandleFunc("GET /talk.js", static("text/javascript; charset=utf-8", talkJS))
@@ -153,17 +187,9 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /offer", s.paired(s.offer))
 	mux.HandleFunc("POST /hear", s.paired(s.hear))
 	mux.HandleFunc("GET /said", s.paired(s.said))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != s.host {
-			http.Error(w, "unknown host", http.StatusForbidden)
-			return
-		}
-		if o := r.Header.Get("Origin"); r.Method != http.MethodGet && o != "" && o != "https://"+s.host && o != "http://"+s.host {
-			http.Error(w, "foreign origin", http.StatusForbidden)
-			return
-		}
-		mux.ServeHTTP(w, r)
-	})
+	mux.HandleFunc("POST /invite", s.paired(s.invite))
+	mux.HandleFunc("POST /guests/end", s.paired(s.endGuests))
+	return checked(s.host, mux)
 }
 
 func (s *server) pairDevice(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +310,7 @@ func (s *server) offer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "another device is connected", http.StatusConflict)
 		return
 	}
-	pc, answer, err := s.answer(offer)
+	pc, answer, err := s.answer(s.api, webrtc.Configuration{}, offer)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -294,8 +320,8 @@ func (s *server) offer(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(answer)
 }
 
-func (s *server) answer(offer webrtc.SessionDescription) (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
-	pc, err := s.api.NewPeerConnection(webrtc.Configuration{})
+func (s *server) answer(api *webrtc.API, config webrtc.Configuration, offer webrtc.SessionDescription) (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
+	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -343,24 +369,48 @@ func (s *server) answer(offer webrtc.SessionDescription) (*webrtc.PeerConnection
 func (s *server) connected(pc *webrtc.PeerConnection) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.peer == pc && !s.live {
+	if s.peer == pc {
 		s.live = true
-		s.onPeer(true)
+	} else if _, ok := s.guests[pc]; ok {
+		s.guests[pc] = true
 	}
+	s.watch()
 }
 
-// drop forgets pc once it is gone, so the next device can connect.
+// drop forgets pc once it is gone, so the next device or guest can connect.
 func (s *server) drop(pc *webrtc.PeerConnection) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.peer == pc {
 		s.peer = nil
-		if s.live {
-			s.live = false
-			s.onPeer(false)
+		s.live = false
+	}
+	delete(s.guests, pc)
+	s.watch()
+	go pc.Close()
+}
+
+// watch runs the capture while the device or a guest is connected, and gives announce the number of guests at each
+// change; with s.mu held.
+func (s *server) watch() {
+	n := 0
+	for _, connected := range s.guests {
+		if connected {
+			n++
 		}
 	}
-	go pc.Close()
+	if on := s.live || n > 0; on != s.watched {
+		s.watched = on
+		s.onPeer(on)
+	}
+	if n != s.told && s.watching != nil {
+		s.told = n
+		select { // only the latest number counts
+		case <-s.watching:
+		default:
+		}
+		s.watching <- n
+	}
 }
 
 func logf(format string, args ...any) {
@@ -371,9 +421,14 @@ func logf(format string, args ...any) {
 // stops, and it takes no empty link.
 func (s *server) close() {
 	s.mu.Lock()
-	pc := s.peer
+	pcs := []*webrtc.PeerConnection{s.peer}
+	for pc := range s.guests {
+		pcs = append(pcs, pc)
+	}
 	s.mu.Unlock()
-	if pc != nil {
-		pc.Close()
+	for _, pc := range pcs {
+		if pc != nil {
+			pc.Close()
+		}
 	}
 }

@@ -681,8 +681,51 @@ carry on from the last ones sent: a browser drops packets that seem older than t
 on a fake window and a fake ffmpeg, went red first. Still to see live: the picture coming back on the tablet after a
 `/mcp` reconnection, and how long the browser takes over the jump to the new capture.
 
+## Guests who watch from outside (2026-10-23)
+
+The user asked to try the version that goes through the tunnel: someone who is not on this network watches Delta's
+window, and does nothing else. With `-guest-host delta.guitaralchemist.com`, the gateway opens a second entry on
+127.0.0.1:8812. The tunnel « delta » (not ga-demos) carries it to that host, run by `cloudflared --config
+%LOCALAPPDATA%\delta-remote\tunnel.yml tunnel run`. The device's entry on 8810 is unchanged.
+
+The guests' entry serves the guest's page, `/join`, `/ice` and `/offer`, and nothing else: no `/hear`, no `/said`, no
+pairing.
+
+- **Inviting.** A paired device's « Inviter quelqu’un » gives a link with its code in the #fragment. The code works
+  once, within an hour, and is traded for a cookie that lasts two hours. « Couper les invités » voids every invitation
+  and cookie and closes their connections.
+- **Two at a time.** At most two guests watch beside the device. A third gets 409.
+- **Through the relay only.** A guest's connection goes through Cloudflare's TURN relay alone (`ICETransportPolicyRelay`,
+  UDP 3478 on the gateway's side), so the guest never sees this network's address. The gateway asks Cloudflare for
+  credentials that last two hours, with the key in `%LOCALAPPDATA%\delta-remote\turn.json`, read for each guest and
+  never written. The browser gets every relay address except port 53, which browsers block.
+- **The badge.** The brain is told how many guests watch at each change and every 30 s, for the badge in Delta's
+  window (delta-live's `/guests`).
+- **Kept in memory.** Invitations and cookies are kept only as SHA-256, in memory: restarting the gateway ends them
+  all.
+
+Nine tests, on loopback WebRTC and a fake brain, written after the code, not red first:
+
+- the guests' entry has nothing else;
+- an invitation works once, and an unused one dies after an hour;
+- only a paired device invites;
+- each cookie opens its own entry only;
+- each entry answers its own host only;
+- the device and two guests get the video, the third waits, and ending the guests leaves the device watching;
+- the brain hears 1, 2, then 0;
+- the relay's addresses.
+
+Still to see live:
+
+- a phone on 4G watching through the tunnel and the relay;
+- the badge in Delta's window with the real brain;
+- the delay the relay adds.
+
 ## Known problems
 
+- Stopping the gateway with `Stop-Process` leaves its ffmpeg running, which keeps `err.log` open and goes on
+  capturing Delta's window for nobody, seen on 2026-10-23 and ended by hand. A job object would end it with the
+  gateway.
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
   writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
   one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two
