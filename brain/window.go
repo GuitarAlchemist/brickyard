@@ -45,6 +45,7 @@ var shelfAnswers = map[string]map[string]string{
 	"conversations": {"en": "Here are the conversations.", "fr": "Voici les conversations."},
 	"plugins":       {"en": "Here are the plugins.", "fr": "Voici les plugins."},
 	"marketplaces":  {"en": "Here are the marketplaces.", "fr": "Voici les marketplaces."},
+	"courses":       {"en": "Here are the courses.", "fr": "Voici les cours."},
 	"close":         {"en": "Putting my menu away.", "fr": "Je range le menu."},
 	"up":            {}, "down": {}, "enter": {}, "back": {},
 }
@@ -216,6 +217,7 @@ var shelfWords = []phrase{
 	{"nos conversations", "conversations"}, {"anciennes conversations", "conversations"},
 	{"les plugins", "plugins"}, {"des plugins", "plugins"},
 	{"les marketplaces", "marketplaces"}, {"des marketplaces", "marketplaces"}, {"les catalogues", "marketplaces"},
+	{"les cours", "courses"}, {"mes cours", "courses"}, {"des cours", "courses"}, {"les lecons", "courses"},
 	{"ouvre le menu", "open"}, {"montre le menu", "open"}, {"affiche le menu", "open"}, {"ton menu", "open"},
 
 	{"close the menu", "close"}, {"close your menu", "close"}, {"hide the menu", "close"}, {"hide your menu", "close"},
@@ -227,6 +229,7 @@ var shelfWords = []phrase{
 	{"the plugins", "plugins"}, {"my plugins", "plugins"}, {"your plugins", "plugins"}, {"installed plugins", "plugins"},
 	{"the marketplaces", "marketplaces"}, {"the marketplace", "marketplaces"}, {"the catalogs", "marketplaces"},
 	{"the catalogues", "marketplaces"},
+	{"the courses", "courses"}, {"my courses", "courses"}, {"the lessons", "courses"},
 	{"your menu", "open"}, {"the menu", "open"},
 }
 
