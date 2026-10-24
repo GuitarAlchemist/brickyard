@@ -466,6 +466,7 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 				return
 			}
 			cmd = exec.Command("dotnet", "watch", "run", "--project", c.sceneSource, "--non-interactive", "-r", "win-x64", "--", "--listen", port)
+			cmd.Dir = c.sceneSource // dotnet picks its SDK by the global.json above the folder it runs in, not above the project
 		}
 		hideConsole(cmd)
 		var log *os.File
