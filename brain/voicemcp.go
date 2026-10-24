@@ -150,8 +150,8 @@ func runMCP(c mcpConfig) {
 	s := startScene(c, logf)
 	var muted atomic.Bool    // the user turned the computer's microphone off from the window
 	var devices atomic.Int64 // how many devices listen to Delta through the phone gateway (remote.go)
-	greet := func() {        // what a window must know whatever it missed: its words (Words.cs), its two buttons and the phone
-		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load(), "devices": devices.Load()})
+	greet := func() {        // what a window must know whatever it missed: its words (Words.cs), its two buttons, the phone and the version
+		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load(), "devices": devices.Load(), "version": version})
 	}
 	greet()
 	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code, langOf: m.spokenIn}

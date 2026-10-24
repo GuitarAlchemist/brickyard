@@ -757,8 +757,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 14, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 14 }], // one image each
+            MaxSets = 15, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 15 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -863,6 +863,12 @@ internal static unsafe class Stage
         Panel.Card? micButton = null;
         var micDrawn = (Off: false, Height: 0);
         (int X, int Y) MicAt() => (LanguageAt().X - Panel.PhoneSize(extent.Height) - Math.Max(6, extent.Height / 96), CardMargin());
+        // The brain's version in the bottom right corner (Panel.VersionLabel).
+        var versionSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? versionTexture = null;
+        Panel.Card? versionLabel = null;
+        var versionDrawn = (Version: "", Height: 0);
+
         // The microphone's meter along the button's bottom edge: a green bar as long as the voice is loud, from -60 dB to
         // -10 dB, drawn from a white square (Panel.Blank).
         var meterSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
@@ -1211,6 +1217,13 @@ internal static unsafe class Stage
                 guestTexture = Upload(guestBadge, guestSet, guestTexture);
             }
 
+            if (!splashing && moment.Version != "" && versionDrawn != (moment.Version, extent.Height))
+            {
+                versionDrawn = (moment.Version, extent.Height);
+                versionLabel = Panel.VersionLabel(moment.Version, extent.Height);
+                versionTexture = Upload(versionLabel, versionSet, versionTexture);
+            }
+
             if (!splashing && meterTexture is null)
             {
                 meterTexture = Upload(Panel.Blank(), meterSet, null);
@@ -1395,6 +1408,15 @@ internal static unsafe class Stage
                     var (micX, micY) = MicAt();
                     var push = new SplashPush(Rect(micX, micY, micButton.Width, micButton.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [micSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (versionLabel is not null && versionTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var push = new SplashPush(Rect(extent.Width - versionLabel.Width - CardMargin(), extent.Height - versionLabel.Height - CardMargin(), versionLabel.Width, versionLabel.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [versionSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -1617,6 +1639,7 @@ internal static unsafe class Stage
         inviteTexture?.Dispose();
         invitationTexture?.Dispose();
         meterTexture?.Dispose();
+        versionTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);

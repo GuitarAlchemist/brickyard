@@ -258,6 +258,20 @@ internal static class Panel
         return new Card(rgba, width, size, []);
     }
 
+    // The brain's version in the bottom right corner, small and dim, such as « Delta dev-v0.6.0-40-gc31a28e ».
+    public static Card VersionLabel(string version, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = "Delta " + version;
+        var wide = Splash.Text(label, Px(11), out var w, out _) is null ? 0 : w;
+        var (width, height) = (wide + (2 * Px(6)), Px(20));
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 160);
+        Text(rgba, width, height, label, Px(11), false, Px(6), (height - Px(14)) / 2, (130, 140, 150));
+        return new Card(rgba, width, height, []);
+    }
+
     // A white square that the window stretches and tints, such as the microphone's meter.
     public static Card Blank() => new([.. Enumerable.Repeat((byte)255, 4 * 4 * 4)], 4, 4, []);
 
