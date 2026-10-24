@@ -55,6 +55,7 @@ type remote struct {
 	pair   func(rows []string)                      // shows a pairing link's QR code, one string of 0 and 1 per row
 	watch  func(guests int)                         // shows how many guests watch the window from afar, or nil
 	inEars func(delta int)                          // told +1 as a sentence is transcribed, -1 if it is not routed, or nil
+	listen func(devices int)                        // told how many devices listen to /said at each change, or nil
 
 	mu         sync.Mutex
 	transcribe func(samples []float32) (text, lang string, err error) // nil until Delta's ears are ready
@@ -182,6 +183,13 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(answer)
 }
 
+// listening tells listen how many devices listen now. The caller holds mu, so that two changes are told in order.
+func (r *remote) listening() {
+	if r.listen != nil {
+		r.listen(len(r.subs))
+	}
+}
+
 func (r *remote) said(w http.ResponseWriter, req *http.Request) {
 	if !r.allowed(w, req, http.MethodGet) {
 		return
@@ -201,10 +209,12 @@ func (r *remote) said(w http.ResponseWriter, req *http.Request) {
 		r.subs = map[chan []byte]bool{}
 	}
 	r.subs[ch] = req.Header.Get(playsHeader) == "own"
+	r.listening()
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
 		delete(r.subs, ch)
+		r.listening()
 		r.mu.Unlock()
 	}()
 	alive := time.NewTicker(15 * time.Second)

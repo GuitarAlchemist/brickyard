@@ -448,3 +448,31 @@ func TestTheWindowLearnsWhenGuestsWatch(t *testing.T) {
 		t.Errorf("told %v", told)
 	}
 }
+
+// The phone icon's screen lights while a device listens to /said, and goes dark once it stops.
+func TestThePhoneIconKnowsWhenADeviceListens(t *testing.T) {
+	told := make(chan int, 4)
+	r := &remote{secret: "s3cret", listen: func(n int) { told <- n }}
+	srv := remoteServer(t, r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/said", nil)
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, r.secret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	for _, want := range []int{1, 0} {
+		select {
+		case n := <-told:
+			if n != want {
+				t.Fatalf("told %d devices, want %d", n, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("never told %d devices", want)
+		}
+		cancel()
+	}
+}

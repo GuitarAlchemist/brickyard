@@ -148,9 +148,10 @@ func runMCP(c mcpConfig) {
 	}
 
 	s := startScene(c, logf)
-	var muted atomic.Bool // the user turned the computer's microphone off from the window
-	greet := func() {     // what a window must know whatever it missed: its words (Words.cs), and its two buttons
-		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load()})
+	var muted atomic.Bool    // the user turned the computer's microphone off from the window
+	var devices atomic.Int64 // how many devices listen to Delta through the phone gateway (remote.go)
+	greet := func() {        // what a window must know whatever it missed: its words (Words.cs), its two buttons and the phone
+		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load(), "devices": devices.Load()})
 	}
 	greet()
 	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code, langOf: m.spokenIn}
@@ -285,6 +286,13 @@ func runMCP(c mcpConfig) {
 		s.send(map[string]any{"invitation": map[string]any{"rows": rows, "seconds": max(1, time.Until(until).Seconds()), "copied": copied}})
 		m.note("invitation", map[string]any{"until": until.Local().Format("15:04"), "copied": copied})
 		logf("invitation: until %s; Delta's window shows its QR code", until.Local().Format("15:04"))
+	}
+	rm.listen = func(n int) { // the phone icon's screen lights while a device listens
+		if devices.Swap(int64(n)) != int64(n) {
+			greet()
+			s.send(map[string]any{"devices": n})
+			m.note("devices", map[string]any{"listening": n})
+		}
 	}
 	h.remote = rm
 	mo.onClip = rm.publish

@@ -835,7 +835,7 @@ internal static unsafe class Stage
         var phoneSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? phoneTexture = null;
         Panel.Card? phone = null;
-        var phoneDrawn = (Live: false, Height: 0);
+        var phoneDrawn = (Live: false, Connected: false, Height: 0);
         var pairingSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? pairingTexture = null;
         Panel.Card? pairingCard = null;
@@ -1197,10 +1197,10 @@ internal static unsafe class Stage
                 captionTexture = Upload(caption, captionSet, captionTexture);
             }
 
-            if (!splashing && phoneDrawn != (moment.Pairing is not null, extent.Height))
+            if (!splashing && phoneDrawn != (moment.Pairing is not null, moment.Devices > 0, extent.Height))
             {
-                phoneDrawn = (moment.Pairing is not null, extent.Height);
-                phone = Panel.Phone(extent.Height, phoneDrawn.Live);
+                phoneDrawn = (moment.Pairing is not null, moment.Devices > 0, extent.Height);
+                phone = Panel.Phone(extent.Height, phoneDrawn.Live, phoneDrawn.Connected);
                 phoneTexture = Upload(phone, phoneSet, phoneTexture);
             }
 

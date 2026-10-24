@@ -142,8 +142,9 @@ internal static class Panel
     // The phone icon's size in pixels, square, for a window of that height.
     public static int PhoneSize(int windowHeight) => (int)MathF.Round(40 * Math.Clamp(windowHeight / 720f, 0.8f, 2.2f));
 
-    // The phone icon: a phone's outline on a dark square, and a green light while a pairing code lives.
-    public static Card Phone(int windowHeight, bool live)
+    // The phone icon: a phone's outline on a dark square, its screen lit in blue while a device listens to Delta, and a
+    // green light while a pairing code lives.
+    public static Card Phone(int windowHeight, bool live, bool connected)
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
@@ -158,6 +159,10 @@ internal static class Panel
         Fill(rgba, size, x, y, line, h, light, 255);
         Fill(rgba, size, x + w - line, y, line, h, light, 255);
         Fill(rgba, size, x + line, y + h - (3 * line), w - (2 * line), line, light, 255); // the screen's bottom edge
+        if (connected)
+        {
+            Fill(rgba, size, x + line, y + line, w - (2 * line), h - (4 * line), (89, 204, 255), 255);
+        }
         if (live)
         {
             Fill(rgba, size, size - Px(11), Px(4), Px(7), Px(7), (90, 220, 130), 255);

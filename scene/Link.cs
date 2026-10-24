@@ -21,8 +21,9 @@ using System.Text.Json;
 // which a ring that empties shows; and "invitation", {"rows", "seconds", "copied"}, the QR code of a link that lets
 // guests watch the window, which the Inviter button asked for, how long it serves and whether the clipboard has it, or
 // {"refused"}, why there is none (watching, off or gateway); and "mic_level", how loud the computer's microphone is, the
-// RMS of the loudest frame of the last 100 ms, from 0 to 1, which a meter on the microphone button shows. Each changes
-// only what it names.
+// RMS of the loudest frame of the last 100 ms, from 0 to 1, which a meter on the microphone button shows; and
+// "devices", how many devices, such as the user's phone, listen to Delta through the gateway, which lights the phone
+// icon's screen. Each changes only what it names.
 internal sealed class Link(Func<double> clock)
 {
     private const int MaxLine = 256 * 1024;
@@ -61,6 +62,7 @@ internal sealed class Link(Func<double> clock)
     private double invitationUntil = double.NegativeInfinity;
     private int invitationId; // counts them, so that the card opens and is drawn again for each
     private float micLevel; // how loud the microphone last was
+    private int devices; // how many devices listen to Delta through the gateway
     private double micLevelAt = double.NegativeInfinity;
 
     // How long the microphone's meter holds a level without news: the brain sends one every 100 ms while it listens.
@@ -86,7 +88,7 @@ internal sealed class Link(Func<double> clock)
     internal sealed record Invite(string[]? Rows, double Seconds, bool Copied, string Refused = "");
 
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null, bool? Mic = null, int? Guests = null, Invite? Invitation = null, float? MicLevel = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null, bool? Mic = null, int? Guests = null, Invite? Invitation = null, float? MicLevel = null, int? Devices = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -105,8 +107,8 @@ internal sealed class Link(Func<double> clock)
     // rows while its code lives (null otherwise), the seconds it still lives (0 once it expired, -1 before any came) and
     // the link's number; and for how many seconds more Delta listens without its name (0 when it needs it), of how many;
     // and the last invitation, its rows only while it serves, the seconds it still serves and its number; and how loud
-    // the microphone is (0 without news).
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f, bool MicOff = false, int Guests = 0, Invite? Invitation = null, float InvitationLeft = -1f, int InvitationId = 0, float MicLevel = 0f);
+    // the microphone is (0 without news), and how many devices listen.
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f, bool MicOff = false, int Guests = 0, Invite? Invitation = null, float InvitationLeft = -1f, int InvitationId = 0, float MicLevel = 0f, int Devices = 0);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -146,7 +148,7 @@ internal sealed class Link(Func<double> clock)
             var lease = (float)Math.Max(0, leaseUntil - now);
             var serves = invitationId == 0 ? -1f : (float)Math.Max(0, invitationUntil - now);
             var invite = serves > 0f || invitation?.Rows is null ? invitation : invitation with { Rows = null };
-            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f, micOff, now < guestsUntil ? guests : 0, invite, serves, invitationId, now - micLevelAt < MicLevelSeconds ? micLevel : 0f);
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f, micOff, now < guestsUntil ? guests : 0, invite, serves, invitationId, now - micLevelAt < MicLevelSeconds ? micLevel : 0f, devices);
         }
     }
 
@@ -409,15 +411,27 @@ internal sealed class Link(Func<double> clock)
                 micLevel = (float)ml.GetDouble();
             }
 
+            int? devices = null;
+            if (root.TryGetProperty("devices"u8, out var dv))
+            {
+                if (dv.ValueKind != JsonValueKind.Number || !dv.TryGetInt32(out var listening) || listening is < 0 or > 99)
+                {
+                    error = "devices is a number of devices, from 0 to 99";
+                    return null;
+                }
+
+                devices = listening;
+            }
+
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null && mic is null && guests is null && invitation is null && micLevel is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null && mic is null && guests is null && invitation is null && micLevel is null && devices is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel, devices);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -467,7 +481,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel, devices);
         }
         catch (JsonException ex)
         {
@@ -658,6 +672,9 @@ internal sealed class Link(Func<double> clock)
         var awake = link.Read(4100.0).Quiet;
         link.Apply(new Change(null, [], "", null, null, MicLevel: 0.05f), 4100.0);
         Check(link.Read(4100.2) is { MicLevel: 0.05f } quiet && quiet.Quiet > awake && link.Read(4100.6) is { MicLevel: 0f }, "the meter fades without news, and does not keep the robot awake");
+        Check(Parse("""{"language":"fr","mic":true,"devices":1}""", out _) is { Devices: 1, Mic: true } && Parse("""{"devices":-1}""", out _) is null, "devices is a number of devices, in the hello line too");
+        link.Apply(new Change(null, [], "", null, null, Devices: 1), 4200.0);
+        Check(link.Read(4300.0) is { Devices: 1 }, "a phone stays connected until the brain says otherwise");
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
     }
@@ -684,6 +701,11 @@ internal sealed class Link(Func<double> clock)
             if (change.Mic is { } on)
             {
                 micOff = !on;
+            }
+
+            if (change.Devices is { } listening)
+            {
+                devices = listening;
             }
 
             if (change.Guests is { } watching)
