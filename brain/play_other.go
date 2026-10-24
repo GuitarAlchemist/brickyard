@@ -23,3 +23,5 @@ func (m *mic) close() {}
 func killWithMe(p *os.Process) {}
 
 func hideConsole(cmd *exec.Cmd) {}
+
+func stopTree(p *os.Process) { p.Kill() }

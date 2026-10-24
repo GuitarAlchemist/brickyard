@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -115,4 +117,20 @@ func (s *scene) send(event map[string]any) {
 		s.conn.Close()
 		s.conn = nil
 	}
+}
+
+// waitsForEdit says whether the dotnet watch that writes the log named waits for an edit because the window it ran
+// exited, as after a crash: its last line then says so.
+func waitsForEdit(name string) bool {
+	f, err := os.Open(name)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil && info.Size() > 4096 {
+		f.Seek(-4096, io.SeekEnd)
+	}
+	tail, _ := io.ReadAll(f)
+	lines := bytes.Split(bytes.TrimSpace(tail), []byte("\n"))
+	return bytes.Contains(lines[len(lines)-1], []byte("Waiting for a file to change"))
 }

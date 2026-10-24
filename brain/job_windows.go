@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"unsafe"
 )
@@ -57,4 +58,11 @@ func killWithMe(p *os.Process) {
 	}
 	defer syscall.CloseHandle(h)
 	assignProcessToJobObject.Call(job, uintptr(h))
+}
+
+// stopTree stops a process and those it started, such as dotnet watch and the window it runs.
+func stopTree(p *os.Process) {
+	cmd := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(p.Pid))
+	hideConsole(cmd)
+	cmd.Run()
 }

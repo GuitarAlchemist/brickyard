@@ -458,11 +458,17 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	if dir, err := os.UserCacheDir(); err == nil { // the window's own marker (scene/Program.cs Closed)
 		s.closed = filepath.Join(dir, "delta", "scene-"+port+".closed")
 	}
-	var watched atomic.Bool // dotnet watch runs on: it builds the window for a while, and restarts it after an edit itself
+	var watched atomic.Bool              // dotnet watch runs on: it builds the window for a while, and restarts it after an edit itself
+	var watch atomic.Pointer[os.Process] // the dotnet watch that runs
+	var rewatch atomic.Bool              // set when the brain stops it, for its end to start it again
 	s.launch = func() {
 		cmd := exec.Command(path, "--listen", port)
 		if c.sceneSource != "" { // an edit to the source changes the open window, from its next call of the edited method on
 			if !watched.CompareAndSwap(false, true) {
+				// dotnet watch outlives a window that crashed, waiting for an edit: stop it, and its end starts it again
+				if p := watch.Load(); p != nil && c.home != "" && waitsForEdit(filepath.Join(c.home, "scene.log")) && !rewatch.Swap(true) {
+					stopTree(p)
+				}
 				return
 			}
 			cmd = exec.Command("dotnet", "watch", "run", "--project", c.sceneSource, "--non-interactive", "-r", "win-x64", "--", "--listen", port)
@@ -484,6 +490,9 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 			return
 		}
 		killWithMe(cmd.Process)
+		if c.sceneSource != "" {
+			watch.Store(cmd.Process)
+		}
 		logf("scene started on %s", c.scene)
 		go func() {
 			err := cmd.Wait()
@@ -492,6 +501,11 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 			}
 			logf("scene exited: %v", err) // nil when the user closed it
 			watched.Store(false)
+			if rewatch.Swap(false) {
+				logf("scene: dotnet watch waited on a window that exited; starting them again")
+				s.launch()
+				return
+			}
 			s.exited(err != nil)
 		}()
 	}

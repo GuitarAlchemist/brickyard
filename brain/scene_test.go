@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,5 +158,25 @@ func TestTheBrainHearsWhatTheWindowAsks(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the brain never heard the window")
+	}
+}
+
+// Under -scene-source, the brain starts dotnet watch again when the window it ran exited, and not while it builds.
+func TestTheBrainSeesWhenDotnetWatchWaitsForAnEdit(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "scene.log")
+	for log, want := range map[string]bool{
+		"dotnet watch ⌚ Building ...\n": false,
+		"Unhandled exception.\ndotnet watch ❌ [Scene (net10.0)] Exited with error code -532462766\ndotnet watch ⏳ Waiting for a file to change before restarting ...\n": true,
+		"dotnet watch ⏳ Waiting for a file to change before restarting ...\ndotnet watch ⌚ File changed: .\\Panel.cs\n":                                                 false,
+		strings.Repeat("SCENE idle\n", 1000) + "dotnet watch ⏳ Waiting for a file to change before restarting ...\r\n":                                                  true,
+		"": false,
+	} {
+		os.WriteFile(name, []byte(log), 0o644)
+		if waitsForEdit(name) != want {
+			t.Errorf("%q: want %v", log[max(0, len(log)-80):], want)
+		}
+	}
+	if waitsForEdit(filepath.Join(t.TempDir(), "none.log")) {
+		t.Error("no log waits for nothing")
 	}
 }
