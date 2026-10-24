@@ -53,9 +53,9 @@ type remote struct {
 	route  func(u utterance) (id int, route string) // routes a transcript as hear does
 	chime  func()                                   // tells the room a sentence came from another device
 	pair   func(rows []string)                      // shows a pairing link's QR code, one string of 0 and 1 per row
-	watch  func(guests int)                         // shows how many guests watch the window from afar, or nil
+	watch  func(guests int, hear bool)              // shows how many guests watch the window from afar, and whether they hear the room, or nil
 	inEars func(delta int)                          // told +1 as a sentence is transcribed, -1 if it is not routed, or nil
-	listen func(devices int)                        // told how many devices listen to /said at each change, or nil
+	listen func(devices int)                        // told how many devices play their answers from /said at each change, or nil
 
 	mu         sync.Mutex
 	transcribe func(samples []float32) (text, lang string, err error) // nil until Delta's ears are ready
@@ -183,11 +183,19 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(answer)
 }
 
-// listening tells listen how many devices listen now. The caller holds mu, so that two changes are told in order.
+// listening tells listen how many devices listen now, such as the user's phone: those that play their own answers,
+// and not the gateway's guest pages, which do not say so. The caller holds mu, so that two changes are told in order.
 func (r *remote) listening() {
-	if r.listen != nil {
-		r.listen(len(r.subs))
+	if r.listen == nil {
+		return
 	}
+	n := 0
+	for _, own := range r.subs {
+		if own {
+			n++
+		}
+	}
+	r.listen(n)
 }
 
 func (r *remote) said(w http.ResponseWriter, req *http.Request) {
@@ -264,20 +272,22 @@ func (r *remote) link(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// guests takes how many guests the gateway lets watch the window from afar, so that nobody is seen without knowing it.
+// guests takes how many guests the gateway lets watch the window from afar, and whether they hear the room through
+// its microphone, so that nobody is seen or heard without knowing it.
 func (r *remote) guests(w http.ResponseWriter, req *http.Request) {
 	if !r.allowed(w, req, http.MethodPost) {
 		return
 	}
 	var body struct {
 		Watching *int `json:"watching"`
+		Mic      bool `json:"mic"`
 	}
 	if err := json.NewDecoder(io.LimitReader(req.Body, 4096)).Decode(&body); err != nil || body.Watching == nil || *body.Watching < 0 || *body.Watching > 99 {
-		http.Error(w, `{"watching"}, from 0 to 99, please`, http.StatusBadRequest)
+		http.Error(w, `{"watching"}, from 0 to 99, and "mic", please`, http.StatusBadRequest)
 		return
 	}
 	if r.watch != nil {
-		r.watch(*body.Watching)
+		r.watch(*body.Watching, body.Mic)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

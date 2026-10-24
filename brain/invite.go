@@ -17,6 +17,10 @@ import (
 // hour; 409 while a guest watches, since the window would show them the next one, and 404 when it lets no guest in.
 const gatewayInvite = "http://127.0.0.1:8813/invite"
 
+// gatewayGuestMic switches whether guests hear the room through the gateway's microphone: POST {"on"}, 204, or 404
+// when the gateway has no microphone.
+const gatewayGuestMic = "http://127.0.0.1:8813/guests/mic"
+
 var (
 	errWatching  = errors.New("a guest watches the window: invite from the paired phone")
 	errGuestsOff = errors.New("the phone gateway lets no guest in: it needs -guest-host")
@@ -56,6 +60,30 @@ func (r *remote) invite(address string) (link string, until time.Time, err error
 		return "", time.Time{}, errors.New("the phone gateway answered something other than an invitation")
 	}
 	return body.Link, body.Expires, nil
+}
+
+// guestMic asks the gateway at address to let guests hear the room, or to stop, as a click on the window's guest
+// badge does.
+func (r *remote) guestMic(address string, on bool) error {
+	req, err := http.NewRequest(http.MethodPost, address, strings.NewReader(fmt.Sprintf(`{"on":%v}`, on)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, r.secret)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("no phone gateway answers on this computer: %w", err)
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusNotFound:
+		return errors.New("the phone gateway has no microphone for guests: it needs -mic")
+	}
+	return fmt.Errorf("the phone gateway answered %s", resp.Status)
 }
 
 // invitationRefused names why the window shows no invitation, for its card: watching, off or gateway.

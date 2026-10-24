@@ -170,9 +170,14 @@ func runMCP(c mcpConfig) {
 	}
 	// The window's Inviter button, once the gateway's secret is known (below).
 	var invite func()
+	var guestMic func(on bool)             // the window's guest badge, likewise
 	s.asked = func(event map[string]any) { // the window's language, microphone and Inviter buttons
 		if asked, ok := event["invite"].(bool); ok && asked && invite != nil {
 			go invite()
+			return
+		}
+		if on, ok := event["guests_mic"].(bool); ok && guestMic != nil {
+			go guestMic(on)
 			return
 		}
 		if on, ok := event["mic"].(bool); ok {
@@ -259,11 +264,19 @@ func runMCP(c mcpConfig) {
 		logf("remote: a gateway's secret is in %s", path)
 	}
 	var watching atomic.Int64
-	rm.watch = func(guests int) { // the window's badge clears itself 60 s after the last post (Link.GuestsSeconds)
-		s.send(map[string]any{"guests": guests})
-		if watching.Swap(int64(guests)) != int64(guests) {
-			m.note("guests", map[string]any{"watching": guests})
+	var guestsHear atomic.Bool
+	rm.watch = func(guests int, hear bool) { // the window's badge clears itself 60 s after the last post (Link.GuestsSeconds)
+		s.send(map[string]any{"guests": guests, "guests_hear": hear})
+		if watching.Swap(int64(guests)) != int64(guests) || guestsHear.Swap(hear) != hear {
+			m.note("guests", map[string]any{"watching": guests, "hear": hear})
 		}
+	}
+	guestMic = func(on bool) { // the gateway says the new state in its next /guests
+		if err := rm.guestMic(gatewayGuestMic, on); err != nil {
+			logf("guests' microphone: %v", err)
+			return
+		}
+		logf("guests' microphone: on %v, as the window asked", on)
 	}
 	rm.pair = func(rows []string) { // the journal says that a link came, never which
 		s.send(map[string]any{"pairing": map[string]any{"rows": rows, "seconds": pairingSeconds}})

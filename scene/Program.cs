@@ -885,7 +885,8 @@ internal static unsafe class Stage
         var guestSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? guestTexture = null;
         Panel.Card? guestBadge = null;
-        var guestDrawn = (Watching: 0, Height: 0, Language: "");
+        var guestDrawn = (Watching: 0, Hear: false, Height: 0, Language: "");
+        (int X, int Y) GuestAt() => guestBadge is null ? (0, 0) : ((extent.Width - guestBadge.Width) / 2, CardMargin());
 
         // The Inviter button left of the microphone button (Panel.InviteButton): a click asks the brain for an invitation,
         // whose card (Panel.Invitation) opens when it comes. Guests watch this window, so the card closes as soon as one
@@ -1079,6 +1080,10 @@ internal static unsafe class Stage
             {
                 invitationShown = false;
             }
+            else if (action == GlfwButtonAction.Press && guestBadge is not null && link.Read(clock.Elapsed.TotalSeconds) is { Guests: > 0 } now && Over(w, GuestAt(), guestBadge.Width, guestBadge.Height))
+            {
+                link.Tell($$"""{"guests_mic":{{(now.GuestsHear ? "false" : "true")}}}""");
+            }
             else if (action == GlfwButtonAction.Press && inviteButton is not null && Over(w, InviteAt(), inviteButton.Width, inviteButton.Height))
             {
                 link.Tell("""{"invite":true}""");
@@ -1210,10 +1215,10 @@ internal static unsafe class Stage
                 phoneTexture = Upload(phone, phoneSet, phoneTexture);
             }
 
-            if (moment.Guests > 0 && !splashing && guestDrawn != (moment.Guests, extent.Height, Words.Language))
+            if (moment.Guests > 0 && !splashing && guestDrawn != (moment.Guests, moment.GuestsHear, extent.Height, Words.Language))
             {
-                guestDrawn = (moment.Guests, extent.Height, Words.Language);
-                guestBadge = Panel.GuestBadge(moment.Guests, extent.Height);
+                guestDrawn = (moment.Guests, moment.GuestsHear, extent.Height, Words.Language);
+                guestBadge = Panel.GuestBadge(moment.Guests, moment.GuestsHear, extent.Height);
                 guestTexture = Upload(guestBadge, guestSet, guestTexture);
             }
 
@@ -1396,7 +1401,8 @@ internal static unsafe class Stage
                 if (moment.Guests > 0 && guestBadge is not null && guestTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
-                    var push = new SplashPush(Rect((extent.Width - guestBadge.Width) / 2, CardMargin(), guestBadge.Width, guestBadge.Height), SN.Vector4.One);
+                    var (guestX, guestY) = GuestAt();
+                    var push = new SplashPush(Rect(guestX, guestY, guestBadge.Width, guestBadge.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [guestSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);

@@ -171,13 +171,19 @@ internal static class Panel
         return new Card(rgba, size, size, []);
     }
 
-    // While guests the user invited watch the window from afar: a red light and how many, so that nobody is seen without
-    // knowing it.
-    public static Card GuestBadge(int watching, int windowHeight)
+    // While guests the user invited watch the window from afar: a red light, how many, whether they hear the room, and
+    // what a click on the badge does, so that nobody is seen or heard without knowing it.
+    public static Card GuestBadge(int watching, bool hear, int windowHeight)
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var label = watching == 1 ? Words.Say("A guest is watching", "Un invité regarde") : Words.Say($"{watching} guests are watching", $"{watching} invités regardent");
+        var label = (watching == 1, hear) switch
+        {
+            (true, false) => Words.Say("A guest is watching · click to let them hear you", "Un invité regarde · clique pour qu'il t'entende"),
+            (true, true) => Words.Say("A guest is watching and listening · click to stop", "Un invité regarde et écoute · clique pour couper"),
+            (false, false) => Words.Say($"{watching} guests are watching · click to let them hear you", $"{watching} invités regardent · clique pour qu'ils t'entendent"),
+            (false, true) => Words.Say($"{watching} guests are watching and listening · click to stop", $"{watching} invités regardent et écoutent · clique pour couper"),
+        };
         var wide = Splash.Text(label, Px(14), out var w, out _, true) is null ? 0 : w;
         var (height, light) = (PhoneSize(windowHeight), Px(10));
         var width = Px(Pad) + light + Px(8) + wide + Px(Pad);

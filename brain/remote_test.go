@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -425,12 +426,13 @@ func TestASilentRecordingIsHeardAsNothing(t *testing.T) {
 	}
 }
 
-// The gateway says how many guests watch the window from afar, for the window to say so.
+// The gateway says how many guests watch the window from afar, and whether they hear the room, for the window to say so.
 func TestTheWindowLearnsWhenGuestsWatch(t *testing.T) {
-	var told []int
-	r := &remote{secret: "s3cret", watch: func(guests int) { told = append(told, guests) }}
+	var told []string
+	r := &remote{secret: "s3cret", watch: func(guests int, hear bool) { told = append(told, fmt.Sprintf("%d %v", guests, hear)) }}
 	srv := remoteServer(t, r)
-	for body, want := range map[string]int{`{"watching":2}`: http.StatusNoContent, `{}`: http.StatusBadRequest, `{"watching":-1}`: http.StatusBadRequest,
+	for body, want := range map[string]int{`{"watching":2}`: http.StatusNoContent, `{"watching":1,"mic":true}`: http.StatusNoContent,
+		`{}`: http.StatusBadRequest, `{"watching":-1}`: http.StatusBadRequest, `{"watching":1,"mic":"yes"}`: http.StatusBadRequest,
 		`{"watching":"2"}`: http.StatusBadRequest, `{"watching":100}`: http.StatusBadRequest} {
 		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/guests", strings.NewReader(body))
 		req.Header.Set(hookHeader, "1")
@@ -444,21 +446,28 @@ func TestTheWindowLearnsWhenGuestsWatch(t *testing.T) {
 			t.Errorf("%s: %d, want %d", body, resp.StatusCode, want)
 		}
 	}
-	if !slices.Equal(told, []int{2}) {
+	slices.Sort(told)
+	if !slices.Equal(told, []string{"1 true", "2 false"}) {
 		t.Errorf("told %v", told)
 	}
 }
 
-// The phone icon's screen lights while a device listens to /said, and goes dark once it stops.
+// The phone icon's screen lights while a device listens to /said, and goes dark once it stops; a guest's page, which
+// does not play its own answers, does not light it.
 func TestThePhoneIconKnowsWhenADeviceListens(t *testing.T) {
 	told := make(chan int, 4)
 	r := &remote{secret: "s3cret", listen: func(n int) { told <- n }}
 	srv := remoteServer(t, r)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	subscribeSaid(t, r, "")
+	if n := <-told; n != 0 {
+		t.Fatalf("a guest's page counts as %d devices", n)
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/said", nil)
 	req.Header.Set(hookHeader, "1")
 	req.Header.Set(remoteHeader, r.secret)
+	req.Header.Set(playsHeader, "own")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

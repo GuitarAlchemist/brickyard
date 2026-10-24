@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 )
@@ -48,5 +50,31 @@ func TestTheWindowAsksTheGatewayForAnInvitation(t *testing.T) {
 	}
 	if invitationRefused(errors.New("other")) != "gateway" {
 		t.Error("an unknown refusal is the gateway's")
+	}
+}
+
+// A click on the guest badge switches whether guests hear the room, with the brain's secret.
+func TestTheBadgeSwitchesWhetherGuestsHearTheRoom(t *testing.T) {
+	var asked []string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get(hookHeader) != "1" || req.Header.Get(remoteHeader) != "s3cret" {
+			http.Error(w, "no", http.StatusForbidden)
+			return
+		}
+		body, _ := io.ReadAll(req.Body)
+		asked = append(asked, string(body))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer gateway.Close()
+	r := &remote{secret: "s3cret"}
+	if err := r.guestMic(gateway.URL, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.guestMic(gateway.URL, false); err != nil || !slices.Equal(asked, []string{`{"on":true}`, `{"on":false}`}) {
+		t.Fatalf("%v, asked %v", err, asked)
+	}
+	r.secret = "other"
+	if err := r.guestMic(gateway.URL, true); err == nil {
+		t.Error("the gateway takes a wrong secret")
 	}
 }
