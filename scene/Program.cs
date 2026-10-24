@@ -757,8 +757,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 11, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 11 }], // one image each
+            MaxSets = 13, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 13 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -877,6 +877,24 @@ internal static unsafe class Stage
         Panel.Card? guestBadge = null;
         var guestDrawn = (Watching: 0, Height: 0, Language: "");
 
+        // The Inviter button left of the microphone button (Panel.InviteButton): a click asks the brain for an invitation,
+        // whose card (Panel.Invitation) opens when it comes. Guests watch this window, so the card closes as soon as one
+        // does, and by itself a minute later, as the pairing card.
+        var inviteSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? inviteTexture = null;
+        Panel.Card? inviteButton = null;
+        var inviteDrawn = (Height: 0, Language: "");
+        (int X, int Y) InviteAt() => (MicAt().X - (inviteButton?.Width ?? 0) - Math.Max(6, extent.Height / 96), CardMargin());
+        var invitationSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? invitationTexture = null;
+        Panel.Card? invitationCard = null;
+        var invitationDrawn = (Id: -1, Width: 0, Height: 0, Language: "");
+        var invitationShown = false;
+        var invitationSeen = 0; // the last invitation that opened the card
+        var invitationOpened = 0.0;
+        (int X, int Y) InvitationAt() => invitationCard is null ? (0, 0) : ((extent.Width - invitationCard.Width) / 2, (extent.Height - invitationCard.Height) / 2);
+
+
         void NextLanguage()
         {
             var next = Words.Next(Words.Setting);
@@ -983,6 +1001,7 @@ internal static unsafe class Stage
             if (key == GlfwKey.P)
             {
                 ShowPairing(!pairingShown);
+                invitationShown &= !pairingShown;
             }
             else if (key == GlfwKey.L)
             {
@@ -992,9 +1011,10 @@ internal static unsafe class Stage
             {
                 shelf.Show(at);
             }
-            else if (key == GlfwKey.Escape && pairingShown)
+            else if (key == GlfwKey.Escape && (pairingShown || invitationShown))
             {
                 pairingShown = false;
+                invitationShown = false;
             }
             else if (key == GlfwKey.Escape)
             {
@@ -1043,6 +1063,15 @@ internal static unsafe class Stage
             if (action == GlfwButtonAction.Press && (Over(w, PhoneAt(), icon, icon) || (pairingShown && pairingCard is not null && Over(w, PairingAt(), pairingCard.Width, pairingCard.Height))))
             {
                 ShowPairing(!pairingShown);
+                invitationShown &= !pairingShown;
+            }
+            else if (action == GlfwButtonAction.Press && invitationShown && invitationCard is not null && Over(w, InvitationAt(), invitationCard.Width, invitationCard.Height))
+            {
+                invitationShown = false;
+            }
+            else if (action == GlfwButtonAction.Press && inviteButton is not null && Over(w, InviteAt(), inviteButton.Width, inviteButton.Height))
+            {
+                link.Tell("""{"invite":true}""");
             }
             else if (action == GlfwButtonAction.Press && languageButton is not null && Over(w, LanguageAt(), languageButton.Width, languageButton.Height))
             {
@@ -1214,6 +1243,33 @@ internal static unsafe class Stage
                 pairingTexture = Upload(pairingCard, pairingSet, pairingTexture);
             }
 
+            if (!splashing && inviteDrawn != (extent.Height, Words.Language))
+            {
+                inviteDrawn = (extent.Height, Words.Language);
+                inviteButton = Panel.InviteButton(extent.Height);
+                inviteTexture = Upload(inviteButton, inviteSet, inviteTexture);
+            }
+
+            if (moment.InvitationId != invitationSeen) // an invitation came, or why none did
+            {
+                invitationSeen = moment.InvitationId;
+                invitationShown = true;
+                invitationOpened = clock.Elapsed.TotalSeconds;
+                pairingShown = false;
+            }
+
+            if (invitationShown && (clock.Elapsed.TotalSeconds - invitationOpened > 60.0 || (moment.Guests > 0 && moment.Invitation?.Rows is not null)))
+            {
+                invitationShown = false;
+            }
+
+            if (invitationShown && !splashing && moment.Invitation is { } brought && invitationDrawn != (moment.InvitationId, extent.Width, extent.Height, Words.Language))
+            {
+                invitationDrawn = (moment.InvitationId, extent.Width, extent.Height, Words.Language);
+                invitationCard = Panel.Invitation(brought, DateTime.Now.AddSeconds(moment.InvitationLeft), extent.Width, extent.Height);
+                invitationTexture = Upload(invitationCard, invitationSet, invitationTexture);
+            }
+
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
             VkResult result;
@@ -1354,12 +1410,32 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
+                if (inviteButton is not null && inviteTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (inviteX, inviteY) = InviteAt();
+                    var push = new SplashPush(Rect(inviteX, inviteY, inviteButton.Width, inviteButton.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [inviteSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
                 if (pairingShown && pairingCard is not null && pairingTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (cardX, cardY) = PairingAt();
                     var push = new SplashPush(Rect(cardX, cardY, pairingCard.Width, pairingCard.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [pairingSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (invitationShown && invitationCard is not null && invitationTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (cardX, cardY) = InvitationAt();
+                    var push = new SplashPush(Rect(cardX, cardY, invitationCard.Width, invitationCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [invitationSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -1513,6 +1589,8 @@ internal static unsafe class Stage
         micTexture?.Dispose();
         guestTexture?.Dispose();
         pairingTexture?.Dispose();
+        inviteTexture?.Dispose();
+        invitationTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);

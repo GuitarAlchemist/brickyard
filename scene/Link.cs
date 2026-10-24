@@ -17,7 +17,9 @@ using System.Text.Json;
 // under the robot shows for HeardSeconds; and "pairing", {"rows", "seconds"}, the QR code of the
 // link a phone opens to pair with Delta's gateway, one string of 0 and 1 per row, and how long its code lives, which
 // the phone icon's card shows on a click; and "lease", for how many seconds Delta listens without hearing its name,
-// which a ring that empties shows. Each changes only what it names.
+// which a ring that empties shows; and "invitation", {"rows", "seconds", "copied"}, the QR code of a link that lets
+// guests watch the window, which the Inviter button asked for, how long it serves and whether the clipboard has it, or
+// {"refused"}, why there is none (watching, off or gateway). Each changes only what it names.
 internal sealed class Link(Func<double> clock)
 {
     private const int MaxLine = 256 * 1024;
@@ -52,6 +54,9 @@ internal sealed class Link(Func<double> clock)
     private bool micOff; // the user turned the computer's microphone off from the window
     private int guests; // how many guests watch the window from afar, as the gateway last said
     private double guestsUntil = double.NegativeInfinity; // until when that holds without news
+    private Invite? invitation; // the last invitation the Inviter button brought, or why none came
+    private double invitationUntil = double.NegativeInfinity;
+    private int invitationId; // counts them, so that the card opens and is drawn again for each
 
     // How long the guest badge stays without news: the gateway says it again every 30 s while anyone watches.
     internal const double GuestsSeconds = 60;
@@ -68,8 +73,12 @@ internal sealed class Link(Func<double> clock)
     // How long the caption shows a sentence: five seconds, and more for a long one, up to twelve.
     public static double HeardSeconds(string text) => Math.Clamp(3.0 + (text.Length / 15.0), 5.0, 12.0);
 
+    // An invitation for guests: its link's QR code, for how many seconds it serves and whether the clipboard has the
+    // link; or, with no rows, why the gateway gave none.
+    internal sealed record Invite(string[]? Rows, double Seconds, bool Copied, string Refused = "");
+
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null, bool? Mic = null, int? Guests = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null, bool? Mic = null, int? Guests = null, Invite? Invitation = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -86,8 +95,9 @@ internal sealed class Link(Func<double> clock)
     // began (-1 when none is rising), and the sentence Delta last heard while its caption shows ("" otherwise), for whom, how
     // long ago it came (-1 when none shows) and its number, which changes with each sentence; and the pairing QR code's
     // rows while its code lives (null otherwise), the seconds it still lives (0 once it expired, -1 before any came) and
-    // the link's number; and for how many seconds more Delta listens without its name (0 when it needs it), of how many.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f, bool MicOff = false, int Guests = 0);
+    // the link's number; and for how many seconds more Delta listens without its name (0 when it needs it), of how many;
+    // and the last invitation, its rows only while it serves, the seconds it still serves and its number.
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f, bool MicOff = false, int Guests = 0, Invite? Invitation = null, float InvitationLeft = -1f, int InvitationId = 0);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -125,7 +135,9 @@ internal sealed class Link(Func<double> clock)
             var age = now - heardSince >= 0 && now - heardSince < HeardSeconds(heardText) ? (float)(now - heardSince) : -1f;
             var left = pairingId == 0 ? -1f : (float)Math.Max(0, pairingUntil - now);
             var lease = (float)Math.Max(0, leaseUntil - now);
-            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f, micOff, now < guestsUntil ? guests : 0);
+            var serves = invitationId == 0 ? -1f : (float)Math.Max(0, invitationUntil - now);
+            var invite = serves > 0f || invitation?.Rows is null ? invitation : invitation with { Rows = null };
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f, micOff, now < guestsUntil ? guests : 0, invite, serves, invitationId);
         }
     }
 
@@ -369,15 +381,22 @@ internal sealed class Link(Func<double> clock)
                 guests = watching;
             }
 
+            Invite? invitation = null;
+            if (root.TryGetProperty("invitation"u8, out var iv) && (invitation = ParseInvitation(iv)) is null)
+            {
+                error = "invitation is {\"rows\": a QR code's rows of 0 and 1, \"seconds\": how long it serves, \"copied\": true or false} or {\"refused\": watching, off or gateway}";
+                return null;
+            }
+
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null && mic is null && guests is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null && mic is null && guests is null && invitation is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -427,7 +446,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation);
         }
         catch (JsonException ex)
         {
@@ -468,6 +487,25 @@ internal sealed class Link(Func<double> clock)
 
         rows = all;
         return true;
+    }
+
+    // An invitation line: a QR code as a pairing line's, with how long it serves and whether the clipboard has its
+    // link; or why there is none.
+    private static Invite? ParseInvitation(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (p.TryGetProperty("refused"u8, out var r))
+        {
+            return r.ValueKind == JsonValueKind.String && r.GetString() is "watching" or "off" or "gateway" ? new Invite(null, 0, false, r.GetString()!) : null;
+        }
+
+        return ParsePairing(p, out var rows, out var seconds) && p.TryGetProperty("copied"u8, out var c) && c.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? new Invite(rows, seconds, c.GetBoolean())
+            : null;
     }
 
     // --selftest: the parsing, the mouth's loudness and the reading of transcripts, without a window.
@@ -585,6 +623,15 @@ internal sealed class Link(Func<double> clock)
         link.Apply(new Change(null, [], "", null, null, Guests: 2), 362.0);
         link.Apply(new Change(null, [], "", null, null, Guests: 0), 363.0);
         Check(link.Read(364.0) is { Guests: 0 }, "the badge goes when the last guest leaves");
+        string InvitationLine(string seconds, string copied) => $$$"""{"invitation":{"rows":[{{{string.Join(",", DemoPairing.Select(r => $"\"{r}\""))}}}],"seconds":{{{seconds}}},"copied":{{{copied}}}}}""";
+        Check(Parse(InvitationLine("3600", "true"), out _) is { State: null, Invitation: { Rows.Length: 29, Seconds: 3600, Copied: true } }, "an invitation's QR code");
+        Check(Parse(InvitationLine("0", "true"), out _) is null && Parse(InvitationLine("60", "\"yes\""), out _) is null, "an invitation serves a while, and says whether the clipboard has it");
+        Check(Parse("""{"invitation":{"refused":"watching"}}""", out _) is { Invitation: { Rows: null, Refused: "watching" } } && Parse("""{"invitation":{"refused":"why"}}""", out _) is null &&
+            Parse("""{"invitation":"https://delta.example/#invite=0123"}""", out var noInvite) is null && !noInvite!.Contains("0123"), "a refusal says why, and a link alone is refused unrepeated");
+        Check(link.Read(399.0) is { Invitation: null, InvitationId: 0 }, "no invitation until the button asks");
+        link.Apply(new Change(null, [], "", null, null, Invitation: new Invite(DemoPairing, 3600, true)), 400.0);
+        Check(link.Read(410.0) is { Invitation.Rows.Length: 29, InvitationId: 1 } invited && Math.Abs(invited.InvitationLeft - 3590f) < 1e-2 &&
+            link.Read(4001.0) is { Invitation: { Rows: null, Refused: "" }, InvitationLeft: 0f }, "the invitation's code shows while it serves");
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
     }
@@ -621,6 +668,13 @@ internal sealed class Link(Func<double> clock)
                 pairing = code;
                 pairingUntil = at + change.PairingSeconds;
                 pairingId++;
+            }
+
+            if (change.Invitation is { } invite)
+            {
+                invitation = invite;
+                invitationUntil = at + invite.Seconds;
+                invitationId++;
             }
 
             if (change.Heard is { } words)
@@ -696,6 +750,11 @@ internal sealed class Link(Func<double> clock)
         if (change.Pairing is not null)
         {
             Console.WriteLine($"SCENE pairing code for {change.PairingSeconds:F0} s at {at:F2} s"); // never the code
+        }
+
+        if (change.Invitation is { } asked)
+        {
+            Console.WriteLine(asked.Rows is null ? $"SCENE no invitation ({asked.Refused}) at {at:F2} s" : $"SCENE invitation for {asked.Seconds:F0} s at {at:F2} s"); // never the link
         }
     }
 

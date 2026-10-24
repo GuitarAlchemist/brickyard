@@ -223,23 +223,64 @@ internal static class Panel
         return new Card(rgba, width, size, []);
     }
 
-    // The card the phone icon opens: the QR code of the link a phone opens to pair with Delta's gateway, black on white
-    // in whole pixels per module with its quiet zone of four, and how long its code still lives; or why there is none.
-    // rows is null when no code lives; expired says one did.
+    // The card the phone icon opens: the QR code of the link a phone opens to pair with Delta's gateway, and how long its
+    // code still lives; or why there is none. rows is null when no code lives; expired says one did.
     public static Card Pairing(string[]? rows, int secondsLeft, bool expired, int windowWidth, int windowHeight)
     {
-        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
-        int Px(float v) => (int)MathF.Round(v * scale);
-        var room = Math.Min(Px(520), windowWidth - (2 * Px(12))) - (2 * Px(Pad));
         var left = $"{secondsLeft / 60}:{secondsLeft % 60:00}";
         string[] lines = rows is not null
             ? [Words.Say($"Scan it with the phone's camera. The code lives {left} more.", $"Scanne-le avec l'appareil photo du téléphone. Le code vit encore {left}.")]
             : expired
                 ? [Words.Say("This code has expired.", "Ce code a expiré."), Words.Say("Restart the phone gateway for a new one.", "Redémarre la passerelle du téléphone pour en avoir un autre.")]
                 : [Words.Say("No pairing code yet.", "Pas encore de code de jumelage."), Words.Say("Start the phone gateway: its code shows here for two minutes.", "Démarre la passerelle du téléphone : son code s'affiche ici deux minutes.")];
-        var title = Fit(Words.Say("Pair a phone", "Jumeler un téléphone"), Px(17), true, room);
+        return QrCard(Words.Say("Pair a phone", "Jumeler un téléphone"), rows, lines, Words.Say("Click the phone or press P to close", "Clique sur le téléphone ou appuie sur P pour fermer"), (90, 220, 130), windowWidth, windowHeight); // green, as the icon's light
+    }
+
+    // The Inviter button, left of the microphone button.
+    public static Card InviteButton(int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = Words.Say("Invite", "Inviter");
+        var size = PhoneSize(windowHeight);
+        var wide = Splash.Text(label, Px(14), out var w, out _, true) is null ? 0 : w;
+        var width = Math.Max(size, wide + (2 * Px(10)));
+        var rgba = new byte[width * size * 4];
+        Fill(rgba, width, 0, 0, width, size, (12, 14, 18), 205);
+        Text(rgba, width, size, label, Px(14), true, (width - wide) / 2, (size - Px(18)) / 2, (214, 220, 226));
+        return new Card(rgba, width, size, []);
+    }
+
+    // The card the Inviter button opens: the QR code of a link that lets guests watch the window, until when it serves
+    // and whether the clipboard has it; or why there is none.
+    public static Card Invitation(Link.Invite invite, DateTime until, int windowWidth, int windowHeight)
+    {
+        var at = until.ToString("HH:mm");
+        string[] lines = (invite.Rows, invite.Refused) switch
+        {
+            ({ }, _) =>
+            [
+                invite.Copied ? Words.Say("The link is on the clipboard: paste it into a message.", "Le lien est dans le presse-papier : colle-le dans un message.") : Words.Say("Scan it with a phone to send the link on.", "Scanne-le avec un téléphone pour envoyer le lien."),
+                Words.Say($"It serves until {at}, two guests at a time, who only watch.", $"Il sert jusqu'à {at}, pour deux invités à la fois, qui ne font que regarder."),
+            ],
+            (_, "watching") => [Words.Say("A guest is watching: the window would show them the link.", "Un invité regarde : la fenêtre lui montrerait le lien."), Words.Say("Invite from the paired phone instead.", "Invite plutôt depuis le téléphone jumelé.")],
+            (_, "off") => [Words.Say("The phone gateway lets no guest in.", "La passerelle du téléphone ne laisse entrer aucun invité."), Words.Say("Start it with -guest-host to invite.", "Démarre-la avec -guest-host pour inviter.")],
+            (_, "gateway") => [Words.Say("No phone gateway answers on this computer.", "Aucune passerelle du téléphone ne répond sur cet ordinateur."), Words.Say("Start it, then try again.", "Démarre-la, puis réessaie.")],
+            _ => [Words.Say("This invitation has expired.", "Cette invitation a expiré."), Words.Say("Click Invite for a new one.", "Clique sur Inviter pour en avoir une autre.")],
+        };
+        return QrCard(Words.Say("Invite someone", "Inviter quelqu'un"), invite.Rows, lines, Words.Say("Click the card or press Esc to close", "Clique sur la carte ou appuie sur Échap pour fermer"), (89, 204, 255), windowWidth, windowHeight);
+    }
+
+    // A card with a title, a QR code black on white in whole pixels per module with its quiet zone of four, when rows has
+    // one, then lines and how to close it, edged on the left in edge.
+    private static Card QrCard(string title, string[]? rows, string[] lines, string closing, (int, int, int) edge, int windowWidth, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var room = Math.Min(Px(520), windowWidth - (2 * Px(12))) - (2 * Px(Pad));
+        title = Fit(title, Px(17), true, room);
         lines = [.. lines.Select(l => Fit(l, Px(14), false, room))];
-        var closing = Fit(Words.Say("Click the phone or press P to close", "Clique sur le téléphone ou appuie sur P pour fermer"), Px(12), false, room);
+        closing = Fit(closing, Px(12), false, room);
         int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
         var width = Math.Max(Wide(title, Px(17), true), Math.Max(Wide(closing, Px(12), false), lines.Max(l => Wide(l, Px(14), false))));
         var modules = rows is null ? 0 : rows.Length + 8;
@@ -250,7 +291,7 @@ internal static class Panel
         var height = top + (side > 0 ? side + Px(10) : 0) + (lines.Length * Px(22)) + Px(8) + Px(20) + Px(Pad);
         var rgba = new byte[width * height * 4];
         Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 225);
-        Fill(rgba, width, 0, 0, Px(3), height, (90, 220, 130), 255); // green, as the icon's light
+        Fill(rgba, width, 0, 0, Px(3), height, edge, 255);
         Text(rgba, width, height, title, Px(17), true, Px(Pad), Px(Pad), (230, 236, 242));
         if (rows is not null)
         {

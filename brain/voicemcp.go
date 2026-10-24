@@ -166,7 +166,13 @@ func runMCP(c mcpConfig) {
 			go mo.voiceIn(l.code)
 		}
 	}
-	s.asked = func(event map[string]any) { // the window's language and microphone buttons
+	// The window's Inviter button, once the gateway's secret is known (below).
+	var invite func()
+	s.asked = func(event map[string]any) { // the window's language, microphone and Inviter buttons
+		if asked, ok := event["invite"].(bool); ok && asked && invite != nil {
+			go invite()
+			return
+		}
 		if on, ok := event["mic"].(bool); ok {
 			muted.Store(!on)
 			greet()
@@ -261,6 +267,23 @@ func runMCP(c mcpConfig) {
 		s.send(map[string]any{"pairing": map[string]any{"rows": rows, "seconds": pairingSeconds}})
 		m.note("pairing", map[string]any{"seconds": pairingSeconds})
 		logf("remote: a pairing link came; Delta's window shows its QR code behind the phone icon")
+	}
+	invite = func() { // the journal says that an invitation came and until when, never its link
+		link, until, err := rm.invite(gatewayInvite)
+		var rows []string
+		if err == nil {
+			rows, err = qrEncode(link)
+		}
+		if err != nil {
+			logf("invitation: %v", err)
+			s.send(map[string]any{"invitation": map[string]any{"refused": invitationRefused(err)}})
+			m.note("invitation", map[string]any{"refused": invitationRefused(err)})
+			return
+		}
+		copied := copyText(link) == nil
+		s.send(map[string]any{"invitation": map[string]any{"rows": rows, "seconds": max(1, time.Until(until).Seconds()), "copied": copied}})
+		m.note("invitation", map[string]any{"until": until.Local().Format("15:04"), "copied": copied})
+		logf("invitation: until %s; Delta's window shows its QR code", until.Local().Format("15:04"))
 	}
 	h.remote = rm
 	mo.onClip = rm.publish
