@@ -264,17 +264,101 @@ internal static class Panel
         return new Card(rgba, width, size, []);
     }
 
-    // The brain's version in the bottom right corner, small and dim, such as « Delta dev-v0.6.0-40-gc31a28e ».
+    // The brain's version in the bottom right corner, small and dim, such as « Delta dev-v0.6.0-40-gc31a28e · nouveautés »:
+    // a click opens its release notes (ReleaseNotes).
     public static Card VersionLabel(string version, int windowHeight)
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var label = "Delta " + version;
+        var label = $"Delta {version} · {Words.Say("what's new", "nouveautés")}";
         var wide = Splash.Text(label, Px(11), out var w, out _) is null ? 0 : w;
         var (width, height) = (wide + (2 * Px(6)), Px(20));
         var rgba = new byte[width * height * 4];
         Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 160);
         Text(rgba, width, height, label, Px(11), false, Px(6), (height - Px(14)) / 2, (130, 140, 150));
+        return new Card(rgba, width, height, []);
+    }
+
+    // The release notes of version (Notes), centred: each change's lead in bold and up to three lines of the rest, as
+    // many changes as fit in the window, then how to close it; or null when the scene carries no notes.
+    public static Card? ReleaseNotes(string version, int windowWidth, int windowHeight)
+    {
+        if (Notes.For(version) is not { } notes)
+        {
+            return null;
+        }
+
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var room = Math.Min(Px(640), windowWidth - (2 * Px(12))) - (2 * Px(Pad));
+        var title = Fit(Words.Say($"What's new in Delta {notes.Release}", $"Nouveautés de Delta {notes.Release}"), Px(17), true, room);
+        var built = version.TrimStart('v') != notes.Release;
+        var note = Fit((built, Words.Language == "fr") switch
+        {
+            (true, true) => $"Cette fenêtre tourne en {version}, construite depuis. Notes en anglais.",
+            (false, true) => "Notes en anglais.",
+            (true, false) => $"This window runs {version}, built since.",
+            _ => "",
+        }, Px(12), false, room);
+        var closing = Fit(Words.Say("Click the card or press Esc to close", "Clique sur la carte ou appuie sur Échap pour fermer"), Px(12), false, room);
+        var budget = (windowHeight * 88 / 100) - (Px(Pad) + Px(30) + (note.Length > 0 ? Px(20) : 0) + Px(20) + Px(28) + Px(Pad));
+        var shown = new List<(string Lead, string[] Lines)>();
+        var used = 0;
+        foreach (var change in notes.Changes)
+        {
+            var lead = Fit(change.Lead, Px(14), true, room);
+            var lines = change.Text.Length > 0 ? Wrap(change.Text, Px(13), room, 3) : [];
+            var tall = (lead.Length > 0 ? Px(20) : 0) + (lines.Length * Px(18)) + Px(8);
+            if (used + tall > budget)
+            {
+                break;
+            }
+
+            shown.Add((lead, lines));
+            used += tall;
+        }
+
+        var more = notes.Changes.Length - shown.Count;
+        var rest = more > 0 ? Fit(Words.Say($"and {more} more on GitHub", $"et {more} de plus sur GitHub"), Px(13), false, room) : "";
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var width = new[] { Wide(title, Px(17), true), Wide(note, Px(12), false), Wide(closing, Px(12), false), Wide(rest, Px(13), false) }
+            .Concat(shown.SelectMany(s => s.Lines.Select(l => Wide(l, Px(13), false)).Append(Wide(s.Lead, Px(14), true)))).Max() + (2 * Px(Pad));
+        var height = Px(Pad) + Px(30) + (note.Length > 0 ? Px(20) : 0) + used + (rest.Length > 0 ? Px(20) : 0) + Px(28) + Px(Pad);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 230);
+        Fill(rgba, width, 0, 0, Px(3), height, (120, 230, 200), 255);
+        Text(rgba, width, height, title, Px(17), true, Px(Pad), Px(Pad), (230, 236, 242));
+        var top = Px(Pad) + Px(30);
+        if (note.Length > 0)
+        {
+            Text(rgba, width, height, note, Px(12), false, Px(Pad), top, (130, 140, 150));
+            top += Px(20);
+        }
+
+        foreach (var (lead, lines) in shown)
+        {
+            if (lead.Length > 0)
+            {
+                Text(rgba, width, height, lead, Px(14), true, Px(Pad), top, (240, 236, 228));
+                top += Px(20);
+            }
+
+            foreach (var l in lines)
+            {
+                Text(rgba, width, height, l, Px(13), false, Px(Pad), top, (200, 208, 216));
+                top += Px(18);
+            }
+
+            top += Px(8);
+        }
+
+        if (rest.Length > 0)
+        {
+            Text(rgba, width, height, rest, Px(13), false, Px(Pad), top, (150, 160, 170));
+            top += Px(20);
+        }
+
+        Text(rgba, width, height, closing, Px(12), false, Px(Pad), top + Px(8), (110, 122, 134));
         return new Card(rgba, width, height, []);
     }
 

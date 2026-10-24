@@ -608,6 +608,7 @@ internal sealed class Link(Func<double> clock)
         Check(Parse("""{"shelf":"delete"}""", out _) is null, "an unknown move through the shelf is refused");
         Check(Parse("""{"shelf":"conversations"}""", out _) is { Shelf: "conversations" }, "the shelf opens on the conversations");
         Conversations.SelfTest(Check);
+        Notes.SelfTest(Check);
         Check(Parse("""{"language":"fr"}""", out _) is { State: null, Language: "fr" }, "the shelf speaks French");
         Check(Parse("""{"language":"de"}""", out _) is null, "an unknown language is refused");
         Check(Parse("""{"hearts":true,"mood":"joy"}""", out _) is { State: null, Hearts: true, Mood: "joy" }, "hearts and a smile");

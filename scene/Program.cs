@@ -757,8 +757,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 15, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 15 }], // one image each
+            MaxSets = 16, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes and its release notes
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 16 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -867,7 +867,8 @@ internal static unsafe class Stage
         var versionSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? versionTexture = null;
         Panel.Card? versionLabel = null;
-        var versionDrawn = (Version: "", Height: 0);
+        var versionDrawn = (Version: "", Height: 0, Language: "");
+        (int X, int Y) VersionAt() => versionLabel is null ? (0, 0) : (extent.Width - versionLabel.Width - CardMargin(), extent.Height - versionLabel.Height - CardMargin());
 
         // The microphone's meter along the button's bottom edge: a green bar as long as the voice is loud, from -60 dB to
         // -10 dB, drawn from a white square (Panel.Blank).
@@ -904,6 +905,20 @@ internal static unsafe class Stage
         var invitationSeen = 0; // the last invitation that opened the card
         var invitationOpened = 0.0;
         (int X, int Y) InvitationAt() => invitationCard is null ? (0, 0) : ((extent.Width - invitationCard.Width) / 2, (extent.Height - invitationCard.Height) / 2);
+
+        // The release notes a click on the version opens, or N (Panel.ReleaseNotes); a click on them or Esc closes them.
+        var notesSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? notesTexture = null;
+        Panel.Card? notesCard = null;
+        var notesDrawn = (Version: "", Width: 0, Height: 0, Language: "");
+        var notesShown = false;
+        (int X, int Y) NotesAt() => notesCard is null ? (0, 0) : ((extent.Width - notesCard.Width) / 2, (extent.Height - notesCard.Height) / 2);
+        void ShowNotes(bool show)
+        {
+            notesShown = show;
+            pairingShown &= !show;
+            invitationShown &= !show;
+        }
 
 
         void NextLanguage()
@@ -1013,6 +1028,11 @@ internal static unsafe class Stage
             {
                 ShowPairing(!pairingShown);
                 invitationShown &= !pairingShown;
+                notesShown &= !pairingShown;
+            }
+            else if (key == GlfwKey.N)
+            {
+                ShowNotes(!notesShown);
             }
             else if (key == GlfwKey.L)
             {
@@ -1022,10 +1042,11 @@ internal static unsafe class Stage
             {
                 shelf.Show(at);
             }
-            else if (key == GlfwKey.Escape && (pairingShown || invitationShown))
+            else if (key == GlfwKey.Escape && (pairingShown || invitationShown || notesShown))
             {
                 pairingShown = false;
                 invitationShown = false;
+                notesShown = false;
             }
             else if (key == GlfwKey.Escape)
             {
@@ -1075,6 +1096,15 @@ internal static unsafe class Stage
             {
                 ShowPairing(!pairingShown);
                 invitationShown &= !pairingShown;
+                notesShown &= !pairingShown;
+            }
+            else if (action == GlfwButtonAction.Press && notesShown && notesCard is not null && Over(w, NotesAt(), notesCard.Width, notesCard.Height))
+            {
+                notesShown = false;
+            }
+            else if (action == GlfwButtonAction.Press && versionLabel is not null && Over(w, VersionAt(), versionLabel.Width, versionLabel.Height))
+            {
+                ShowNotes(!notesShown);
             }
             else if (action == GlfwButtonAction.Press && invitationShown && invitationCard is not null && Over(w, InvitationAt(), invitationCard.Width, invitationCard.Height))
             {
@@ -1222,11 +1252,21 @@ internal static unsafe class Stage
                 guestTexture = Upload(guestBadge, guestSet, guestTexture);
             }
 
-            if (!splashing && moment.Version != "" && versionDrawn != (moment.Version, extent.Height))
+            if (!splashing && moment.Version != "" && versionDrawn != (moment.Version, extent.Height, Words.Language))
             {
-                versionDrawn = (moment.Version, extent.Height);
+                versionDrawn = (moment.Version, extent.Height, Words.Language);
                 versionLabel = Panel.VersionLabel(moment.Version, extent.Height);
                 versionTexture = Upload(versionLabel, versionSet, versionTexture);
+            }
+
+            if (notesShown && !splashing && notesDrawn != (moment.Version, extent.Width, extent.Height, Words.Language))
+            {
+                notesDrawn = (moment.Version, extent.Width, extent.Height, Words.Language);
+                notesCard = Panel.ReleaseNotes(moment.Version, extent.Width, extent.Height);
+                if (notesCard is not null)
+                {
+                    notesTexture = Upload(notesCard, notesSet, notesTexture);
+                }
             }
 
             if (!splashing && meterTexture is null)
@@ -1281,6 +1321,7 @@ internal static unsafe class Stage
             {
                 invitationSeen = moment.InvitationId;
                 invitationShown = true;
+                notesShown = false;
                 invitationOpened = clock.Elapsed.TotalSeconds;
                 pairingShown = false;
             }
@@ -1421,7 +1462,8 @@ internal static unsafe class Stage
                 if (versionLabel is not null && versionTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
-                    var push = new SplashPush(Rect(extent.Width - versionLabel.Width - CardMargin(), extent.Height - versionLabel.Height - CardMargin(), versionLabel.Width, versionLabel.Height), SN.Vector4.One);
+                    var (versionX, versionY) = VersionAt();
+                    var push = new SplashPush(Rect(versionX, versionY, versionLabel.Width, versionLabel.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [versionSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
@@ -1489,6 +1531,16 @@ internal static unsafe class Stage
                     var (cardX, cardY) = InvitationAt();
                     var push = new SplashPush(Rect(cardX, cardY, invitationCard.Width, invitationCard.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [invitationSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (notesShown && notesCard is not null && notesTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (notesX, notesY) = NotesAt();
+                    var push = new SplashPush(Rect(notesX, notesY, notesCard.Width, notesCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [notesSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -1646,6 +1698,7 @@ internal static unsafe class Stage
         invitationTexture?.Dispose();
         meterTexture?.Dispose();
         versionTexture?.Dispose();
+        notesTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);

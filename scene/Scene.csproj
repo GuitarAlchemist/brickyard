@@ -24,6 +24,8 @@
   <ItemGroup>
     <!-- BRUTAL's logo and notice, unaltered, from github.com/ahwootech/brutal-branding at 5d38373 (Splash.cs). -->
     <None Include="brand\LOGO_BRUTAL_WHT.png;brand\NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The release notes the window shows when its version is clicked (Notes.cs). -->
+    <EmbeddedResource Include="..\docs\releases\*.md" LogicalName="releases/%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>
