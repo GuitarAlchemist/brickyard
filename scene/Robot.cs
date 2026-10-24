@@ -42,13 +42,13 @@ internal sealed class Robot
     public static Vertex[][] Meshes()
     {
         var parts = Enumerable.Range(0, Parts).Select(_ => new List<Vertex>()).ToArray();
-        var steel = new SN.Vector3(0.16f, 0.165f, 0.17f);
-        var rubber = new SN.Vector3(0.025f, 0.025f, 0.028f);
-        var enamel = new SN.Vector3(0.78f, 0.27f, 0.05f);
-        var shell = new SN.Vector3(0.7f, 0.68f, 0.62f);
-        var glass = new SN.Vector3(0.012f, 0.014f, 0.018f);
-        var unlit = new SN.Vector3(0.03f, 0.03f, 0.035f);
-        var aluminium = new SN.Vector3(0.6f, 0.61f, 0.64f);
+        var steel = new Finish(new(0.16f, 0.165f, 0.17f), Material.Steel);
+        var rubber = new Finish(new(0.025f, 0.025f, 0.028f), Material.Rubber);
+        var enamel = new Finish(new(0.78f, 0.27f, 0.05f), Material.Enamel);
+        var shell = new Finish(new(0.7f, 0.68f, 0.62f), Material.Enamel);
+        var glass = new Finish(new(0.012f, 0.014f, 0.018f), Material.Glass);
+        var unlit = new Finish(new(0.03f, 0.03f, 0.035f), Material.Glass); // the lamps, under their glow
+        var aluminium = new Finish(new(0.6f, 0.61f, 0.64f), Material.Aluminium);
 
         // A Mac mini standing on its bottom centre: an aluminium slab on a dark foot, a dark port slot on its front and,
         // when lights is given, a strip of status light along the front's outer half (side -1 or 1).
@@ -108,7 +108,7 @@ internal sealed class Robot
             var bar = new List<Vertex>();
             Boxes.Add(bar, SN.Vector3.Zero, new(0.17f, 0.024f, 0.012f), unlit);
             var turn = SN.Matrix4x4.CreateRotationZ(i * MathF.PI / 4f);
-            parts[Spark].AddRange(bar.Select(v => new Vertex(SN.Vector3.Transform(v.Pos, turn), SN.Vector3.TransformNormal(v.Normal, turn), v.Color)));
+            parts[Spark].AddRange(bar.Select(v => new Vertex(SN.Vector3.Transform(v.Pos, turn), SN.Vector3.TransformNormal(v.Normal, turn), v.Color, v.Material, SN.Vector3.TransformNormal(v.Tangent, turn), v.Edge)));
         }
 
         Boxes.Add(parts[Spark], SN.Vector3.Zero, new(0.05f, 0.05f, 0.016f), unlit);
@@ -156,7 +156,7 @@ internal sealed class Robot
 
         // A heart of red cubes about its centre, one for each heart that can rise at once.
         string[] heart = [".XX.XX.", "XXXXXXX", "XXXXXXX", ".XXXXX.", "..XXX..", "...X..."];
-        var red = new SN.Vector3(0.55f, 0.04f, 0.1f);
+        var red = new Finish(new(0.55f, 0.04f, 0.1f), Material.Enamel);
         for (var i = 0; i < HeartCount; i++)
         {
             for (var row = 0; row < heart.Length; row++)
