@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +35,10 @@ const (
 	guestRenew  = 30 * time.Second // how often the brain hears that guests still watch; its badge goes after 60 s
 )
 
-// guestBook holds the open invitations and the guests who traded one. An invitation is single use and lives an hour;
-// a guest's cookie lives two hours. Only their SHA-256 is kept, in memory, so a restart of the gateway ends them all.
+// guestBook holds the open invitations and the guests who traded one. An invitation serves for its whole hour, as
+// often as it is opened: a guest who opens the link again, in another browser or after a reload, still gets in, and so
+// does anyone the link is passed on to, within the two guests at a time. A guest's cookie lives two hours from its
+// own trade. Only their SHA-256 is kept, in memory, so a restart of the gateway ends them all.
 type guestBook struct {
 	mu      sync.Mutex
 	invites map[string]time.Time // when each open invitation expires
@@ -56,19 +60,19 @@ func (g *guestBook) invite(now time.Time) string {
 	code := token()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	for _, m := range []map[string]time.Time{g.invites, g.guests} {
+		maps.DeleteFunc(m, func(_ string, expires time.Time) bool { return now.After(expires) })
+	}
 	g.invites[digest(code)] = now.Add(inviteLife)
 	return code
 }
 
-// join spends an invitation for a guest's cookie, or says why not.
+// join trades an invitation for a guest's cookie, or says why not.
 func (g *guestBook) join(code string, now time.Time) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	h := digest(code)
-	expires, ok := g.invites[h]
-	delete(g.invites, h)
-	if !ok || now.After(expires) {
-		return "", errors.New("this invitation was used already or has expired: ask for a new link")
+	if expires, ok := g.invites[digest(code)]; !ok || now.After(expires) {
+		return "", errors.New("this invitation has expired: ask for a new link")
 	}
 	cookie := token()
 	g.guests[digest(cookie)] = now.Add(guestLife)
@@ -107,17 +111,57 @@ func (s *server) guestHandler() http.Handler {
 	return checked(s.guestHost, mux)
 }
 
-// invite opens an invitation for one guest and gives the paired device its link, to send on. The code is in the
-// link's #fragment, which the browser sends to no server, the tunnel's included.
+// localHandler is Delta's window's own entry, on 127.0.0.1 only and never behind the tunnel: the brain asks it for an
+// invitation to show as a QR card, and to end the guests. Only the brain gets through, with its secret, and no page.
+func (s *server) localHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /invite", s.windowInvite)
+	mux.HandleFunc("POST /guests/end", s.endGuests)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != s.localHost || r.Header.Get("Origin") != "" || r.Header.Get("X-Delta-Hook") != "1" ||
+			s.brain == nil || !s.brain.knows(r.Header.Get("X-Delta-Remote")) {
+			http.Error(w, "only Delta's brain asks here", http.StatusForbidden)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// windowInvite is invite for Delta's window. Guests watch that window, so a QR card shown while one watches would
+// hand them the invitation: the window invites only while nobody watches, and a paired device invites the second.
+func (s *server) windowInvite(w http.ResponseWriter, r *http.Request) {
+	if s.guestsWatching() > 0 {
+		http.Error(w, "a guest watches Delta's window: invite from a paired device", http.StatusConflict)
+		return
+	}
+	s.invite(w, r)
+}
+
+func (s *server) guestsWatching() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, connected := range s.guests {
+		if connected {
+			n++
+		}
+	}
+	return n
+}
+
+// invite opens an invitation and gives its link, to send on. The code is in the link's #fragment, which the browser
+// sends to no server, the tunnel's included.
 func (s *server) invite(w http.ResponseWriter, r *http.Request) {
 	if s.guestHost == "" {
 		http.Error(w, "guests are off: the gateway needs -guest-host", http.StatusNotFound)
 		return
 	}
-	link := "https://" + s.guestHost + "/#invite=" + s.book.invite(s.now())
+	now := s.now()
+	link := "https://" + s.guestHost + "/#invite=" + s.book.invite(now)
+	logf("guests: an invitation, until %s", now.Add(inviteLife).Format("15:04"))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]string{"link": link})
+	json.NewEncoder(w).Encode(map[string]string{"link": link, "expires": now.Add(inviteLife).Format(time.RFC3339)})
 }
 
 // endGuests voids every invitation and cookie and closes every guest's connection.
@@ -139,9 +183,11 @@ func (s *server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	cookie, err := s.book.join(req.Invite, s.now())
 	if err != nil {
+		logf("guests: an invitation refused: %v", err)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	logf("guests: an invitation traded for two hours")
 	http.SetCookie(w, &http.Cookie{
 		Name: guestCookie, Value: cookie, Path: "/", MaxAge: int(guestLife / time.Second),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
@@ -168,6 +214,7 @@ func (s *server) relay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the relay is unavailable", http.StatusBadGateway)
 		return
 	}
+	logf("guests: the relay's addresses for a browser, %d servers", len(forBrowser(servers)))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]any{"iceServers": forBrowser(servers)})
@@ -202,17 +249,86 @@ func (s *server) guestOffer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the relay is unavailable", http.StatusBadGateway)
 		return
 	}
-	pc, answer, err := s.answer(s.guestAPI, guestConfig(servers), offer)
+	n := s.guestN.Add(1)
+	config := guestConfig(servers)
+	offered := candidates(offer.SDP)
+	offer.SDP = withoutRelay(offer.SDP)
+	pc, answer, err := s.answer(s.guestAPI, config, offer)
 	if err != nil {
+		logf("guest %d: the offer: %v", n, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// What each side offers to connect by, as candidate types only: a guest's address is not written down.
+	logf("guest %d: the browser offers %s, of which it keeps %s; the gateway answers %s through %d relay URLs",
+		n, offered, candidates(offer.SDP), candidates(answer.SDP), len(config.ICEServers))
+	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
+		if st != webrtc.ICEConnectionStateConnected {
+			logf("guest %d: ICE %s", n, st)
+			return
+		}
+		logf("guest %d: ICE connected%s", n, selected(pc))
+	})
 	s.mu.Lock()
 	s.guests[pc] = false
 	s.mu.Unlock()
 	time.AfterFunc(s.book.left(c.Value, s.now()), func() { pc.Close() })
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(answer)
+}
+
+// withoutRelay leaves out of a guest's offer the candidates on the browser's own relay. Those are Cloudflare's relay
+// addresses too, and Cloudflare refuses to relay to them: its ChannelBind answers 400, and pion then closes the whole
+// allocation, every other way to the guest with it (seen live on 2026-10-24). The gateway's relay reaches the
+// browser at its public address instead, its srflx, or the one its checks come from.
+func withoutRelay(sdp string) string {
+	lines := strings.SplitAfter(sdp, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if f := strings.Fields(line); strings.HasPrefix(line, "a=candidate:") {
+			if i := slices.Index(f, "typ"); i >= 0 && i+1 < len(f) && f[i+1] == "relay" {
+				continue
+			}
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
+}
+
+// candidates counts an SDP's ICE candidates by type, such as "1 host, 2 srflx, 1 relay".
+func candidates(sdp string) string {
+	count := map[string]int{}
+	for _, line := range strings.Split(sdp, "\n") {
+		if !strings.HasPrefix(line, "a=candidate:") {
+			continue
+		}
+		f := strings.Fields(line)
+		if i := slices.Index(f, "typ"); i >= 0 && i+1 < len(f) {
+			count[f[i+1]]++
+		}
+	}
+	var out []string
+	for _, typ := range []string{"host", "srflx", "prflx", "relay"} {
+		if count[typ] > 0 {
+			out = append(out, fmt.Sprintf("%d %s", count[typ], typ))
+		}
+	}
+	if len(out) == 0 {
+		return "no candidate"
+	}
+	return strings.Join(out, ", ")
+}
+
+// selected names the candidate types of the pair pc's video goes by, as ", relay here to srflx there".
+func selected(pc *webrtc.PeerConnection) string {
+	for _, sender := range pc.GetSenders() {
+		if t := sender.Transport(); t != nil {
+			if pair, err := t.ICETransport().GetSelectedCandidatePair(); err == nil && pair != nil {
+				return fmt.Sprintf(", %s here to %s there", pair.Local.Typ, pair.Remote.Typ)
+			}
+		}
+	}
+	return ""
 }
 
 // announce tells the brain how many guests watch, at each change and every guestRenew while any does, for the badge

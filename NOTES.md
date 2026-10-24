@@ -732,8 +732,50 @@ two guests already, relay down). guest.test.js checks it with `node --test`: it 
 and « Se reconnecter » with `lang="fr"`. The 404 is the static server's, which has no `/ice`. Still to see live: a
 guest's phone in English, through the tunnel.
 
+## A guest's video through the relay, and invitations that last their hour (2026-10-24)
+
+The first real guest, a friend in France, never got the video: at 13:36, then at 13:45 on a new link, the page went to
+« Connexion perdue ». At 13:36, opening the spent link again then showed « déjà servi ». The gateway logged nothing
+about guests, so it now writes each step down, without codes or addresses:
+
+- the invitation;
+- its trade;
+- the relay's addresses;
+- the candidate types each side offers;
+- each ICE state and, once connected, the types of the pair.
+
+`PION_LOG_WARN=all` and `PION_LOG_INFO=ice,turnc` add pion's own lines.
+
+**The cause.** An invitation minted from this PC and opened in headless Chrome through the tunnel failed the same way
+at 13:55. Pion's TURN client sent Cloudflare a ChannelBind toward one of the browser's relay candidates, a Cloudflare
+relay address too, and Cloudflare answered 400. Its FAQ says it refuses private and BYOIP ranges. Pion then closed the
+whole allocation, and every pair with it, including the ones that would have worked. delta-live read the same lines.
+
+**The fix.** The gateway now leaves the browser's relay candidates out of a guest's offer. Its own relay reaches the
+browser at its public address, the srflx, or the one its checks come from. Same test at 14:00: the browser offered
+1 host, 1 srflx and 10 relay candidates; the gateway kept the host and the srflx, answered with 4 relay, and got
+« ICE connected, relay here to srflx there », with the capture started for the guest.
+
+**The user's other changes:**
+- **Invitations last their hour.** An invitation now serves for its whole hour, as often as it is opened: in another
+  browser, after a reload, or by whoever the link is passed on to. It stays within two guests at a time, and
+  « Couper les invités » still voids everything.
+- **Delta's window can invite.** It does so through its own entry on 127.0.0.1:8813, which needs the brain's secret,
+  `X-Delta-Hook` and no Origin, and which the tunnel does not reach. It answers 409 while a guest watches, because the
+  guest would see the QR card.
+
+The tests (hour-long invitation, the window's entry and its 409, candidate counts, relay left out) were written with
+the code, not red first.
+
+Still to see live:
+- the friend in France watching;
+- the badge with the real brain;
+- the delay the relay adds.
+
 ## Known problems
 
+- A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
+  (Cloudflare refuses to relay to them), so that guest gets no video.
 - Stopping the gateway with `Stop-Process` leaves its ffmpeg running, which keeps `err.log` open and goes on
   capturing Delta's window for nobody, seen on 2026-10-23 and ended by hand. A job object would end it with the
   gateway.

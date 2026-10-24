@@ -11,7 +11,7 @@ const words = {
     watching: 'Tu regardes Delta en direct. Rien de ce que tu fais ne lui parvient.',
     lost: 'Connexion perdue',
     again: 'Se reconnecter',
-    used: 'Cette invitation a déjà servi ou a expiré : demande un nouveau lien.',
+    used: 'Cette invitation a expiré : demande un nouveau lien.',
     noInvite: 'Pas d’invitation valable : demande un lien à la personne qui t’invite.',
     ended: 'Cette invitation est terminée.',
     full: 'Deux invités regardent déjà : réessaie plus tard.',
@@ -23,7 +23,7 @@ const words = {
     watching: 'You are watching Delta live. Nothing you do reaches it.',
     lost: 'Connection lost',
     again: 'Reconnect',
-    used: 'This invitation was used already or has expired: ask for a new link.',
+    used: 'This invitation has expired: ask for a new link.',
     noInvite: 'No valid invitation: ask the person who invited you for a link.',
     ended: 'This invitation has ended.',
     full: 'Two guests are watching already: try again later.',
@@ -59,16 +59,17 @@ function guest() {
     const r = await fetch('/join', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite: m[1] }),
     });
-    if (!r.ok) throw new Error(w.used);
+    // A guest who opened the link before holds a cookie still: the relay's addresses tell whether it is valid.
+    return r.ok;
   }
 
   async function watch() {
     go.hidden = true;
     say(w.connecting);
     try {
-      await join();
+      const joined = await join();
       const ice = await fetch('/ice');
-      if (!ice.ok) throw refusal(ice.status, { 401: w.noInvite, 502: w.relay });
+      if (!ice.ok) throw refusal(ice.status, { 401: joined === false ? w.used : w.noInvite, 502: w.relay });
       const { iceServers } = await ice.json();
       const pc = new RTCPeerConnection({ iceServers });
       pc.addTransceiver('video', { direction: 'recvonly' });

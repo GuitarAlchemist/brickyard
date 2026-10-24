@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -92,24 +94,35 @@ func TestTheGuestsEntryHasNothingButWatching(t *testing.T) {
 	}
 }
 
-func TestAnInvitationIsTradedOnceForTwoHoursOfWatching(t *testing.T) {
+// An invitation serves for its whole hour: the guest opens the link again in another browser, or passes it on, and
+// each trade gives a cookie that lasts two hours from its own trade.
+func TestAnInvitationServesForItsHourAndEachCookieForTwoHours(t *testing.T) {
 	g := newTestGateway(t, t.TempDir())
 	guests := withGuests(t, g)
 	_, device := g.pair(t, g.s.issueCode())
 	code := invite(t, g, device)
-	resp, guest := join(t, guests, code)
-	if resp.StatusCode != http.StatusOK || guest == "" {
-		t.Fatalf("join: status %d and cookie %q, want 200 and a guest's cookie", resp.StatusCode, guest)
+	resp, first := join(t, guests, code)
+	if resp.StatusCode != http.StatusOK || first == "" {
+		t.Fatalf("join: status %d and cookie %q, want 200 and a guest's cookie", resp.StatusCode, first)
 	}
-	if resp, again := join(t, guests, code); resp.StatusCode != http.StatusUnauthorized || again != "" {
-		t.Errorf("the same invitation again: status %d, want 401 and no cookie", resp.StatusCode)
+	g.now = g.now.Add(inviteLife - time.Minute)
+	resp, second := join(t, guests, code)
+	if resp.StatusCode != http.StatusOK || second == "" || second == first {
+		t.Fatalf("the same invitation 59 minutes on: status %d, want 200 and a cookie of its own", resp.StatusCode)
 	}
-	if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, guest); resp.StatusCode != http.StatusOK {
-		t.Errorf("the relay's addresses: status %d, want 200", resp.StatusCode)
+	g.now = g.now.Add(2 * time.Minute)
+	if resp, late := join(t, guests, code); resp.StatusCode != http.StatusUnauthorized || late != "" {
+		t.Errorf("the invitation after its hour: status %d, want 401 and no cookie", resp.StatusCode)
 	}
-	g.now = g.now.Add(guestLife + time.Second)
-	if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, guest); resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("two hours on: status %d, want 401", resp.StatusCode)
+	if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, first); resp.StatusCode != http.StatusOK {
+		t.Errorf("the first cookie an hour on: status %d, want 200", resp.StatusCode)
+	}
+	g.now = g.now.Add(guestLife - inviteLife)
+	if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, first); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the first cookie two hours on: status %d, want 401", resp.StatusCode)
+	}
+	if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, second); resp.StatusCode != http.StatusOK {
+		t.Errorf("the second cookie, traded later: status %d, want 200", resp.StatusCode)
 	}
 }
 
@@ -327,5 +340,122 @@ func TestTheRelaysAddresses(t *testing.T) {
 	}
 	if config := guestConfig(nil); config.ICETransportPolicy == webrtc.ICETransportPolicyRelay {
 		t.Error("with no relay, the gateway would gather nothing")
+	}
+}
+
+// windowEntry opens g's entry for Delta's window, wired to the brain b, at its own address.
+func windowEntry(t *testing.T, g *testGateway, b *fakeBrain, dir string) *httptest.Server {
+	t.Helper()
+	secretPath := filepath.Join(dir, "remote.secret")
+	if err := os.WriteFile(secretPath, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g.s.brain = newBrain(b.URL, secretPath)
+	ts := httptest.NewServer(nil)
+	g.s.localHost = ts.Listener.Addr().String()
+	ts.Config.Handler = g.s.localHandler()
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func fromWindow(t *testing.T, url string, headers map[string]string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// Delta's window invites through its own entry, which only the brain's secret opens, and no page.
+func TestDeltasWindowInvitesWithTheBrainsSecretOnly(t *testing.T) {
+	g := newTestGateway(t, t.TempDir())
+	guests := withGuests(t, g)
+	local := windowEntry(t, g, newFakeBrain(t), t.TempDir())
+	brain := map[string]string{"X-Delta-Hook": "1", "X-Delta-Remote": secret}
+	for name, headers := range map[string]map[string]string{
+		"no header":       {},
+		"no secret":       {"X-Delta-Hook": "1"},
+		"a wrong secret":  {"X-Delta-Hook": "1", "X-Delta-Remote": "nope"},
+		"no hook header":  {"X-Delta-Remote": secret},
+		"a page's Origin": {"X-Delta-Hook": "1", "X-Delta-Remote": secret, "Origin": local.URL},
+	} {
+		if resp := fromWindow(t, local.URL+"/invite", headers); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("an invitation with %s: status %d, want 403", name, resp.StatusCode)
+		}
+	}
+	resp := fromWindow(t, local.URL+"/invite", brain)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the brain's invitation: status %d, want 200", resp.StatusCode)
+	}
+	var got struct{ Link, Expires string }
+	json.NewDecoder(resp.Body).Decode(&got)
+	code := got.Link[strings.LastIndex(got.Link, "=")+1:]
+	if expires, err := time.Parse(time.RFC3339, got.Expires); err != nil || !expires.Equal(g.now.Add(inviteLife)) {
+		t.Errorf("the invitation expires %q, want an hour on", got.Expires)
+	}
+	if resp, cookie := join(t, guests, code); resp.StatusCode != http.StatusOK || cookie == "" {
+		t.Errorf("the window's invitation at the guests' entry: status %d, want 200 and a cookie", resp.StatusCode)
+	}
+	if resp := fromWindow(t, local.URL+"/guests/end", brain); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("ending the guests from the window: status %d, want 204", resp.StatusCode)
+	}
+	if resp, _ := join(t, guests, code); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("the invitation after the end: status %d, want 401", resp.StatusCode)
+	}
+}
+
+// The window's QR card would show the invitation to the guests watching that window.
+func TestDeltasWindowInvitesOnlyWhileNoGuestWatches(t *testing.T) {
+	g := newTestGateway(t, t.TempDir())
+	withGuests(t, g)
+	local := windowEntry(t, g, newFakeBrain(t), t.TempDir())
+	brain := map[string]string{"X-Delta-Hook": "1", "X-Delta-Remote": secret}
+	watcher := &webrtc.PeerConnection{}
+	g.s.mu.Lock()
+	g.s.guests[watcher] = true
+	g.s.mu.Unlock()
+	resp := fromWindow(t, local.URL+"/invite", brain)
+	g.s.mu.Lock()
+	delete(g.s.guests, watcher)
+	g.s.mu.Unlock()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("an invitation while a guest watches: status %d, want 409", resp.StatusCode)
+	}
+	if resp := fromWindow(t, local.URL+"/invite", brain); resp.StatusCode != http.StatusOK {
+		t.Errorf("an invitation once nobody watches: status %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestTheLogNamesCandidateTypesOnly(t *testing.T) {
+	sdp := "v=0\r\na=candidate:1 1 udp 2122260223 192.168.1.5 50000 typ host generation 0\r\n" +
+		"a=candidate:2 1 udp 1686052607 203.0.113.7 50001 typ srflx raddr 192.168.1.5 rport 50000\r\n" +
+		"a=candidate:3 1 udp 41885439 104.30.1.1 3478 typ relay raddr 203.0.113.7 rport 50001\r\n" +
+		"a=candidate:4 1 udp 41885439 104.30.1.2 3479 typ relay raddr 203.0.113.7 rport 50002\r\n"
+	if got := candidates(sdp); got != "1 host, 1 srflx, 2 relay" {
+		t.Errorf("candidates: %q", got)
+	}
+	if got := candidates("v=0\r\n"); got != "no candidate" {
+		t.Errorf("candidates of none: %q", got)
+	}
+}
+
+// Cloudflare refuses to relay to its own relay's addresses, and pion then drops the relay altogether: the gateway
+// takes a guest's offer without the browser's relay candidates.
+func TestTheGatewayLeavesOutTheBrowsersRelay(t *testing.T) {
+	sdp := "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n" +
+		"a=candidate:1 1 udp 2122260223 4c1f.local 50000 typ host generation 0\r\n" +
+		"a=candidate:2 1 udp 1686052607 203.0.113.7 50001 typ srflx raddr 0.0.0.0 rport 0\r\n" +
+		"a=candidate:3 1 udp 41885439 104.30.1.1 3478 typ relay raddr 203.0.113.7 rport 50001\r\n" +
+		"a=candidate:4 1 tcp 8331263 104.30.1.2 443 typ relay raddr 203.0.113.7 rport 50002 tcptype passive\r\n" +
+		"a=end-of-candidates\r\n"
+	got := withoutRelay(sdp)
+	if candidates(got) != "1 host, 1 srflx" || !strings.HasPrefix(got, "v=0\r\nm=video 9") ||
+		!strings.HasSuffix(got, "typ srflx raddr 0.0.0.0 rport 0\r\na=end-of-candidates\r\n") {
+		t.Errorf("without the relay:\n%s", got)
 	}
 }

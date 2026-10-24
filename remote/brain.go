@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -47,6 +48,13 @@ func (b *brain) request(ctx context.Context, method, path string, body io.Reader
 	req.Header.Set("X-Delta-Hook", "1")
 	req.Header.Set("X-Delta-Remote", strings.TrimSpace(string(s)))
 	return req, nil
+}
+
+// knows says whether secret is the brain's current one, for the requests the brain makes of the gateway.
+func (b *brain) knows(secret string) bool {
+	s, err := os.ReadFile(b.secretPath)
+	want := strings.TrimSpace(string(s))
+	return err == nil && want != "" && subtle.ConstantTimeCompare([]byte(secret), []byte(want)) == 1
 }
 
 func (b *brain) hear(ctx context.Context, wav []byte) (*http.Response, error) {

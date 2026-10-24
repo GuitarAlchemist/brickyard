@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/ice/v4"
@@ -45,6 +46,7 @@ type server struct {
 	now   func() time.Time
 
 	guestHost string                          // the guests' host behind the tunnel, delta.<domain>; "": no guests
+	localHost string                          // host:port of Delta's window's own entry, on 127.0.0.1
 	guestAPI  *webrtc.API                     // WebRTC for guests, who are not on this network
 	book      *guestBook                      // their invitations and cookies
 	ice       func() ([]iceServer, error)     // the relay's addresses and credentials for one guest
@@ -52,6 +54,7 @@ type server struct {
 	pending   int                             // under mu: guests' offers being answered
 	guests    map[*webrtc.PeerConnection]bool // under mu: each guest's connection, true once connected
 	told      int                             // under mu: how many guests announce was last given
+	guestN    atomic.Int64                    // guests' offers so far, to tell them apart in the log
 
 	brain *brain // nil: no voice and no QR
 

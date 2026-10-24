@@ -1,7 +1,7 @@
 // delta-remote shows Delta's window to one device at a time, over WebRTC.
 //
 //	delta-remote [-ip <address>] [-port 8810] [-udp 8811] [-cert <file> -key <file> -name <host>] [-forget-devices]
-//	             [-guest-host <name> [-guest-port 8812] [-turn <file>]]
+//	             [-guest-host <name> [-guest-port 8812] [-local-port 8813] [-turn <file>]]
 //
 // Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within 100 s. Then a new code
 // replaces it, as soon as a device uses it too: Delta's window shows the current one as a QR, and link.txt holds it. A
@@ -14,7 +14,8 @@
 //
 // With -guest-host, a paired device can also invite guests from outside the network to watch, and only watch: a
 // Cloudflare tunnel brings https://<guest-host> to the guests' entry on 127.0.0.1:<guest-port>, which serves nothing
-// else (guests.go), and their video goes through Cloudflare's TURN relay, with the key held in -turn.
+// else (guests.go), and their video goes through Cloudflare's TURN relay, with the key held in -turn. Delta's window
+// invites too, through its own entry on 127.0.0.1:<local-port>, which only the brain's secret opens.
 package main
 
 import (
@@ -46,7 +47,7 @@ type options struct {
 	brain, brainSecret          string
 	forget                      bool
 	guestHost, turnFile         string
-	guestPort                   int
+	guestPort, localPort        int
 }
 
 func main() {
@@ -66,6 +67,7 @@ func main() {
 	flag.BoolVar(&o.forget, "forget-devices", false, "unpair every device first")
 	flag.StringVar(&o.guestHost, "guest-host", "", "the host name a tunnel brings to the guests' entry; default: no guests")
 	flag.IntVar(&o.guestPort, "guest-port", 8812, "the guests' entry, on 127.0.0.1 only, for the tunnel")
+	flag.IntVar(&o.localPort, "local-port", 8813, "Delta's window's entry for invitations, on 127.0.0.1 only")
 	flag.StringVar(&o.turnFile, "turn", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta-remote", "turn.json"),
 		`Cloudflare's TURN key for the guests' video, as {"id": "…", "token": "…"}`)
 	flag.Parse()
@@ -141,6 +143,9 @@ func run(o options) error {
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		go func() { logf("the guests' entry: %v", guests.ListenAndServe()) }()
+		s.localHost = net.JoinHostPort("127.0.0.1", strconv.Itoa(o.localPort))
+		local := &http.Server{Addr: s.localHost, Handler: s.localHandler(), ReadHeaderTimeout: 5 * time.Second}
+		go func() { logf("the window's entry: %v", local.ListenAndServe()) }()
 		fmt.Printf("Guests invited from a paired device watch at https://%s, through a tunnel to %s\n", o.guestHost, guests.Addr)
 	}
 
