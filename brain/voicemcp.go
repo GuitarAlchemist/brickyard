@@ -311,6 +311,13 @@ func runMCP(c mcpConfig) {
 	mo.onClip = rm.publish
 	mo.aloud = rm.aloud
 	m.attribute = rm.attribute
+	rm.asks = newAsks() // Delta's requests to Gaia, and their answers, said as the say tool says them
+	rm.asks.note = m.note
+	rm.asks.say = func(text, by, mood, requestID string) (int, error) {
+		id, _, err := m.sayAs(text, "", mood, "", by, map[string]any{"request_id": requestID})
+		return id, err
+	}
+	m.followSay = rm.asks.said
 	if c.hooks != "" {
 		go h.serve(c.hooks)
 	}

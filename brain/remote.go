@@ -27,8 +27,10 @@ import (
 //	POST /hear  a 16 kHz mono 16-bit WAV of at most 30 s; 202 {"utterance_id","text","route"}, 503 until Delta hears
 //	GET  /said  server-sent events, one per sentence as it starts playing: {"say_id","text","seconds","t_ms","wav_b64"}
 //	POST /link  {"url"}, the https link of at most 106 bytes that a phone opens to pair with the gateway; 204
-//	POST /guests {"watching"}, how many guests the gateway lets watch the window from afar, 0 to 99, at each change and
-//	            every 30 s while any watch; 204. The window says so until 60 s after the last post.
+//	POST /guests {"watching","mic"}, how many guests the gateway lets watch the window from afar, 0 to 99, and whether
+//	            they hear the room, at each change and every 30 s while any watch; 204. The window says so until 60 s
+//	            after the last post.
+//	POST /ask, GET /asks, POST /answer  Delta's requests to another assistant and their answers (ask.go)
 //
 // A sentence from /hear is routed as one addressed to Delta, since holding the device's button addressed it. Its heard
 // line and channel event carry source "remote". A chime tells the room when Delta says nothing back at once, nor is
@@ -56,6 +58,7 @@ type remote struct {
 	watch  func(guests int, hear bool)              // shows how many guests watch the window from afar, and whether they hear the room, or nil
 	inEars func(delta int)                          // told +1 as a sentence is transcribed, -1 if it is not routed, or nil
 	listen func(devices int)                        // told how many devices play their answers from /said at each change, or nil
+	asks   *asks                                    // Delta's requests to other assistants, or nil (ask.go)
 
 	mu         sync.Mutex
 	transcribe func(samples []float32) (text, lang string, err error) // nil until Delta's ears are ready
@@ -64,21 +67,22 @@ type remote struct {
 	heard      map[int]bool                                           // the utterances that came through /hear, the last 64
 }
 
-// replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, and by, who wrote it
-// (claude, local or ack).
-type replyTo struct{ utterance, by string }
+// replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, by, who wrote it
+// (claude, local, ack, or an assistant Delta asked), and the request_id of the request it answers, "" for none.
+type replyTo struct{ utterance, by, request string }
 
 // attribute keeps whom a say call answers, from its say note (mcp.go), for publish to send with each of its sentences.
 func (r *remote) attribute(say map[string]any) {
 	id, _ := say["say_id"].(int)
 	utterance, _ := say["utterance_id"].(string)
 	by, _ := say["by"].(string)
+	request, _ := say["request_id"].(string)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.answers == nil {
 		r.answers = map[int]replyTo{}
 	}
-	r.answers[id] = replyTo{utterance, by}
+	r.answers[id] = replyTo{utterance, by, request}
 	for old := range r.answers {
 		if old <= id-64 { // said long ago, or never, such as an acknowledgement the mouth dropped
 			delete(r.answers, old)
@@ -98,6 +102,9 @@ func (r *remote) handle(mux *http.ServeMux) {
 	mux.HandleFunc("/said", r.said)
 	mux.HandleFunc("/link", r.link)
 	mux.HandleFunc("/guests", r.guests)
+	if r.asks != nil {
+		r.asks.handle(mux, r.allowed)
+	}
 }
 
 // allowed answers 403 unless the request has the method, the hooks' header and the secret.
@@ -330,8 +337,12 @@ func (r *remote) publish(sayID int, text string, sound wav, path string) {
 	if err != nil {
 		return
 	}
-	event, _ := json.Marshal(map[string]any{"say_id": sayID, "utterance_id": a.utterance, "by": a.by, "text": text,
-		"seconds": sound.seconds, "t_ms": time.Now().UnixMilli(), "wav_b64": base64.StdEncoding.EncodeToString(data)})
+	fields := map[string]any{"say_id": sayID, "utterance_id": a.utterance, "by": a.by, "text": text,
+		"seconds": sound.seconds, "t_ms": time.Now().UnixMilli(), "wav_b64": base64.StdEncoding.EncodeToString(data)}
+	if a.request != "" {
+		fields["request_id"] = a.request
+	}
+	event, _ := json.Marshal(fields)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for ch := range r.subs {

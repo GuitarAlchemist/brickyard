@@ -126,6 +126,7 @@ type mcpServer struct {
 	show       func(line map[string]any)                                       // sends Delta's window a line, if it has one (window.go)
 	tell       func(line map[string]any)                                       // the same, without bringing back a window the user closed
 	attribute  func(say map[string]any)                                        // learns whom each sentence answers, from its say note, if set (remote.go)
+	followSay  func(event string, fields map[string]any)                       // follows the mouth's speaking and spoken notes, if set (ask.go)
 	listenMin  time.Duration
 	listenMax  time.Duration
 	gate       wakeGate
@@ -313,19 +314,7 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 			return
 		}
 		answers := strings.Trim(string(a.UtteranceID), `"`)
-		m.mu.Lock()
-		m.said++
-		sayID := m.said
-		if _, known := languages[a.Language]; known {
-			m.sayIn(sayID, a.Language)
-		} else if n, err := strconv.Atoi(answers); err == nil {
-			m.sayIn(sayID, m.heardIn[n])
-		}
-		m.remember("Delta: " + a.Text)
-		m.asked = strings.HasSuffix(strings.TrimSpace(a.Text), "?")
-		m.mu.Unlock()
-		m.note("say", map[string]any{"say_id": sayID, "utterance_id": answers, "request": string(id), "text": a.Text, "by": "claude"})
-		status, err := m.speak(a.Text, sayID, paid, a.Mood)
+		sayID, status, err := m.sayAs(a.Text, answers, a.Mood, a.Language, "claude", map[string]any{"request": string(id)})
 		if err != nil {
 			m.toolResult(id, err.Error(), true)
 			return
@@ -784,12 +773,37 @@ func (m *mcpServer) remember(line string) {
 	m.recent = m.recent[max(0, len(m.recent)-6):]
 }
 
+// sayAs says text as the say tool does, for by: claude, or an assistant that answers Delta's request through /answer
+// (ask.go). answers is the utterance_id it answers, or ""; language, if known, the voice to say it in; extra goes into
+// its say note, such as the request it answers.
+func (m *mcpServer) sayAs(text, answers, mood, language, by string, extra map[string]any) (sayID int, status string, err error) {
+	m.mu.Lock()
+	m.said++
+	sayID = m.said
+	if _, known := languages[language]; known {
+		m.sayIn(sayID, language)
+	} else if n, err := strconv.Atoi(answers); err == nil {
+		m.sayIn(sayID, m.heardIn[n])
+	}
+	m.remember("Delta: " + text)
+	m.asked = strings.HasSuffix(strings.TrimSpace(text), "?")
+	m.mu.Unlock()
+	fields := map[string]any{"say_id": sayID, "utterance_id": answers, "text": text, "by": by}
+	maps.Copy(fields, extra)
+	m.note("say", fields)
+	status, err = m.speak(text, sayID, paid, mood)
+	return sayID, status, err
+}
+
 func (m *mcpServer) note(event string, fields map[string]any) {
 	if m.record != nil {
 		m.record(event, fields)
 	}
 	if event == "say" && m.attribute != nil {
 		m.attribute(fields)
+	}
+	if (event == "speaking" || event == "spoken") && m.followSay != nil {
+		m.followSay(event, fields)
 	}
 }
 
