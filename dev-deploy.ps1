@@ -2,15 +2,18 @@
 # on the live Delta. The folder and the version carry git describe, with -dirty and the time for uncommitted work, so
 # that the journal's start event says exactly what runs.
 #
-#   .\dev-deploy.ps1 -PluginData <the folder holding delta.json> [-McpJson <.mcp.json>] [-Triage qwen3:8b]
+#   .\dev-deploy.ps1 -PluginData <the folder holding delta.json> [-McpJson <.mcp.json>] [-Triage qwen3:8b] [-HotReload]
 #
-# -Triage replaces the config's -triage model; without it the config keeps its own. Then reconnect delta in Claude
+# -Triage replaces the config's -triage model; without it the config keeps its own. -HotReload runs Delta's window from
+# this checkout's scene\ under dotnet watch, so that an edit there changes the open window; without it the window is
+# the one built here. Then reconnect delta in Claude
 # Code's /mcp. The new brain records itself in %LOCALAPPDATA%\delta\brain.pid and the brain it replaces stops by
 # itself; a brain built before brain.pid existed does not, and must be stopped by hand.
 param(
     [Parameter(Mandatory = $true)][string]$PluginData,
     [string]$McpJson,
-    [string]$Triage
+    [string]$Triage,
+    [switch]$HotReload
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -59,6 +62,17 @@ if ($Triage) {
     $kept.Add($Triage)
     $server.args = $kept.ToArray()
 }
+$kept = New-Object System.Collections.Generic.List[string]
+$old = @($server.args)
+for ($i = 0; $i -lt $old.Count; $i++) {
+    if ($old[$i] -eq '-scene-source') { $i++; continue }
+    $kept.Add($old[$i])
+}
+if ($HotReload) {
+    $kept.Add('-scene-source')
+    $kept.Add((Join-Path $root 'scene'))
+}
+$server.args = $kept.ToArray()
 $json = $config | ConvertTo-Json -Depth 10
 [IO.File]::WriteAllText($path, $json + "`n", (New-Object Text.UTF8Encoding $false))
 Write-Host "Pointed $McpJson at it. Next: reconnect delta in Claude Code's /mcp."

@@ -59,6 +59,8 @@ func main() {
 	mcpMode := flag.Bool("mcp", false, "be an MCP server for Claude Code on stdin and stdout, Claude being the brain")
 	home := flag.String("home", "", "with -mcp, where setup.ps1 installed Piper, a voice and whisper.cpp")
 	noScene := flag.Bool("no-scene", false, "with -mcp, do not open Delta's window")
+	sceneSource := flag.String("scene-source", "", "with -mcp, run Delta's window from its project folder under dotnet watch, which applies "+
+		"edits to the open window (hot reload), for development; the window does not restart when it closes")
 	noWake := flag.Bool("no-wake", false, "with -mcp, send everything heard to Claude, not only what follows \"Delta\"")
 	journalFile := flag.String("journal", "", "with -mcp, append what Delta hears and says to this file, one JSON line each")
 	triageModel := flag.String("triage", "", "with -mcp, an Ollama model that sorts what Delta hears before Claude: it answers small talk itself, "+
@@ -81,7 +83,7 @@ func main() {
 			addr = "127.0.0.1:8805"
 		}
 		runMCP(mcpConfig{home: *home, lang: *lang, piper: *piper, voice: *voiceModel, whisper: *whisper, whisperModel: *whisperModel,
-			scene: addr, journal: *journalFile, ollama: *ollama, triage: *triageModel, hooks: *hooksAddr, fx: *fx, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
+			scene: addr, sceneSource: *sceneSource, journal: *journalFile, ollama: *ollama, triage: *triageModel, hooks: *hooksAddr, fx: *fx, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
 		return
 	}
 	l, err := languageOf(*lang)

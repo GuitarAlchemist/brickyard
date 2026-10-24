@@ -21,6 +21,7 @@ type mcpConfig struct {
 	whisperFallback                           string // the whisper-server to run when whisper cannot, if any
 	lang                                      string // what Delta hears and speaks: "en" or "fr" (lang.go)
 	scene                                     string // the scene's address
+	sceneSource                               string // the scene's project folder, to run it under dotnet watch, if any
 	journal                                   string // where to record what Delta heard and said, if anywhere
 	ollama, triage                            string // Ollama's address, and the model that sorts what Delta hears, if any
 	hooks                                     string // where Claude Code's hooks post, if anywhere (hooks.go)
@@ -436,8 +437,15 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	if dir, err := os.UserCacheDir(); err == nil { // the window's own marker (scene/Program.cs Closed)
 		s.closed = filepath.Join(dir, "delta", "scene-"+port+".closed")
 	}
+	var watched atomic.Bool // dotnet watch runs on: it builds the window for a while, and restarts it after an edit itself
 	s.launch = func() {
 		cmd := exec.Command(path, "--listen", port)
+		if c.sceneSource != "" { // an edit to the source changes the open window, from its next call of the edited method on
+			if !watched.CompareAndSwap(false, true) {
+				return
+			}
+			cmd = exec.Command("dotnet", "watch", "run", "--project", c.sceneSource, "--non-interactive", "-r", "win-x64", "--", "--listen", port)
+		}
 		hideConsole(cmd)
 		var log *os.File
 		if c.home != "" {
@@ -450,6 +458,7 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 		}
 		if err := cmd.Start(); err != nil {
 			logf("scene: %v", err)
+			watched.Store(false)
 			return
 		}
 		killWithMe(cmd.Process)
@@ -460,6 +469,7 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 				log.Close()
 			}
 			logf("scene exited: %v", err) // nil when the user closed it
+			watched.Store(false)
 			s.exited(err != nil)
 		}()
 	}
