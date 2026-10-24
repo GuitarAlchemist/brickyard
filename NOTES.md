@@ -772,6 +772,39 @@ Still to see live:
 - the badge with the real brain;
 - the delay the relay adds.
 
+## Guests hear Delta, and the microphone once the window lets them (2026-10-24)
+
+Eric, the first guest, watched from France from 14:21. The user then asked, by voice, that he hear them: Delta's voice
+by default, and the user's microphone only after a switch in Delta's window, off by default and at each start. They
+chose the headset's microphone (Jabra EVOLVE 20), so that the room's speakers and Delta's own voice do not echo into it.
+
+The gateway changes:
+
+- **Delta's voice.** `/said` on the guests' entry streams the sound of each sentence Delta says, and nothing else:
+  not its text, and not what anyone said to it. The brain is asked as by a page whose sound does not run, so the
+  computer still says everything aloud. The guest's page plays each sentence after the one before it.
+- **The microphone.** With `-mic <DirectShow name>`, ffmpeg sends that microphone as Opus over RTP on loopback, into a
+  track that only guests' connections carry. Its capture runs only while a guest watches and the switch is on, and
+  starts again within 2 s if ffmpeg ends. The RTP is renumbered across captures, with a 20 ms gap.
+- **The switch.** It is `POST /guests/mic {"on": true|false}` on the window's entry, 127.0.0.1:8813, with the brain's
+  secret, and answers 204, or 404 without `-mic`. The brain hears it in `/guests`, as `{"watching": n, "mic": on}`, at
+  each change, at the gateway's start (off), and every 30 s while a guest watches.
+- **The guest's page.** It asks for the picture and the sound, shows « Activer le son » / "Turn sound on", and a touch
+  unmutes the picture's sound and starts Delta's voice: browsers play sound only after a touch.
+
+Five tests, written with the code, not red first: the guest hears only Delta's voice and the brain is not told the
+page plays; the microphone runs only with a guest and the switch; only a guest's answer carries the track; the
+capture's arguments; the 20 ms gap. ffmpeg 8 opened the Jabra microphone with these arguments for 2 s.
+
+Guests still cannot speak: a two-way call through the paired phone comes next. The user chose that during the call
+the phone sends nothing to Delta.
+
+Still to see live:
+
+- Eric hearing Delta, then the user once the switch is on;
+- the delay;
+- whether the microphone shared with Delta's own listening keeps both working.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

@@ -55,6 +55,11 @@ type server struct {
 	guests    map[*webrtc.PeerConnection]bool // under mu: each guest's connection, true once connected
 	told      int                             // under mu: how many guests announce was last given
 	guestN    atomic.Int64                    // guests' offers so far, to tell them apart in the log
+	voice     *webrtc.TrackLocalStaticRTP     // the microphone guests hear, as Opus; nil: guests hear nothing
+	onGuests  func(hear bool)                 // starts and stops the microphone's capture
+	heard     bool                            // under mu: the microphone's capture runs
+	micOn     bool                            // under mu: the user lets guests hear the microphone; off at each start
+	toldMic   bool                            // under mu: the microphone's state announce was last given
 
 	brain *brain // nil: no voice and no QR
 
@@ -110,6 +115,7 @@ func newServerWith(home string, se webrtc.SettingEngine) (*server, error) {
 		guests:   map[*webrtc.PeerConnection]bool{},
 		life:     renewEvery,
 		onPeer:   func(bool) {},
+		onGuests: func(bool) {},
 	}, nil
 }
 
@@ -323,24 +329,28 @@ func (s *server) offer(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(answer)
 }
 
-func (s *server) answer(api *webrtc.API, config webrtc.Configuration, offer webrtc.SessionDescription) (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
+// answer makes a connection that sends s.video, and the extra tracks, to offer's maker.
+func (s *server) answer(api *webrtc.API, config webrtc.Configuration, offer webrtc.SessionDescription,
+	extra ...webrtc.TrackLocal) (*webrtc.PeerConnection, *webrtc.SessionDescription, error) {
 	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		return nil, nil, err
 	}
-	sender, err := pc.AddTrack(s.video)
-	if err != nil {
-		pc.Close()
-		return nil, nil, err
-	}
-	go func() { // RTCP has to be read for the interceptors to run
-		buf := make([]byte, 1500)
-		for {
-			if _, _, err := sender.Read(buf); err != nil {
-				return
-			}
+	for _, track := range append([]webrtc.TrackLocal{s.video}, extra...) {
+		sender, err := pc.AddTrack(track)
+		if err != nil {
+			pc.Close()
+			return nil, nil, err
 		}
-	}()
+		go func() { // RTCP has to be read for the interceptors to run
+			buf := make([]byte, 1500)
+			for {
+				if _, _, err := sender.Read(buf); err != nil {
+					return
+				}
+			}
+		}()
+	}
 	// The capture starts once the device is connected, so its first frame, a keyframe, is not lost before DTLS is
 	// up. Disconnected can still recover; Failed and Closed cannot.
 	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
@@ -406,8 +416,12 @@ func (s *server) watch() {
 		s.watched = on
 		s.onPeer(on)
 	}
-	if n != s.told && s.watching != nil {
-		s.told = n
+	if hear := n > 0 && s.voice != nil && s.micOn; hear != s.heard {
+		s.heard = hear
+		s.onGuests(hear)
+	}
+	if (n != s.told || s.micOn != s.toldMic) && s.watching != nil {
+		s.told, s.toldMic = n, s.micOn
 		select { // only the latest number counts
 		case <-s.watching:
 		default:

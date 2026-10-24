@@ -35,6 +35,7 @@ func captureArgs(hwnd uintptr, port int) []string {
 type capture struct {
 	conn  *net.UDPConn
 	track *webrtc.TrackLocalStaticRTP
+	gap   uint32                                                 // the RTP ticks left between two captures
 	find  func() (uintptr, error)                                // Delta's window
 	start func(hwnd uintptr, exited func(error)) (func(), error) // runs ffmpeg on it; the func returned stops it
 
@@ -54,29 +55,68 @@ func newCapture(ffmpeg, title, exe string, track *webrtc.TrackLocalStaticRTP) (*
 		return nil, err
 	}
 	port := conn.LocalAddr().(*net.UDPAddr).Port
-	c := &capture{conn: conn, track: track, find: func() (uintptr, error) { return findWindow(title, exe) }}
+	c := &capture{conn: conn, track: track, gap: frameTicks, find: func() (uintptr, error) { return findWindow(title, exe) }}
 	c.start = func(hwnd uintptr, exited func(error)) (func(), error) {
-		cmd := exec.Command(ffmpeg, captureArgs(hwnd, port)...)
-		cmd.Stderr = os.Stderr
-		if err := cmd.Start(); err != nil {
-			return nil, err
-		}
-		go func() { exited(cmd.Wait()) }()
-		return func() { cmd.Process.Kill() }, nil
+		return startFFmpeg(ffmpeg, captureArgs(hwnd, port), exited)
 	}
+	c.begin()
+	return c, nil
+}
+
+// micArgs has ffmpeg capture the microphone named device and send it as Opus over RTP to 127.0.0.1:port, in 20 ms
+// packets, mono, at a bitrate made for speech.
+func micArgs(device string, port int) []string {
+	return []string{
+		"-hide_banner", "-loglevel", "error",
+		"-f", "dshow", "-audio_buffer_size", "20", "-i", "audio=" + device,
+		"-ac", "1", "-ar", "48000", "-c:a", "libopus", "-application", "voip", "-b:a", "32k", "-frame_duration", "20",
+		"-vn", "-f", "rtp", fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200&localaddr=127.0.0.1", port),
+	}
+}
+
+// opusTicks is 20 ms on Opus's 48 kHz RTP clock, the gap left between two microphone captures.
+const opusTicks = 48000 / 50
+
+// newMicCapture runs ffmpeg on the microphone named device while run(true) holds, as capture does on Delta's window,
+// and forwards its Opus packets to track. It starts again within followEvery when ffmpeg ends.
+func newMicCapture(ffmpeg, device string, track *webrtc.TrackLocalStaticRTP) (*capture, error) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, err
+	}
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	c := &capture{conn: conn, track: track, gap: opusTicks, find: func() (uintptr, error) { return 1, nil }}
+	c.start = func(_ uintptr, exited func(error)) (func(), error) {
+		return startFFmpeg(ffmpeg, micArgs(device, port), exited)
+	}
+	c.begin()
+	return c, nil
+}
+
+func startFFmpeg(ffmpeg string, args []string, exited func(error)) (func(), error) {
+	cmd := exec.Command(ffmpeg, args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go func() { exited(cmd.Wait()) }()
+	return func() { cmd.Process.Kill() }, nil
+}
+
+// begin forwards the packets and follows what is captured.
+func (c *capture) begin() {
 	go c.forward()
 	go func() {
 		for range time.Tick(followEvery) {
 			c.follow()
 		}
 	}()
-	return c, nil
 }
 
 func (c *capture) forward() {
 	buf := make([]byte, 1600)
 	var p rtp.Packet
-	var r renumber
+	r := renumber{gap: c.gap}
 	for {
 		n, _, err := c.conn.ReadFromUDP(buf)
 		if err != nil {
@@ -92,6 +132,7 @@ func (c *capture) forward() {
 // renumber makes the packets of successive ffmpeg, each with its own SSRC and its own random first sequence number
 // and timestamp, one stream that carries on: a browser drops packets that seem older than the ones it has seen.
 type renumber struct {
+	gap       uint32 // RTP ticks between the last packet of a capture and the first of the next; 0: frameTicks
 	ssrc      uint32
 	begun     bool
 	seq       uint16 // added to each packet's sequence number
@@ -106,8 +147,12 @@ const frameTicks = 90000 / 30
 func (r *renumber) apply(p *rtp.Packet) {
 	if !r.begun || p.SSRC != r.ssrc {
 		if r.begun {
+			gap := r.gap
+			if gap == 0 {
+				gap = frameTicks
+			}
 			r.seq = r.lastSeq + 1 - p.SequenceNumber
-			r.ts = r.lastStamp + frameTicks - p.Timestamp
+			r.ts = r.lastStamp + gap - p.Timestamp
 		}
 		r.ssrc, r.begun = p.SSRC, true
 	}

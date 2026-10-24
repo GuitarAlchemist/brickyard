@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,11 +70,12 @@ func join(t *testing.T, guests *httptest.Server, code string) (*http.Response, s
 	return resp, ""
 }
 
-// The guests' entry is what the internet reaches through the tunnel: a guest watches, and nothing else is there.
+// The guests' entry is what the internet reaches through the tunnel: a guest watches and hears Delta's voice (/said,
+// see TestAGuestHearsDeltasVoiceOnly), and nothing else is there.
 func TestTheGuestsEntryHasNothingButWatching(t *testing.T) {
 	g := newTestGateway(t, t.TempDir())
 	guests := withGuests(t, g)
-	for _, path := range []string{"/hear", "/said", "/pair", "/link", "/invite", "/guests/end", "/page.js", "/talk.js", "/recorder.js"} {
+	for _, path := range []string{"/hear", "/pair", "/link", "/invite", "/guests/end", "/guests/mic", "/page.js", "/talk.js", "/recorder.js"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			if resp := request(t, method, guests.URL+path, nil, ""); resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
 				t.Errorf("%s %s at the guests' entry: status %d, want none there", method, path, resp.StatusCode)
@@ -307,15 +309,18 @@ func TestTwoGuestsWatchBesideTheDevice(t *testing.T) {
 func TestTheBrainHearsHowManyGuestsWatch(t *testing.T) {
 	b := newFakeBrain(t)
 	g, _ := voiceGateway(t, b)
-	for _, n := range []int{1, 2, 0} {
-		if err := g.s.brain.guests(n); err != nil {
+	for _, c := range []struct {
+		n   int
+		mic bool
+	}{{1, false}, {2, true}, {0, false}} {
+		if err := g.s.brain.guests(c.n, c.mic); err != nil {
 			t.Fatal(err)
 		}
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !slices.Equal(b.seen, []int{1, 2, 0}) || len(b.bad) > 0 {
-		t.Errorf("the brain was told %v and refused %v, want 1, 2 and 0", b.seen, b.bad)
+	if !slices.Equal(b.seen, []int{1, 2, 0}) || !slices.Equal(b.mics, []bool{false, true, false}) || len(b.bad) > 0 {
+		t.Errorf("the brain was told %v and %v and refused %v, want 1, 2 and 0, the microphone on with 2", b.seen, b.mics, b.bad)
 	}
 }
 
@@ -457,5 +462,160 @@ func TestTheGatewayLeavesOutTheBrowsersRelay(t *testing.T) {
 	if candidates(got) != "1 host, 1 srflx" || !strings.HasPrefix(got, "v=0\r\nm=video 9") ||
 		!strings.HasSuffix(got, "typ srflx raddr 0.0.0.0 rport 0\r\na=end-of-candidates\r\n") {
 		t.Errorf("without the relay:\n%s", got)
+	}
+}
+
+// A guest hears Delta's voice, and nothing else of what the brain streams: neither the sentences' text nor anyone's
+// words. The brain is asked as by a page whose sound does not run, so the computer still says everything.
+func TestAGuestHearsDeltasVoiceOnly(t *testing.T) {
+	b := newFakeBrain(t)
+	b.said = []string{
+		`{"text":"Bonjour Eric","wav_b64":"UklGRg==","by":"answer","utterance_id":"7"}`,
+		`{"text":"what the user said","by":"heard"}`,
+		`not json`,
+	}
+	g, device := voiceGateway(t, b)
+	guests := withGuests(t, g)
+	_, guest := join(t, guests, invite(t, g, device))
+	if resp := request(t, http.MethodGet, guests.URL+"/said", nil, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Delta's voice with no guest's cookie: status %d, want 401", resp.StatusCode)
+	}
+	resp := request(t, http.MethodGet, guests.URL+"/said", nil, guest)
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "data: {\"wav_b64\":\"UklGRg==\"}\n\n" {
+		t.Errorf("the guest's stream: status %d, %q", resp.StatusCode, body)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !slices.Equal(b.plays, []string{""}) {
+		t.Errorf("the brain was asked with X-Delta-Plays %q, want none", b.plays)
+	}
+}
+
+// The microphone reaches guests only once the window's switch lets it, and only while a guest watches; the brain
+// hears the switch's state.
+func TestGuestsHearTheMicrophoneOnlyWithTheSwitchOn(t *testing.T) {
+	g := newTestGateway(t, t.TempDir())
+	withGuests(t, g)
+	local := windowEntry(t, g, newFakeBrain(t), t.TempDir())
+	brain := map[string]string{"X-Delta-Hook": "1", "X-Delta-Remote": secret}
+	switchTo := func(body string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, local.URL+"/guests/mic", strings.NewReader(body))
+		for k, v := range brain {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	if resp := switchTo(`{"on": true}`); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("the switch with no -mic: status %d, want 404", resp.StatusCode)
+	}
+	voice, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "voice", "delta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.s.voice = voice
+	g.s.watching = make(chan int, 1)
+	var heard []bool
+	g.s.onGuests = func(on bool) { heard = append(heard, on) }
+	if resp := switchTo(`{}`); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("the switch with no state: status %d, want 400", resp.StatusCode)
+	}
+	if resp := switchTo(`{"on": true}`); resp.StatusCode != http.StatusNoContent || len(heard) != 0 || !g.s.mic() {
+		t.Errorf("the switch on with nobody watching: status %d, the microphone ran %v", resp.StatusCode, heard)
+	}
+	told(t, g.s.watching, 0)
+	watcher := &webrtc.PeerConnection{}
+	g.s.mu.Lock()
+	g.s.guests[watcher] = true
+	g.s.watch()
+	g.s.mu.Unlock()
+	if resp := switchTo(`{"on": false}`); resp.StatusCode != http.StatusNoContent || g.s.mic() {
+		t.Errorf("the switch off: status %d", resp.StatusCode)
+	}
+	g.s.mu.Lock()
+	delete(g.s.guests, watcher)
+	g.s.watch()
+	g.s.mu.Unlock()
+	if !slices.Equal(heard, []bool{true, false}) {
+		t.Errorf("the microphone ran %v, want on with the guest and the switch, then off", heard)
+	}
+}
+
+// offerWithSound is offer with the guest page's audio too.
+func offerWithSound(t *testing.T) []byte {
+	t.Helper()
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(loopbackOnly())).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	for _, kind := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeVideo, webrtc.RTPCodecTypeAudio} {
+		if _, err := pc.AddTransceiverFromKind(kind, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o, err := pc.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gathered := webrtc.GatheringCompletePromise(pc)
+	if err := pc.SetLocalDescription(o); err != nil {
+		t.Fatal(err)
+	}
+	<-gathered
+	body, _ := json.Marshal(pc.LocalDescription())
+	return body
+}
+
+// A guest's connection carries the microphone's track beside the picture; a device's does not.
+func TestAGuestsConnectionCarriesTheMicrophone(t *testing.T) {
+	g := newTestGateway(t, t.TempDir())
+	guests := withGuests(t, g)
+	voice, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "voice", "delta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.s.voice = voice
+	_, device := g.pair(t, g.s.issueCode())
+	_, guest := join(t, guests, invite(t, g, device))
+	for _, c := range []struct {
+		who   string
+		resp  *http.Response
+		audio bool
+	}{
+		{"the guest", request(t, http.MethodPost, guests.URL+"/offer", offerWithSound(t), guest), true},
+		{"the device", g.do(t, "/offer", offerWithSound(t), device, g.ts.URL), false},
+	} {
+		var answer webrtc.SessionDescription
+		if c.resp.StatusCode != http.StatusOK || json.NewDecoder(c.resp.Body).Decode(&answer) != nil {
+			t.Fatalf("%s's offer: status %d", c.who, c.resp.StatusCode)
+		}
+		// pion answers an audio section with sendonly whether or not a track is there: the track's msid tells.
+		audio := regexp.MustCompile(`(?s)m=audio .*a=msid:delta voice`).MatchString(answer.SDP)
+		if audio != c.audio {
+			t.Errorf("%s's answer sends the microphone: %v, want %v", c.who, audio, c.audio)
+		}
+	}
+}
+
+func TestTheMicrophonesCaptureIsOpusOverRTP(t *testing.T) {
+	args := strings.Join(micArgs("Headset Microphone (2- Jabra EVOLVE 20 MS)", 5004), " ")
+	for _, want := range []string{"-f dshow", "-i audio=Headset Microphone (2- Jabra EVOLVE 20 MS)", "-c:a libopus",
+		"-f rtp rtp://127.0.0.1:5004"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("micArgs has no %q: %s", want, args)
+		}
+	}
+	r := renumber{gap: opusTicks}
+	p := &rtp.Packet{Header: rtp.Header{SSRC: 1, SequenceNumber: 10, Timestamp: 1000}}
+	r.apply(p)
+	next := &rtp.Packet{Header: rtp.Header{SSRC: 2, SequenceNumber: 500, Timestamp: 77}}
+	r.apply(next)
+	if next.SequenceNumber != 11 || next.Timestamp != 1000+opusTicks {
+		t.Errorf("a new capture's first packet: %d at %d, want 11 at %d", next.SequenceNumber, next.Timestamp, 1000+opusTicks)
 	}
 }

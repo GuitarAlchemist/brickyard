@@ -86,9 +86,10 @@ func (b *brain) link(url string) error {
 	return b.post("/link", map[string]string{"url": url})
 }
 
-// guests shows how many guests watch in Delta's window, or takes the badge away for 0.
-func (b *brain) guests(n int) error {
-	return b.post("/guests", map[string]int{"watching": n})
+// guests shows how many guests watch in Delta's window, or takes the badge away for 0, and whether they hear the
+// microphone, for the window's switch.
+func (b *brain) guests(n int, mic bool) error {
+	return b.post("/guests", map[string]any{"watching": n, "mic": mic})
 }
 
 func (b *brain) post(path string, v any) error {

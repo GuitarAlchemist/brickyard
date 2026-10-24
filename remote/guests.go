@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
@@ -108,6 +109,7 @@ func (s *server) guestHandler() http.Handler {
 	mux.HandleFunc("POST /join", s.join)
 	mux.HandleFunc("GET /ice", s.guest(s.relay))
 	mux.HandleFunc("POST /offer", s.guest(s.guestOffer))
+	mux.HandleFunc("GET /said", s.guest(s.guestSaid))
 	return checked(s.guestHost, mux)
 }
 
@@ -117,6 +119,7 @@ func (s *server) localHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /invite", s.windowInvite)
 	mux.HandleFunc("POST /guests/end", s.endGuests)
+	mux.HandleFunc("POST /guests/mic", s.guestsMic)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != s.localHost || r.Header.Get("Origin") != "" || r.Header.Get("X-Delta-Hook") != "1" ||
 			s.brain == nil || !s.brain.knows(r.Header.Get("X-Delta-Remote")) {
@@ -135,6 +138,32 @@ func (s *server) windowInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.invite(w, r)
+}
+
+// guestsMic lets guests hear the microphone, or stops it, from the switch in Delta's window: {"on": true|false}.
+// Guests hear Delta's voice in any case; the microphone is off at each start of the gateway.
+func (s *server) guestsMic(w http.ResponseWriter, r *http.Request) {
+	if s.voice == nil {
+		http.Error(w, "the gateway has no microphone for guests: it needs -mic", http.StatusNotFound)
+		return
+	}
+	var req struct{ On *bool }
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil || req.On == nil {
+		http.Error(w, `{"on": true} or {"on": false} is needed`, http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.micOn = *req.On
+	s.watch()
+	s.mu.Unlock()
+	logf("guests: the microphone %s", map[bool]string{true: "on", false: "off"}[*req.On])
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) mic() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.micOn
 }
 
 func (s *server) guestsWatching() int {
@@ -253,7 +282,11 @@ func (s *server) guestOffer(w http.ResponseWriter, r *http.Request) {
 	config := guestConfig(servers)
 	offered := candidates(offer.SDP)
 	offer.SDP = withoutRelay(offer.SDP)
-	pc, answer, err := s.answer(s.guestAPI, config, offer)
+	var extra []webrtc.TrackLocal
+	if s.voice != nil {
+		extra = append(extra, s.voice)
+	}
+	pc, answer, err := s.answer(s.guestAPI, config, offer, extra...)
 	if err != nil {
 		logf("guest %d: the offer: %v", n, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -295,6 +328,50 @@ func withoutRelay(sdp string) string {
 	return strings.Join(kept, "")
 }
 
+// guestSaid streams Delta's voice to a guest: the sound of each sentence Delta says, and nothing else, neither its
+// text nor what anyone said to it. The brain is asked as by a page whose sound does not run, so the computer still
+// says everything aloud.
+func (s *server) guestSaid(w http.ResponseWriter, r *http.Request) {
+	if s.brain == nil {
+		http.Error(w, errNoBrain.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	resp, err := s.brain.said(r.Context(), false)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if err == nil {
+			resp.Body.Close()
+		}
+		comeBack(w)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	lines := bufio.NewScanner(resp.Body)
+	lines.Buffer(make([]byte, 64<<10), maxHear*2)
+	for lines.Scan() {
+		data, ok := strings.CutPrefix(lines.Text(), "data:")
+		if !ok {
+			continue
+		}
+		var said struct {
+			WAV string `json:"wav_b64"`
+		}
+		if json.Unmarshal([]byte(data), &said) != nil || said.WAV == "" {
+			continue
+		}
+		out, _ := json.Marshal(map[string]string{"wav_b64": said.WAV})
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", out); err != nil {
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
 // candidates counts an SDP's ICE candidates by type, such as "1 host, 2 srflx, 1 relay".
 func candidates(sdp string) string {
 	count := map[string]int{}
@@ -332,20 +409,23 @@ func selected(pc *webrtc.PeerConnection) string {
 }
 
 // announce tells the brain how many guests watch, at each change and every guestRenew while any does, for the badge
-// in Delta's window: the brain takes the badge away 60 s after the last word, should the gateway stop.
+// in Delta's window: the brain takes the badge away 60 s after the last word, should the gateway stop. It also says
+// whether guests hear the microphone, at the start too, for the window's switch: the gateway starts with it off.
 func (s *server) announce() {
 	tick := time.NewTicker(guestRenew)
 	defer tick.Stop()
 	n := 0
-	for {
-		select {
-		case n = <-s.watching:
-		case <-tick.C:
-			if n == 0 {
-				continue
+	for first := true; ; first = false {
+		if !first {
+			select {
+			case n = <-s.watching:
+			case <-tick.C:
+				if n == 0 {
+					continue
+				}
 			}
 		}
-		if err := s.brain.guests(n); err != nil {
+		if err := s.brain.guests(n, s.mic()); err != nil {
 			logf("the guests' badge: %v", err)
 		}
 	}

@@ -1,7 +1,7 @@
 // delta-remote shows Delta's window to one device at a time, over WebRTC.
 //
 //	delta-remote [-ip <address>] [-port 8810] [-udp 8811] [-cert <file> -key <file> -name <host>] [-forget-devices]
-//	             [-guest-host <name> [-guest-port 8812] [-local-port 8813] [-turn <file>]]
+//	             [-guest-host <name> [-guest-port 8812] [-local-port 8813] [-turn <file>] [-mic <device>]]
 //
 // Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within 100 s. Then a new code
 // replaces it, as soon as a device uses it too: Delta's window shows the current one as a QR, and link.txt holds it. A
@@ -15,7 +15,8 @@
 // With -guest-host, a paired device can also invite guests from outside the network to watch, and only watch: a
 // Cloudflare tunnel brings https://<guest-host> to the guests' entry on 127.0.0.1:<guest-port>, which serves nothing
 // else (guests.go), and their video goes through Cloudflare's TURN relay, with the key held in -turn. Delta's window
-// invites too, through its own entry on 127.0.0.1:<local-port>, which only the brain's secret opens.
+// invites too, through its own entry on 127.0.0.1:<local-port>, which only the brain's secret opens. With -mic,
+// guests also hear that microphone and Delta's voice, while any of them watches; they cannot speak.
 package main
 
 import (
@@ -46,7 +47,7 @@ type options struct {
 	title, exe, ffmpeg          string
 	brain, brainSecret          string
 	forget                      bool
-	guestHost, turnFile         string
+	guestHost, turnFile, mic    string
 	guestPort, localPort        int
 }
 
@@ -68,6 +69,7 @@ func main() {
 	flag.StringVar(&o.guestHost, "guest-host", "", "the host name a tunnel brings to the guests' entry; default: no guests")
 	flag.IntVar(&o.guestPort, "guest-port", 8812, "the guests' entry, on 127.0.0.1 only, for the tunnel")
 	flag.IntVar(&o.localPort, "local-port", 8813, "Delta's window's entry for invitations, on 127.0.0.1 only")
+	flag.StringVar(&o.mic, "mic", "", `the microphone guests hear, by its DirectShow name ("ffmpeg -list_devices true -f dshow -i dummy"); default: none`)
 	flag.StringVar(&o.turnFile, "turn", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta-remote", "turn.json"),
 		`Cloudflare's TURN key for the guests' video, as {"id": "…", "token": "…"}`)
 	flag.Parse()
@@ -136,6 +138,19 @@ func run(o options) error {
 		s.guestHost = o.guestHost
 		s.ice = cloudflareRelay(o.turnFile)
 		s.watching = make(chan int, 1)
+		if o.mic != "" {
+			voice, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{
+				MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: "minptime=10;useinbandfec=1",
+			}, "voice", "delta")
+			if err != nil {
+				return err
+			}
+			mic, err := newMicCapture(o.ffmpeg, o.mic, voice)
+			if err != nil {
+				return err
+			}
+			s.voice, s.onGuests = voice, mic.run
+		}
 		go s.announce()
 		guests := &http.Server{
 			Addr:              net.JoinHostPort("127.0.0.1", strconv.Itoa(o.guestPort)),
