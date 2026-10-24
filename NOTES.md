@@ -598,8 +598,220 @@ and the dots are one small texture drawn twelve times, tinted lit or dim each fr
 someone else, Brutal or Gaïa among them, still ends the conversation at once, and the ring with it. The cost is the
 one the old rule avoided: talk that goes on and on goes on to Claude, now in sight.
 
+## The phone, as a conversation (2026-10-23)
+
+IX's gateway page becomes a conversation with Delta, and Delta's window always holds a QR that pairs.
+
+- The page shows bubbles, each answer under the sentence it answers, by `utterance_id`. The acknowledgement shows
+  small until the answer replaces it. Appeler opens a call: an energy VAD, half-duplex, so the phone hears nothing
+  while Delta plays, and the screen stays awake. Hold-to-talk stays; releasing it before the microphone opens now
+  closes the microphone.
+- Where an answer plays (`Router` in `remote/talk.js`): on the phone when it answers the phone's own `/hear`; silent,
+  behind a ▶ button, when it answers the computer's; Delta speaking on its own plays on the phone only during a call.
+  An answer that arrives before its `/hear` reply waits for it, 2 s at most. The later sentences of an answer follow
+  the first by `say_id`, since brain 0.5.0 names only the first.
+- The gateway sends `X-Delta-Plays: own` on `/said`, and brain 0.6.0 then leaves the phone's answers out at the
+  computer, where they echoed. delta-live confirmed the name and the exact value `own`.
+- The QR: a new code every 100 s, inside the window's 120 s, and at once after a device pairs. No empty link reaches
+  `/link`, which refuses it. The card opens only on the user's click. `link.txt` and the line the gateway prints kept
+  the code of the start, which the first renewal made useless: `link.txt` now follows the QR, and the line says 100 s.
+- The capture scales the window to 1280×720, keeping its aspect: a window maximized after connect showed one corner.
+- The tests' WebRTC gathers loopback candidates only, without mDNS, so a test build no longer has Windows ask for a
+  firewall rule (`TestTheTestsWebRTCStaysOnLoopback`).
+
+Measured: `go vet` and `go test` pass in `remote/`, and `node --test` passes 12 tests. Each new Go test went red
+first; mutation witnesses: four for `talk.js`, two for the QR's renewal, one for `link.txt`. IX's live check, with a
+fake brain, a fake microphone and headless Chrome at phone size, passed the eleven expectations written before the
+run. IX deployed this gateway from the working tree on 2026-10-23 at 14:41, on the author's go, for a demo of the QR.
+
+## The phone after a brain restart (2026-10-23)
+
+The brain was away from 14:58 to 15:03, and afterwards the gateway had no `/said` stream to it: the phone's page no
+longer heard Delta, and the brain, with no listener sending `X-Delta-Plays: own`, played the phone's answers at the
+computer. While the brain was away the gateway answered `/said` with 503, and an EventSource gives up for good on an
+error status. Measured with headless Chrome against a stub, over 5 s: after a 503 it asked `/said` once; after a 200
+event stream holding `retry: 300` and then ending, 15 times. The gateway now answers `/said` that way, with
+`retry: 2000`, while the brain cannot be reached or refuses it, so the page asks again until the brain is back. The
+test went red first, with 503 for a stopped brain and 502 for one that refuses the secret.
+
+## The phone's sound, and its first sentence (2026-10-23)
+
+At 17:57 the user spoke from the phone and heard nothing: « Je ne t'entends pas » (utterance 71). Says 31 to 37 went
+`on_device`, so the computer kept quiet, and the phone played none of them. The page made its sound when a finger
+touched « Maintenir pour parler », but a touch that starts is not one of HTML's activation-triggering events, only a
+touch that ends is: the sound stayed suspended, and so did the microphone's worklet, which records nothing then. The
+gateway still told the brain that the page played its answers. Measured with headless Chrome under the real autoplay
+rule (`--autoplay-policy=document-user-activation-required`), a finger held 2.6 s on the button: the committed page
+stayed suspended during and after the touch, played nothing, and sent `/hear` a WAV of 44 bytes, 0.00 s; Whisper writes
+a sentence for such silence, as « Söyut, Elda. » and « RT, Ximantong. », the utterances 66 and 69 Claude answered.
+Now:
+
+- each touch that ends, or a key, starts the sound if it does not run, and the page asks for that touch, with
+  « Activer le son », as soon as it is connected;
+- a recording under 0.3 s of sound is not sent: the page says the sound is now on, and to hold again;
+- the page says it plays its answers, `/said?plays=own`, only while its sound runs, and the gateway sends the brain
+  `X-Delta-Plays: own` only then, as delta-live asked: until then the computer says them. The page opens its stream
+  again when that changes, one stream per page, where « Se reconnecter » opened a second;
+- the state line keeps its news: the frame counter wrote over it every second.
+
+The same Chrome check, two touches: before any, `/said` without the header; the first touch sends nothing and leaves
+the sound running and the stream at `plays=own`; the second records 2.61 s, and its answer plays. The header's Go test
+went red first. IX's live check (`--autoplay-policy=no-user-gesture-required`) passes its eleven expectations again.
+
+## The page on a tablet (2026-10-23)
+
+The user paired a tablet, and the page showed Delta's window small: 28 % of the height at most, as on a phone. Where
+both sides are at least 600 px, a tablet or a computer, Delta's window now takes the screen: in landscape the
+conversation is a column beside it, in portrait it goes under it, at 18 px. A touch on the window hides the
+conversation, or brings it back, and on a tablet also puts the page full screen, without the browser's bars. Measured
+in headless Chrome, with the window's 1280×720 test card: at 1280×800 the window is 880×760 and the column 384 px; at
+800×1280 the window is 784×441; at 390×844, a phone, it is 358×201, as before.
+
+## The tablet's picture after Delta's window changed (2026-10-23)
+
+Around 19:41 the tablet connected and showed « connecté à Delta » with no picture (utterances 5 and 7). Two windows titled
+« Brickyard » were open, Delta's and a scene demo IX had opened to show a new look, and the gateway's log says twice
+`2 windows "Brickyard" of scene.exe are open; the capture shows one or none`. The capture looked for the window once,
+when a device connected, and never again: the demo's window closing did not bring the picture back, nor would a new
+window from a brain started again, as each reconnection of `/mcp` does. While a device is connected the gateway now
+looks for the window every 2 s: it starts the capture once there is one window, starts it again on a new window, and
+again when ffmpeg ends; a second window beside the one it shows leaves it as it is, and the error is written once,
+not every 2 s. Each ffmpeg numbers its RTP packets from a random start, so the packets of a capture started again
+carry on from the last ones sent: a browser drops packets that seem older than the ones it has seen. The three tests,
+on a fake window and a fake ffmpeg, went red first. Still to see live: the picture coming back on the tablet after a
+`/mcp` reconnection, and how long the browser takes over the jump to the new capture.
+
+## Guests who watch from outside (2026-10-23)
+
+The user asked to try the version that goes through the tunnel: someone who is not on this network watches Delta's
+window, and does nothing else. With `-guest-host delta.guitaralchemist.com`, the gateway opens a second entry on
+127.0.0.1:8812. The tunnel « delta » (not ga-demos) carries it to that host, run by `cloudflared --config
+%LOCALAPPDATA%\delta-remote\tunnel.yml tunnel run`. The device's entry on 8810 is unchanged.
+
+The guests' entry serves the guest's page, `/join`, `/ice` and `/offer`, and nothing else: no `/hear`, no `/said`, no
+pairing.
+
+- **Inviting.** A paired device's « Inviter quelqu’un » gives a link with its code in the #fragment. The code works
+  once, within an hour, and is traded for a cookie that lasts two hours. « Couper les invités » voids every invitation
+  and cookie and closes their connections.
+- **Two at a time.** At most two guests watch beside the device. A third gets 409.
+- **Through the relay only.** A guest's connection goes through Cloudflare's TURN relay alone (`ICETransportPolicyRelay`,
+  UDP 3478 on the gateway's side), so the guest never sees this network's address. The gateway asks Cloudflare for
+  credentials that last two hours, with the key in `%LOCALAPPDATA%\delta-remote\turn.json`, read for each guest and
+  never written. The browser gets every relay address except port 53, which browsers block.
+- **The badge.** The brain is told how many guests watch at each change and every 30 s, for the badge in Delta's
+  window (delta-live's `/guests`).
+- **Kept in memory.** Invitations and cookies are kept only as SHA-256, in memory: restarting the gateway ends them
+  all.
+
+Nine tests, on loopback WebRTC and a fake brain, written after the code, not red first:
+
+- the guests' entry has nothing else;
+- an invitation works once, and an unused one dies after an hour;
+- only a paired device invites;
+- each cookie opens its own entry only;
+- each entry answers its own host only;
+- the device and two guests get the video, the third waits, and ending the guests leaves the device watching;
+- the brain hears 1, 2, then 0;
+- the relay's addresses.
+
+Still to see live:
+
+- a phone on 4G watching through the tunnel and the relay;
+- the badge in Delta's window with the real brain;
+- the delay the relay adds.
+
+## The guest's page in English and French (2026-10-24)
+
+The user asked that the page a guest opens be in English as well as French. It speaks the first of the browser's
+languages it knows, French or English, and English otherwise. Both languages carry every message on the page:
+connecting, watching, the reconnect button, and each refusal (invitation used, no valid invitation, invitation ended,
+two guests already, relay down). guest.test.js checks it with `node --test`: it went red first on the French-only page
+(`document is not defined`), as the page had no logic apart from the browser. In headless Chrome on a static copy,
+`--lang=en-US` and `de-DE` show « Refused: 404 » and « Reconnect » with `lang="en"`, and `fr-CA` shows « Refusé : 404 »
+and « Se reconnecter » with `lang="fr"`. The 404 is the static server's, which has no `/ice`. Still to see live: a
+guest's phone in English, through the tunnel.
+
+## A guest's video through the relay, and invitations that last their hour (2026-10-24)
+
+The first real guest, a friend in France, never got the video: at 13:36, then at 13:45 on a new link, the page went to
+« Connexion perdue ». At 13:36, opening the spent link again then showed « déjà servi ». The gateway logged nothing
+about guests, so it now writes each step down, without codes or addresses:
+
+- the invitation;
+- its trade;
+- the relay's addresses;
+- the candidate types each side offers;
+- each ICE state and, once connected, the types of the pair.
+
+`PION_LOG_WARN=all` and `PION_LOG_INFO=ice,turnc` add pion's own lines.
+
+**The cause.** An invitation minted from this PC and opened in headless Chrome through the tunnel failed the same way
+at 13:55. Pion's TURN client sent Cloudflare a ChannelBind toward one of the browser's relay candidates, a Cloudflare
+relay address too, and Cloudflare answered 400. Its FAQ says it refuses private and BYOIP ranges. Pion then closed the
+whole allocation, and every pair with it, including the ones that would have worked. delta-live read the same lines.
+
+**The fix.** The gateway now leaves the browser's relay candidates out of a guest's offer. Its own relay reaches the
+browser at its public address, the srflx, or the one its checks come from. Same test at 14:00: the browser offered
+1 host, 1 srflx and 10 relay candidates; the gateway kept the host and the srflx, answered with 4 relay, and got
+« ICE connected, relay here to srflx there », with the capture started for the guest.
+
+**The user's other changes:**
+- **Invitations last their hour.** An invitation now serves for its whole hour, as often as it is opened: in another
+  browser, after a reload, or by whoever the link is passed on to. It stays within two guests at a time, and
+  « Couper les invités » still voids everything.
+- **Delta's window can invite.** It does so through its own entry on 127.0.0.1:8813, which needs the brain's secret,
+  `X-Delta-Hook` and no Origin, and which the tunnel does not reach. It answers 409 while a guest watches, because the
+  guest would see the QR card.
+
+The tests (hour-long invitation, the window's entry and its 409, candidate counts, relay left out) were written with
+the code, not red first.
+
+Still to see live:
+- the friend in France watching;
+- the badge with the real brain;
+- the delay the relay adds.
+
+## Guests hear Delta, and the microphone once the window lets them (2026-10-24)
+
+Eric, the first guest, watched from France from 14:21. The user then asked, by voice, that he hear them: Delta's voice
+by default, and the user's microphone only after a switch in Delta's window, off by default and at each start. They
+chose the headset's microphone (Jabra EVOLVE 20), so that the room's speakers and Delta's own voice do not echo into it.
+
+The gateway changes:
+
+- **Delta's voice.** `/said` on the guests' entry streams the sound of each sentence Delta says, and nothing else:
+  not its text, and not what anyone said to it. The brain is asked as by a page whose sound does not run, so the
+  computer still says everything aloud. The guest's page plays each sentence after the one before it.
+- **The microphone.** With `-mic <DirectShow name>`, ffmpeg sends that microphone as Opus over RTP on loopback, into a
+  track that only guests' connections carry. Its capture runs only while a guest watches and the switch is on, and
+  starts again within 2 s if ffmpeg ends. The RTP is renumbered across captures, with a 20 ms gap.
+- **The switch.** It is `POST /guests/mic {"on": true|false}` on the window's entry, 127.0.0.1:8813, with the brain's
+  secret, and answers 204, or 404 without `-mic`. The brain hears it in `/guests`, as `{"watching": n, "mic": on}`, at
+  each change, at the gateway's start (off), and every 30 s while a guest watches.
+- **The guest's page.** It asks for the picture and the sound, shows « Activer le son » / "Turn sound on", and a touch
+  unmutes the picture's sound and starts Delta's voice: browsers play sound only after a touch.
+
+Five tests, written with the code, not red first: the guest hears only Delta's voice and the brain is not told the
+page plays; the microphone runs only with a guest and the switch; only a guest's answer carries the track; the
+capture's arguments; the 20 ms gap. ffmpeg 8 opened the Jabra microphone with these arguments for 2 s.
+
+Guests still cannot speak: a two-way call through the paired phone comes next. The user chose that during the call
+the phone sends nothing to Delta.
+
+Still to see live:
+
+- Eric hearing Delta, then the user once the switch is on;
+- the delay;
+- whether the microphone shared with Delta's own listening keeps both working.
+
 ## Known problems
 
+- A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
+  (Cloudflare refuses to relay to them), so that guest gets no video.
+- Stopping the gateway with `Stop-Process` leaves its ffmpeg running, which keeps `err.log` open and goes on
+  capturing Delta's window for nobody, seen on 2026-10-23 and ended by hand. A job object would end it with the
+  gateway.
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
   writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
   one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two
@@ -616,12 +828,10 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
   for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
 - The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
   streamed, other people's words would show too. There is no switch to turn it off yet.
-- IX's gateway makes a pairing code only when it starts, so two minutes later the card can only say that the code
-  expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user has not decided.
 - When a phone in the room hears a sentence without « Delta », the computer's copy is ignored and its caption shows,
   while the phone's copy, which needs no wake word, goes to Claude.
-- A window that starts after the gateway posted its link never gets it: the brain keeps no pairing for a new
-  connection.
+- A window that starts after the gateway posted its link waits for the next one, up to 100 s: the brain keeps no
+  pairing for a new connection.
 - The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
   second, and there is one per workspace.
 
@@ -641,6 +851,8 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
 - English for the local window and shelf commands, the triage and the compaction sentence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
+- A call from the phone with brain 0.6.0, live: the phone's answers play on the phone only, and whether the phone's
+  echo cancellation removes Delta's voice, before `/hush` is built.
 - The ring, live: whether 30 s suits, and whether talk to people in the room now reaches Claude too often.
 - The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
 - A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.

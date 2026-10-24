@@ -1,5 +1,6 @@
-# Runs every check CI runs, in its order: the plugin and the scripts, the brain, the scene. CI runs this script, so a
-# green run here is a green run there. Needs Go and the .NET 10 SDK on PATH; it names the one missing.
+# Runs every check CI runs, in its order: the plugin and the scripts, the brain, the remote, the scene. CI runs this
+# script, so a green run here is a green run there. Needs Go, Node and the .NET 10 SDK on PATH; it names the one
+# missing.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 
@@ -13,7 +14,7 @@ function Step([string]$name, [scriptblock]$body) {
     }
 }
 
-foreach ($tool in 'go', 'gofmt', 'dotnet') {
+foreach ($tool in 'go', 'gofmt', 'node', 'dotnet') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         "CHECK FAIL $tool is not on PATH"
         exit 1
@@ -25,18 +26,25 @@ Step 'plugin, marketplace and PowerShell scripts' {
     powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'check-plugin.ps1')
 }
 
-Push-Location (Join-Path $root 'brain')
-try {
-    Step 'gofmt' {
-        $unformatted = gofmt -l .
-        if ($unformatted) {
-            "gofmt lists: $unformatted (a Windows editor or script may have written CRLF)"
-            $global:LASTEXITCODE = 1
+foreach ($module in 'brain', 'remote') {
+    Push-Location (Join-Path $root $module)
+    try {
+        Step "$module gofmt" {
+            $unformatted = gofmt -l .
+            if ($unformatted) {
+                "gofmt lists: $unformatted (a Windows editor or script may have written CRLF)"
+                $global:LASTEXITCODE = 1
+            }
         }
+        Step "$module go vet" { go vet ./... }
+        Step "$module go test" { go test ./... }
     }
-    Step 'go vet' { go vet ./... }
-    Step 'go test' { go test ./... }
+    finally { Pop-Location }
 }
+
+# The phone page's logic that needs no browser: talk.test.js.
+Push-Location (Join-Path $root 'remote')
+try { Step 'remote page logic' { node --test } }
 finally { Pop-Location }
 
 Push-Location (Join-Path $root 'scene')
@@ -47,4 +55,4 @@ try {
 }
 finally { Pop-Location }
 
-'CHECK ok: plugin, brain and scene'
+'CHECK ok: plugin, brain, remote and scene'
