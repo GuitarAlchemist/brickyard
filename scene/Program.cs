@@ -757,8 +757,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 13, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 13 }], // one image each
+            MaxSets = 14, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 14 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -863,6 +863,10 @@ internal static unsafe class Stage
         Panel.Card? micButton = null;
         var micDrawn = (Off: false, Height: 0);
         (int X, int Y) MicAt() => (LanguageAt().X - Panel.PhoneSize(extent.Height) - Math.Max(6, extent.Height / 96), CardMargin());
+        // The microphone's meter along the button's bottom edge: a green bar as long as the voice is loud, from -60 dB to
+        // -10 dB, drawn from a white square (Panel.Blank).
+        var meterSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? meterTexture = null;
         void ToggleMic(bool turnOn)
         {
             if (!link.Tell($$"""{"mic":{{(turnOn ? "true" : "false")}}}"""))
@@ -1207,6 +1211,11 @@ internal static unsafe class Stage
                 guestTexture = Upload(guestBadge, guestSet, guestTexture);
             }
 
+            if (!splashing && meterTexture is null)
+            {
+                meterTexture = Upload(Panel.Blank(), meterSet, null);
+            }
+
             if (!splashing && micDrawn != (moment.MicOff, extent.Height))
             {
                 micDrawn = (moment.MicOff, extent.Height);
@@ -1388,6 +1397,22 @@ internal static unsafe class Stage
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [micSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
+                }
+
+                if (micButton is not null && meterTexture is not null && !moment.MicOff && moment.MicLevel > 0f)
+                {
+                    var loud = Math.Clamp(((20f * MathF.Log10(Math.Max(moment.MicLevel, 1e-5f))) + 60f) / 50f, 0f, 1f);
+                    var (micX, micY) = MicAt();
+                    var edge = Math.Max(2, extent.Height / 180);
+                    var length = (int)((micButton.Width - (2 * edge)) * loud);
+                    if (length > 0)
+                    {
+                        cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                        var push = new SplashPush(Rect(micX + edge, micY + micButton.Height - (2 * edge), length, edge), new SN.Vector4(0.353f, 0.863f, 0.51f, 1f));
+                        cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [meterSet], []);
+                        cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                        cb.Draw(6, 1, 0, 0);
+                    }
                 }
 
                 if (languageButton is not null && languageTexture is not null)
@@ -1591,6 +1616,7 @@ internal static unsafe class Stage
         pairingTexture?.Dispose();
         inviteTexture?.Dispose();
         invitationTexture?.Dispose();
+        meterTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();
         device.DestroyCommandPool(uploadPool, null);

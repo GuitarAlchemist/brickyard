@@ -251,6 +251,9 @@ internal static class Panel
         return new Card(rgba, width, size, []);
     }
 
+    // A white square that the window stretches and tints, such as the microphone's meter.
+    public static Card Blank() => new([.. Enumerable.Repeat((byte)255, 4 * 4 * 4)], 4, 4, []);
+
     // The card the Inviter button opens: the QR code of a link that lets guests watch the window, until when it serves
     // and whether the clipboard has it; or why there is none.
     public static Card Invitation(Link.Invite invite, DateTime until, int windowWidth, int windowHeight)

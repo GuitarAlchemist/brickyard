@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -361,6 +362,7 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int)
 		}
 	}
 	peak, count := 0.0, 0
+	meter, ticks, shown := 0.0, 0, 0.0 // the window's microphone meter, the loudest frame of every 100 ms
 	for frame := range frames {
 		if levels { // every 2 s, the loudest frame and the room's noise as the endpoint measures it
 			peak, count = max(peak, rms(frame)), count+1
@@ -369,7 +371,17 @@ func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int)
 				peak, count = 0, 0
 			}
 		}
-		if busy.Load() || (muted != nil && muted.Load()) { // deaf while Delta speaks, and while the user turned it off
+		deaf := busy.Load() || (muted != nil && muted.Load())
+		if meter, ticks = max(meter, rms(frame)), ticks+1; ticks == 5 {
+			if deaf {
+				meter = 0
+			}
+			if meter > 0 || shown > 0 {
+				s.send(map[string]any{"mic_level": math.Round(meter*1e4) / 1e4})
+			}
+			meter, ticks, shown = 0, 0, meter
+		}
+		if deaf { // while Delta speaks, and while the user turned it off
 			cut.reset()
 			if inSpeech {
 				inSpeech = false
