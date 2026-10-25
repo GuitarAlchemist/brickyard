@@ -42,6 +42,16 @@ internal static class SceneModuleGeometry
             var label = presentation.Language == "fr" ? $"v{retired.ToString(2)} retirée" : $"v{retired.ToString(2)} retired";
             Text(vertices, new(label, new(0.91f, 0.095f, 0.395f), 0.60f, new(0.6f)));
         }
+        var preparation = presentation.PreparationLines;
+        if (preparation.Length > 0)
+        {
+            Boxes.Add(vertices, new(0.82f, 1.25f, 0.35f), new(1.18f, 0.48f, 0.025f), dark);
+            for (var line = 0; line < preparation.Length; line++)
+            {
+                var width = Math.Min(1.08f, preparation[line].Length * 0.028f);
+                Text(vertices, new(preparation[line], new(0.28f + width / 2, 1.43f - 0.07f * line, 0.37f), width, new(0.84f, 0.78f, 1f)));
+            }
+        }
         return vertices.ToArray();
     }
 

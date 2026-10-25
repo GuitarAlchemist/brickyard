@@ -4,6 +4,27 @@ using System.Diagnostics;
 internal sealed record ModulePresentation(Version Version, Version? Available, string Language, string? Error, string ActiveSlot = "blue", Version? Retired = null)
 {
     public bool Validated { get; init; }
+    public IReadOnlyDictionary<string, string>? Preparation { get; init; }
+    public string[] PreparationLines
+    {
+        get
+        {
+            if (Preparation is not { } data) return [];
+            var fr = Language == "fr";
+            var known = data.TryGetValue("state", out var state) && state == "preparing";
+            var next = data.TryGetValue(fr ? "next_fr" : "next_en", out var name) ? name : (fr ? "inconnu" : "unknown");
+            var updated = data.TryGetValue("updated_utc", out var stamp) && DateTimeOffset.TryParse(stamp, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var at) ? at.UtcDateTime.ToString("HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture) : (fr ? "inconnue" : "unknown");
+            return [
+                known ? (fr ? "Gaia v1.2 en pr\u00e9paration" : "Gaia v1.2 preparing") : (fr ? "Gaia v1.2 : \u00e9tat inconnu" : "Gaia v1.2: state unknown"),
+                known ? (fr ? "Constat\u00e9 : prototype CPU" : "Verified: CPU prototype") : (fr ? "Donn\u00e9es indisponibles" : "Data unavailable"),
+                (fr ? "Prochain : " : "Next: ") + next,
+                fr ? "Avancement : inconnu" : "Progress: unknown",
+                fr ? "ETA prochaine d\u00e9mo : inconnue" : "Next demo ETA: unknown",
+                (fr ? "MAJ : " : "Updated: ") + updated
+            ];
+        }
+    }
     public string ActiveLabel => $"v{Version.ToString(2)} active - {(Language == "fr" ? (Validated ? "Valid\u00e9e" : "Valider") : (Validated ? "Validated" : "Validate"))}";
 }
 
@@ -23,6 +44,9 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
     private bool disposed;
     private long requestedAt;
     private HashSet<string>? validatedImages;
+    private Dictionary<string, string>? preparationData;
+    private string? preparationSource;
+    private int preparationRevision;
 
     public SceneModuleHost(string initialPath, string availablePath, string language,
         Func<ModuleVisual, ModulePresentation, TSurface> createSurface, Action waitForGpu)
@@ -57,6 +81,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
     public double LastPreparationMilliseconds { get; private set; }
 
     public bool IsValidated => validatedImages?.Contains(active.Sha256) == true;
+    public IReadOnlyDictionary<string, string>? Preparation => preparationData;
     public bool RequestValidation(string expectedCodeHash)
     {
         CheckThread();
@@ -71,6 +96,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         CheckThread();
         if (now < nextPoll) return;
         nextPoll = now + 1;
+        PollPreparation();
         try
         {
             var newest = File.Exists(availablePath) ? LoadedSceneModule.Probe(availablePath) : null;
@@ -132,7 +158,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         active.Update(new(language));
         var nextKey = Key(language);
         if (nextKey == key) return;
-        var next = createSurface(active.Render(), new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion) { Validated = IsValidated });
+        var next = createSurface(active.Render(), new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion) { Validated = IsValidated, Preparation = preparationData });
         CreatedSurfaces++;
         try { waitForGpu(); }
         catch { next.Dispose(); DisposedSurfaces++; throw; }
@@ -166,7 +192,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
             }
             next = LoadedSceneModule.Load(offer);
             next.Update(new(language));
-            nextSurface = createSurface(next.Render(), new(next.Version, null, language, null, nextSlot, active.Version) { Validated = validatedImages?.Contains(next.Sha256) == true });
+            nextSurface = createSurface(next.Render(), new(next.Version, null, language, null, nextSlot, active.Version) { Validated = validatedImages?.Contains(next.Sha256) == true, Preparation = preparationData });
             CreatedSurfaces++;
             prepared = Stopwatch.GetTimestamp();
             waitForGpu(); // old command buffers can still name the old native buffers until this completes
@@ -199,7 +225,42 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         return true;
     }
 
-    private string Key(string language) => $"{language}|{Available?.Sha256}|{Error}|{IsValidated}";
+    private string Key(string language) => $"{language}|{Available?.Sha256}|{Error}|{IsValidated}|{preparationRevision}";
+
+    private void PollPreparation()
+    {
+        var root = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(availablePath))!)!;
+        var path = Path.Combine(root, "preparation.json");
+        try
+        {
+            if (!File.Exists(path))
+            {
+                if (preparationData is not null) { preparationData = null; preparationSource = null; preparationRevision++; }
+                return;
+            }
+            if (new FileInfo(path).Length > 4096) throw new InvalidDataException("Preparation data exceeds its budget.");
+            var json = File.ReadAllText(path);
+            if (json == preparationSource) return;
+            var data = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            if (data is null || data.Count > 12 || !data.TryGetValue("version", out var version) || version != "1.2" ||
+                !data.TryGetValue("state", out var state) || state != "preparing") throw new InvalidDataException("Unknown preparation schema.");
+            foreach (var pair in data)
+                if (pair.Key.Length > 32 || pair.Value is null || pair.Value.Length > 128 || pair.Value.Any(char.IsControl))
+                    throw new InvalidDataException("Invalid preparation text.");
+            preparationData = data;
+            preparationSource = json;
+            preparationRevision++;
+            Console.WriteLine($"MOD gaia preparation metadata updated; version 1.2; not an activation offer; pid {Environment.ProcessId}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            if (preparationSource == "unavailable") return;
+            preparationData = new() { ["state"] = "unknown" };
+            preparationSource = "unavailable";
+            preparationRevision++;
+            Console.Error.WriteLine($"MOD gaia preparation unavailable ({e.GetType().Name}); activation unchanged");
+        }
+    }
 
     private void CheckThread()
     {

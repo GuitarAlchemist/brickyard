@@ -12,6 +12,13 @@ try
     if (args.Length != 2) throw new ArgumentException("Expected paths to the real V1 and V1.1 module assemblies.");
     var offer1 = LoadedSceneModule.Probe(args[0]);
     var offer2 = LoadedSceneModule.Probe(args[1]);
+    var preparing = new ModulePresentation(offer2.Version, null, "en", null) { Preparation = new Dictionary<string, string>
+        { ["state"] = "preparing", ["next_en"] = "Isolated Vulkan planet preview", ["next_fr"] = "Apercu Vulkan isole de la planete", ["updated_utc"] = "2026-10-25T19:00:00Z" } };
+    Check(preparing.PreparationLines.Contains("Gaia v1.2 preparing") && preparing.PreparationLines.Contains("Progress: unknown") &&
+        preparing.PreparationLines.Contains("Next demo ETA: unknown") && preparing.PreparationLines.Contains("Updated: 19:00 UTC"),
+        "the preparation card names a next increment without inventing progress or an ETA");
+    Check((preparing with { Language = "fr" }).PreparationLines.Contains("Gaia v1.2 en pr\u00e9paration") &&
+        (preparing with { Language = "fr" }).PreparationLines.Contains("Avancement : inconnu"), "the same preparation data follows French selection");
     SceneModulePicking.SelfTest(Check);
     using var inputHost = new SceneModuleHost<TestSurface>(args[0], args[1], "en", (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { });
     Check(SceneModuleInteraction.TryClick(inputHost, new(0, 0, 100, 100), 50, 25, true) is null && !inputHost.IsValidated,
@@ -127,6 +134,8 @@ try
     var retained1 = Path.Combine(retained, offer1.Sha256 + ".dll");
     var retained2 = Path.Combine(retained, offer2.Sha256 + ".dll");
     var index = Path.Combine(retained, "versions.json");
+    var preparationPath = Path.Combine(root, "preparation.json");
+    File.WriteAllText(preparationPath, "{\"version\":\"1.2\",\"state\":\"preparing\",\"next_en\":\"Isolated Vulkan planet preview\",\"updated_utc\":\"2026-10-25T19:00:00Z\"}");
     File.Copy(args[0], initial); File.Copy(args[1], available);
     File.Copy(args[0], retained1); File.Copy(args[1], retained2);
     File.WriteAllText(index, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
@@ -136,6 +145,8 @@ try
         using var roundtrip = new SceneModuleHost<TestSurface>(initial, available, "en",
             (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { });
         roundtrip.PollAvailable(1); roundtrip.RequestReplacement(); roundtrip.Advance("en");
+        Check(roundtrip.Preparation?["version"] == "1.2" && roundtrip.Version == offer2.Version,
+            "preparation metadata does not activate the future version or change the active image");
         var green = roundtrip.ContextId;
         roundtrip.PollAvailable(2);
         Check(roundtrip.Version == offer2.Version && roundtrip.Available?.Version == offer1.Version, "green offers the verified previous version without auto-reverting");
@@ -163,7 +174,7 @@ try
     }
     finally
     {
-        foreach (var file in new[] { initial, available, retained1, retained2, index }) File.Delete(file);
+        foreach (var file in new[] { initial, available, retained1, retained2, index, preparationPath }) File.Delete(file);
         Directory.Delete(Path.GetDirectoryName(initial)!); Directory.Delete(Path.GetDirectoryName(available)!); Directory.Delete(retained); Directory.Delete(root);
     }
 }
