@@ -708,7 +708,8 @@ internal static unsafe class Stage
         var hallVertices = Brickwork.Build();
         var hall = new Mesh(device, physical, hallVertices);
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
-        var gaia = new Mesh(device, physical, GaiaPresence.Build());
+        // Prepare both placards once; the existing language state selects the mesh each frame without a reload.
+        var gaia = GaiaPresence.Labels.ToDictionary(label => label, label => new Mesh(device, physical, GaiaPresence.Build(label)));
         Console.WriteLine($"SCENE geometry: hall {hallVertices.Length / 36} boxes, robot {parts.Sum(p => p.Count) / 36} boxes in {parts.Length} parts");
 
         // --shots: a frame's pixels, copied from the swapchain image into a host-visible buffer.
@@ -1411,7 +1412,7 @@ internal static unsafe class Stage
                 cb.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
                 cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
-                Draw(cb, layout, gaia, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                Draw(cb, layout, gaia[GaiaPresence.Status], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 for (var i = 0; i < parts.Length; i++)
                 {
                     Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
@@ -1700,7 +1701,10 @@ internal static unsafe class Stage
             part.Dispose();
         }
 
-        gaia.Dispose();
+        foreach (var presence in gaia.Values)
+        {
+            presence.Dispose();
+        }
         hall.Dispose();
         foreach (var texture in splashTextures)
         {

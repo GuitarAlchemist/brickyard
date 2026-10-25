@@ -4,10 +4,46 @@ using SN = System.Numerics;
 // invented connection state. The label stays offline until an authoritative connection is wired in a later change.
 internal static class GaiaPresence
 {
-    public const string Status = "Gaia — non raccordée";
+    public static readonly string[] Labels = ["Gaia — disconnected", "Gaia — non raccordée"];
 
-    public static Vertex[] Build()
+    public static string Status => Words.Say(Labels[0], Labels[1]);
+
+    public static void SelfTest(Action<bool, string> check)
     {
+        var setting = Words.Setting;
+        var language = Words.Language;
+        var link = new Link(() => 0);
+        try
+        {
+            foreach (var (code, expected) in new[]
+            {
+                ("fr", "Gaia — non raccordée"),
+                ("en", "Gaia — disconnected"),
+                ("fr", "Gaia — non raccordée"),
+                ("en+fr", "Gaia — disconnected"),
+                ("fr+en", "Gaia — non raccordée"),
+            })
+            {
+                var change = Link.Parse($$"""{"language":"{{code}}"}""", out _);
+                link.Apply(change!, 0);
+                check(Status == expected, $"Gaia's visible label follows {code} on the same scene link");
+                check(Labels.Contains(Status), $"Gaia has a prepared placard for {code}");
+            }
+        }
+        finally
+        {
+            Words.Speak(setting);
+            Words.Language = language;
+        }
+    }
+
+    public static Vertex[] Build(string status)
+    {
+        if (!Labels.Contains(status))
+        {
+            throw new ArgumentException("Gaia's placard must be one of the localized offline labels.", nameof(status));
+        }
+
         List<Vertex> vertices = [];
         var violet = new Finish(new(0.48f, 0.23f, 0.78f), Material.Enamel);
         var pale = new Finish(new(0.82f, 0.72f, 0.98f), Material.Matte);
@@ -25,7 +61,7 @@ internal static class GaiaPresence
         Boxes.Add(vertices, new(x, 0.56f, z + 0.105f), new(0.04f, 0.014f, 0.008f), new SN.Vector3(0.40f));
 
         Boxes.Add(vertices, new(x, 0.27f, z + 0.16f), new(0.86f, 0.12f, 0.025f), dark);
-        Letter(vertices, Status, new(x, 0.27f, z + 0.177f), 0.78f, pale);
+        Letter(vertices, status, new(x, 0.27f, z + 0.177f), 0.78f, pale);
         return vertices.ToArray();
     }
 
