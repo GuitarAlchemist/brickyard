@@ -12,6 +12,12 @@ try
     if (args.Length != 2) throw new ArgumentException("Expected paths to the real V1 and V1.1 module assemblies.");
     var offer1 = LoadedSceneModule.Probe(args[0]);
     var offer2 = LoadedSceneModule.Probe(args[1]);
+    SceneModulePicking.SelfTest(Check);
+    using var inputHost = new SceneModuleHost<TestSurface>(args[0], args[1], "en", (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { });
+    Check(SceneModuleInteraction.TryClick(inputHost, new(0, 0, 100, 100), 50, 25, true) is null && !inputHost.IsValidated,
+        "a simulated click cannot validate the operator's active image");
+    Check(SceneModuleInteraction.TryClick(inputHost, new(0, 0, 100, 100), 50, 25, false) == "validation" && inputHost.IsValidated,
+        "the input dispatcher validates the active image independently of an update offer");
     using var first = LoadedSceneModule.Load(offer1);
     using var second = LoadedSceneModule.Load(offer2);
     Check(first.Id == "gaia" && first.Version == new Version(1, 0, 0, 0), "V1 identity and version come from a loaded code assembly");
@@ -45,6 +51,9 @@ try
         (visual, presentation) => new TestSurface(presentation.Version, visual, lifecycle), () => lifecycle.Add("gpu-idle"));
     var oldContext = host.ContextId;
     var oldSurface = host.Surface;
+    Check(!host.IsValidated, "activation alone does not validate a code image");
+    Check(host.RequestValidation(offer1.Sha256) && host.IsValidated && host.Version == offer1.Version && host.ContextId == oldContext,
+        "explicit validation marks only the active code image without activating or replacing it");
     host.PollAvailable(1);
     host.Advance("en");
     Check(host.Available?.Version == new Version(1, 1, 0, 0) && host.Version == new Version(1, 0, 0, 0) && host.ContextId == oldContext,
@@ -54,6 +63,12 @@ try
     lifecycle.Clear();
     host.Advance("en");
     Check(host.Version == new Version(1, 1, 0, 0) && host.ContextId != oldContext, "the queued click swaps executable code at the next frame boundary");
+    Check(!host.IsValidated, "activating another image does not inherit the previous image's validation");
+    Check(!host.RequestValidation(offer1.Sha256) && !host.IsValidated, "an inactive image cannot be validated through a stale request");
+    Check(new ModulePresentation(offer2.Version, null, "fr", null).ActiveLabel == "v1.1 active - Valider" &&
+        (new ModulePresentation(offer2.Version, null, "fr", null) { Validated = true }).ActiveLabel == "v1.1 active - Valid\u00e9e" &&
+        (new ModulePresentation(offer2.Version, null, "en", null) { Validated = true }).ActiveLabel == "v1.1 active - Validated",
+        "validation and activation are explicitly distinct in French and English");
     Check(host.ActiveSlot == "green" && host.RetiredVersion == new Version(1, 0, 0, 0), "fixed blue/green slots change roles without claiming a second active module");
     Check(host.LastRequestTimestamp > 0 && host.LastSwapMilliseconds >= host.LastPreparationMilliseconds && host.LastPreparationMilliseconds >= 0,
         "click-to-active and preparation durations use monotonic timestamps");
@@ -125,12 +140,19 @@ try
         roundtrip.PollAvailable(2);
         Check(roundtrip.Version == offer2.Version && roundtrip.Available?.Version == offer1.Version, "green offers the verified previous version without auto-reverting");
         Check(roundtrip.RequestReplacement(), "the previous-version action is explicitly clicked");
+        Check(!roundtrip.IsValidated && !roundtrip.RequestValidation(offer2.Sha256), "validation refuses a pending replacement");
         roundtrip.Advance("fr");
         Check(roundtrip.Version == offer1.Version && roundtrip.ActiveSlot == "blue" && roundtrip.ContextId != green && roundtrip.Surface.Visual.Boxes.Count == originalBoxes,
             "revert reloads actual V1 code and geometry into blue on the same host");
         roundtrip.PollAvailable(3); roundtrip.RequestReplacement(); roundtrip.Advance("en");
         Check(roundtrip.Version == offer2.Version && roundtrip.ActiveSlot == "green", "the same host can reswap from V1 blue to V1.1 green");
-        roundtrip.PollAvailable(4);
+        Check(roundtrip.RequestValidation(offer2.Sha256) && roundtrip.IsValidated && !roundtrip.RequestValidation(offer2.Sha256),
+            "the active image is explicitly validated once without changing activation");
+        roundtrip.PollAvailable(4); roundtrip.RequestReplacement(); roundtrip.Advance("fr");
+        Check(!roundtrip.IsValidated && roundtrip.Version == offer1.Version, "rollback does not transfer validation to a different image");
+        roundtrip.PollAvailable(5); roundtrip.RequestReplacement(); roundtrip.Advance("en");
+        Check(roundtrip.IsValidated && roundtrip.Version == offer2.Version, "validation follows the exact code image across rollback and reswap");
+        roundtrip.PollAvailable(6);
         var protectedRevert = roundtrip.Surface;
         var protectedCode = roundtrip.ContextId;
         roundtrip.RequestReplacement();

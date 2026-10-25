@@ -1133,9 +1133,10 @@ internal static unsafe class Stage
 
         bool TryModuleClick(double x, double y, bool simulated)
         {
-            if (shelf.Open || pairingShown || invitationShown || notesShown || gaiaModule is not { Available: not null } module || gaiaPick is not { } target || !target.Contains(x, y)) return false;
-            if (!module.RequestReplacement()) return false;
-            Console.WriteLine($"MODULE gaia update requested by {(simulated ? "simulated-demo-test" : "human-mouse")} click: v{module.Version.ToString(2)} -> v{module.Available!.Version.ToString(2)}");
+            if (shelf.Open || pairingShown || invitationShown || notesShown || gaiaModule is not { } module || gaiaPick is not { } target) return false;
+            var action = SceneModuleInteraction.TryClick(module, target, x, y, simulated);
+            if (action is null) return false;
+            Console.WriteLine($"MODULE gaia {action} requested by {(simulated ? "simulated-demo-test" : "human-mouse")} click: v{module.Version.ToString(2)}; sha256 {module.CodeHash}");
             return true;
         }
 
@@ -1253,7 +1254,7 @@ internal static unsafe class Stage
             var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(0.75f, extent.Width / (float)extent.Height, 0.1f, 40f);
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, new SN.Vector3(0f, 0.7f, 0f), SN.Vector3.UnitY) * projection;
-            gaiaPick = !splashing && gaiaModule?.Available is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
+            gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
 

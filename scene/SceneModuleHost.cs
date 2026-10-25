@@ -1,7 +1,11 @@
 using Delta.SceneModules;
 using System.Diagnostics;
 
-internal sealed record ModulePresentation(Version Version, Version? Available, string Language, string? Error, string ActiveSlot = "blue", Version? Retired = null);
+internal sealed record ModulePresentation(Version Version, Version? Available, string Language, string? Error, string ActiveSlot = "blue", Version? Retired = null)
+{
+    public bool Validated { get; init; }
+    public string ActiveLabel => $"v{Version.ToString(2)} active - {(Language == "fr" ? (Validated ? "Valid\u00e9e" : "Valider") : (Validated ? "Validated" : "Validate"))}";
+}
 
 // One trusted local code module, owned by the render thread. A click queues an exact, hashed offer; only Advance
 // may install it at a frame boundary. The resource port is the Vulkan boundary, exercised without a GPU in tests.
@@ -18,6 +22,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
     private double nextPoll;
     private bool disposed;
     private long requestedAt;
+    private HashSet<string>? validatedImages;
 
     public SceneModuleHost(string initialPath, string availablePath, string language,
         Func<ModuleVisual, ModulePresentation, TSurface> createSurface, Action waitForGpu)
@@ -50,6 +55,16 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
     public long LastRequestTimestamp { get; private set; }
     public double LastSwapMilliseconds { get; private set; }
     public double LastPreparationMilliseconds { get; private set; }
+
+    public bool IsValidated => validatedImages?.Contains(active.Sha256) == true;
+    public bool RequestValidation(string expectedCodeHash)
+    {
+        CheckThread();
+        if (requested is not null || expectedCodeHash != active.Sha256 || IsValidated) return false;
+        (validatedImages ??= new(StringComparer.Ordinal)).Add(active.Sha256);
+        Console.WriteLine($"MODULE gaia validation recorded: v{active.Version.ToString(2)}; sha256 {active.Sha256}; pid {Environment.ProcessId}; utc {DateTimeOffset.UtcNow:O}");
+        return true;
+    }
 
     public void PollAvailable(double now)
     {
@@ -117,7 +132,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         active.Update(new(language));
         var nextKey = Key(language);
         if (nextKey == key) return;
-        var next = createSurface(active.Render(), new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion));
+        var next = createSurface(active.Render(), new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion) { Validated = IsValidated });
         CreatedSurfaces++;
         try { waitForGpu(); }
         catch { next.Dispose(); DisposedSurfaces++; throw; }
@@ -151,7 +166,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
             }
             next = LoadedSceneModule.Load(offer);
             next.Update(new(language));
-            nextSurface = createSurface(next.Render(), new(next.Version, null, language, null, nextSlot, active.Version));
+            nextSurface = createSurface(next.Render(), new(next.Version, null, language, null, nextSlot, active.Version) { Validated = validatedImages?.Contains(next.Sha256) == true });
             CreatedSurfaces++;
             prepared = Stopwatch.GetTimestamp();
             waitForGpu(); // old command buffers can still name the old native buffers until this completes
@@ -184,7 +199,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         return true;
     }
 
-    private string Key(string language) => $"{language}|{Available?.Sha256}|{Error}";
+    private string Key(string language) => $"{language}|{Available?.Sha256}|{Error}|{IsValidated}";
 
     private void CheckThread()
     {

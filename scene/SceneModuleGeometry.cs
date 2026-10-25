@@ -21,7 +21,7 @@ internal static class SceneModuleGeometry
         var blue = new SN.Vector3(0.2f, 0.55f, 1f);
         var green = new SN.Vector3(0.2f, 0.9f, 0.4f);
         Boxes.Add(vertices, new(0.49f, 0.166f, 0.37f), new(0.025f), presentation.ActiveSlot == "blue" ? blue : green);
-        Text(vertices, new($"Gaia v{presentation.Version.ToString(2)} · active", new(0.90f, 0.166f, 0.368f), 0.73f, new(0.84f, 0.76f, 1f)));
+        Text(vertices, new(presentation.ActiveLabel, new(0.90f, 0.166f, 0.368f), 0.73f, new(0.84f, 0.76f, 1f)));
         if (presentation.Available is { } available)
         {
             Boxes.Add(vertices, new(0.88f, 0.095f, 0.375f), new(0.98f, 0.06f, 0.025f), dark);
@@ -54,44 +54,4 @@ internal static class SceneModuleGeometry
 
     private static bool Point(SN.Vector3 p) => float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z) && Math.Abs(p.X) < 16 && Math.Abs(p.Y) < 16 && Math.Abs(p.Z) < 16;
     private static bool Color(SN.Vector3 p) => Point(p) && p.X is >= 0 and <= 1 && p.Y is >= 0 and <= 1 && p.Z is >= 0 and <= 1;
-}
-
-internal readonly record struct ModulePickRect(float Left, float Top, float Right, float Bottom)
-{
-    public bool Contains(double x, double y) => x >= Left && x <= Right && y >= Top && y <= Bottom;
-}
-
-internal static class SceneModulePicking
-{
-    public static void SelfTest(Action<bool, string> check)
-    {
-        var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(0.75f, 1280f / 720f, 0.1f, 40f);
-        projection.M22 *= -1;
-        var vp = SN.Matrix4x4.CreateLookAt(new(0, 1.08f, 2.55f), new(0, 0.7f, 0), SN.Vector3.UnitY) * projection;
-        var rect = VersionRect(vp, 1280, 720);
-        check(rect is { } small && small.Contains(990, 600) && !small.Contains(20, 20), "the actual 3D version plaque projects to its clickable screen area");
-        check(VersionRect(vp, 2560, 1440) is { } large && large.Contains(1980, 1200), "module picking follows the existing window/framebuffer resize scale");
-        check(VersionRect(default, 1280, 720) is null && VersionRect(vp, 0, 720) is null, "an invalid projection cannot request a module replacement");
-    }
-
-    // The clickable version plaque is in the world, so project its bounds through the actual, moving camera.
-    public static ModulePickRect? VersionRect(SN.Matrix4x4 viewProjection, int width, int height)
-    {
-        if (width <= 0 || height <= 0) return null;
-        var left = float.PositiveInfinity;
-        var top = float.PositiveInfinity;
-        var right = float.NegativeInfinity;
-        var bottom = float.NegativeInfinity;
-        for (var i = 0; i < 8; i++)
-        {
-            var p = SN.Vector4.Transform(new SN.Vector4((i & 1) == 0 ? 0.38f : 1.38f, (i & 2) == 0 ? 0.06f : 0.21f, (i & 4) == 0 ? 0.33f : 0.41f, 1f), viewProjection);
-            if (!float.IsFinite(p.W) || p.W <= 0) return null;
-            var x = (p.X / p.W + 1f) * width * 0.5f;
-            var y = (p.Y / p.W + 1f) * height * 0.5f;
-            left = Math.Min(left, x); right = Math.Max(right, x);
-            top = Math.Min(top, y); bottom = Math.Max(bottom, y);
-        }
-        if (!float.IsFinite(left) || !float.IsFinite(top) || !float.IsFinite(right) || !float.IsFinite(bottom)) return null;
-        return new(left, top, right, bottom);
-    }
 }

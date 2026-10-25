@@ -9,5 +9,6 @@
     <ProjectReference Include="../module-contracts/SceneModules.Contracts.csproj" />
     <Compile Include="../scene/SceneModuleRuntime.cs" Link="SceneModuleRuntime.cs" />
     <Compile Include="../scene/SceneModuleHost.cs" Link="SceneModuleHost.cs" />
+    <Compile Include="../scene/SceneModuleInput.cs" Link="SceneModuleInput.cs" />
   </ItemGroup>
 </Project>
