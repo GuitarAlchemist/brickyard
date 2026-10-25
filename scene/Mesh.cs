@@ -10,6 +10,8 @@ internal sealed unsafe class Mesh : IDisposable
     private readonly Device device;
     private readonly VkDeviceMemory memory;
     private bool disposed;
+    private static int liveCount;
+    public static int LiveCount => Volatile.Read(ref liveCount);
 
     public Mesh(Device device, PhysicalDevice physical, Vertex[] vertices)
     {
@@ -22,11 +24,23 @@ internal sealed unsafe class Mesh : IDisposable
             Usage = VkBufferUsageFlags.VertexBufferBit,
             SharingMode = VkSharingMode.Exclusive,
         }, null);
-        memory = device.AllocateMemory(physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
-        device.BindBufferMemory(Buffer, memory, memoryOffset: ByteSize.Zero);
-        var mapped = device.MapMemory<Vertex>(new MapInfo(memory) { Region = new MapRegion { Size = size } });
-        vertices.AsSpan().CopyTo(new Span<Vertex>((Vertex*)mapped, vertices.Length));
-        device.UnmapMemory(memory);
+        var allocated = false;
+        try
+        {
+            memory = device.AllocateMemory(physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
+            allocated = true;
+            device.BindBufferMemory(Buffer, memory, memoryOffset: ByteSize.Zero);
+            var mapped = device.MapMemory<Vertex>(new MapInfo(memory) { Region = new MapRegion { Size = size } });
+            try { vertices.AsSpan().CopyTo(new Span<Vertex>((Vertex*)mapped, vertices.Length)); }
+            finally { device.UnmapMemory(memory); }
+        }
+        catch
+        {
+            device.DestroyBuffer(Buffer, null);
+            if (allocated) device.FreeMemory(memory, null);
+            throw;
+        }
+        Interlocked.Increment(ref liveCount);
     }
 
     public VkBuffer Buffer { get; }
@@ -42,6 +56,7 @@ internal sealed unsafe class Mesh : IDisposable
 
         device.DestroyBuffer(Buffer, null);
         device.FreeMemory(memory, null);
+        Interlocked.Decrement(ref liveCount);
         disposed = true;
     }
 }

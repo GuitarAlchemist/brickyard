@@ -283,6 +283,7 @@ internal static unsafe class Stage
         var clock = Stopwatch.StartNew();
         var limit = double.TryParse(Option(args, "--seconds"), out var seconds) ? seconds : double.PositiveInfinity;
         var demo = args.Contains("--demo");
+        var moduleClickTest = args.Contains("--module-click-test");
         var hidden = args.Contains("--hidden");
         var vsync = !args.Contains("--immediate");
         var cap = int.TryParse(Option(args, "--cap"), out var capValue) ? capValue : hidden ? 60 : 0;
@@ -295,10 +296,20 @@ internal static unsafe class Stage
         }
 
         var shotsDir = Option(args, "--shots");
+        if (moduleClickTest && (!demo || shotsDir is null))
+        {
+            Console.Error.WriteLine("SCENE refused: --module-click-test requires --demo and --shots; never allowed on the live listener");
+            return 2;
+        }
         var shelfAtStart = Option(args, "--shelf");
         Words.Speak(Option(args, "--lang") ?? "en");
         const double S = Splash.Seconds;
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
+        if (moduleClickTest) shots = [(S + 1.0, "module-v1"), (S + 4.0, "module-v11")];
+        var moduleTestClicked = false;
+        var moduleTestCollected = false;
+        var moduleTestGcChecked = false;
+        var moduleTestSawSwap = false;
         if (shots.Length > 0 && !demo)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
@@ -708,8 +719,23 @@ internal static unsafe class Stage
         var hallVertices = Brickwork.Build();
         var hall = new Mesh(device, physical, hallVertices);
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
-        // Prepare both placards once; the existing language state selects the mesh each frame without a reload.
-        var gaia = GaiaPresence.Labels.ToDictionary(label => label, label => new Mesh(device, physical, GaiaPresence.Build(label)));
+        var moduleRoot = Option(args, "--module-dir") ?? Path.Combine(AppContext.BaseDirectory, "modules", "gaia");
+        SceneModuleHost<Mesh>? gaiaModule = null;
+        Dictionary<string, Mesh>? gaiaFallback = null;
+        try
+        {
+            gaiaModule = new SceneModuleHost<Mesh>(Path.Combine(moduleRoot, "initial", "GaiaPresence.Module.dll"),
+                Path.Combine(moduleRoot, "available", "GaiaPresence.Module.dll"), Words.Language,
+                (visual, presentation) => new Mesh(device, physical, SceneModuleGeometry.Compile(visual, presentation)), () => device.WaitIdle());
+            Console.WriteLine($"MODULE gaia loaded code v{gaiaModule.Version.ToString(2)}; pid {Environment.ProcessId}; sha256 {gaiaModule.CodeHash}");
+        }
+        catch (Exception error)
+        {
+            gaiaFallback = GaiaPresence.Labels.ToDictionary(label => label, label => new Mesh(device, physical, GaiaPresence.Build(label)));
+            Console.Error.WriteLine($"MODULE gaia unavailable ({error.GetType().Name}); keeping built-in offline presence, no external module version claimed");
+        }
+        ModulePickRect? gaiaPick = null;
+        var modulePresentedVersion = gaiaModule?.Version;
         Console.WriteLine($"SCENE geometry: hall {hallVertices.Length / 36} boxes, robot {parts.Sum(p => p.Count) / 36} boxes in {parts.Length} parts");
 
         // --shots: a frame's pixels, copied from the swapchain image into a host-visible buffer.
@@ -1105,6 +1131,14 @@ internal static unsafe class Stage
             return x >= corner.X && x < corner.X + width && y >= corner.Y && y < corner.Y + height;
         }
 
+        bool TryModuleClick(double x, double y, bool simulated)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || gaiaModule is not { Available: not null } module || gaiaPick is not { } target || !target.Contains(x, y)) return false;
+            if (!module.RequestReplacement()) return false;
+            Console.WriteLine($"MODULE gaia update requested by {(simulated ? "simulated-demo-test" : "human-mouse")} click: v{module.Version.ToString(2)} -> v{module.Available!.Version.ToString(2)}");
+            return true;
+        }
+
         window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
             var icon = Panel.PhoneSize(extent.Height);
@@ -1147,6 +1181,10 @@ internal static unsafe class Stage
                 var at = clock.Elapsed.TotalSeconds;
                 shelf.Select(at, row);
                 shelf.Enter(at);
+            }
+            else if (action == GlfwButtonAction.Press && button == 0)
+            {
+                TryModuleClick(w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height), false);
             }
         });
         window.OnScroll += (w, offset) => Guard("a scroll", () =>
@@ -1215,6 +1253,9 @@ internal static unsafe class Stage
             var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(0.75f, extent.Width / (float)extent.Height, 0.1f, 40f);
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, new SN.Vector3(0f, 0.7f, 0f), SN.Vector3.UnitY) * projection;
+            gaiaPick = !splashing && gaiaModule?.Available is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
+            if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
+                moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
 
             // A window hidden by the clock or minimised draws nothing; one whose size changed gets a new swapchain first.
             if (placement.Hidden || window.IsIconified)
@@ -1359,6 +1400,11 @@ internal static unsafe class Stage
 
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
+            Guard("Gaia module frame", () =>
+            {
+                gaiaModule?.PollAvailable(now);
+                gaiaModule?.Advance(Words.Language);
+            });
             VkResult result;
             int imageIndex;
             try
@@ -1412,7 +1458,8 @@ internal static unsafe class Stage
                 cb.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
                 cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
-                Draw(cb, layout, gaia[GaiaPresence.Status], new Push(SN.Matrix4x4.Identity, viewProj, default));
+                if (gaiaModule is not null) Draw(cb, layout, gaiaModule.Surface, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                else if (gaiaFallback is not null) Draw(cb, layout, gaiaFallback[GaiaPresence.Status], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 for (var i = 0; i < parts.Length; i++)
                 {
                     Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
@@ -1622,6 +1669,20 @@ internal static unsafe class Stage
             }
 
             var presented = clock.Elapsed.TotalSeconds;
+            if (result == VkResult.Success && !splashing && gaiaModule is not null && gaiaModule.Version != modulePresentedVersion)
+            {
+                modulePresentedVersion = gaiaModule.Version;
+                moduleTestSawSwap = true;
+                if (gaiaModule.LastRequestTimestamp > 0)
+                    Console.WriteLine($"MODULE gaia v{gaiaModule.Version.ToString(2)} first presentation submitted after click {Stopwatch.GetElapsedTime(gaiaModule.LastRequestTimestamp).TotalMilliseconds:F2} ms (monotonic, not display scanout); native mesh buffers live {Mesh.LiveCount}; pid {Environment.ProcessId}");
+            }
+            if (moduleClickTest && !moduleTestGcChecked && linkNow >= 3.5 && gaiaModule?.LastRetiredCode is { } retiredCode)
+            {
+                moduleTestGcChecked = true;
+                for (var attempt = 0; attempt < 3 && retiredCode.IsAlive; attempt++) { GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); }
+                moduleTestCollected = !retiredCode.IsAlive;
+                Console.WriteLine($"MODULE demo-test retired code context collected {moduleTestCollected}; native mesh buffers live {Mesh.LiveCount}; pid {Environment.ProcessId}");
+            }
             if (firstFrame < 0)
             {
                 firstFrame = presented;
@@ -1701,11 +1762,13 @@ internal static unsafe class Stage
             part.Dispose();
         }
 
-        foreach (var presence in gaia.Values)
+        gaiaModule?.Dispose();
+        foreach (var presence in gaiaFallback?.Values ?? Enumerable.Empty<Mesh>())
         {
             presence.Dispose();
         }
         hall.Dispose();
+        Console.WriteLine($"SCENE native mesh buffers remaining after disposal {Mesh.LiveCount}");
         foreach (var texture in splashTextures)
         {
             texture.Dispose();
@@ -1763,7 +1826,7 @@ internal static unsafe class Stage
             Closed(port, true);
         }
 
-        return 0;
+        return moduleClickTest && (!moduleTestClicked || !moduleTestSawSwap || !moduleTestCollected || Mesh.LiveCount != 0) ? 1 : 0;
     }
 
     // %LOCALAPPDATA%\delta\scene-<port>.closed says that the user closed the window listening on that port, so that a

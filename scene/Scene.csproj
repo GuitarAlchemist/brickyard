@@ -14,6 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\module-contracts\SceneModules.Contracts.csproj" />
     <PackageReference Include="Ahwoo.Brutal.Core" Version="[2026.10.1]" />
     <PackageReference Include="Ahwoo.Brutal.Glfw" Version="[2026.10.4]" />
     <PackageReference Include="Ahwoo.Brutal.Vulkan" Version="[2026.10.2]" />
