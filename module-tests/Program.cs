@@ -30,11 +30,13 @@ try
     try { using var invalid = LoadedSceneModule.Load(offer2 with { Sha256 = new string('0', 64) }); }
     catch (InvalidDataException) { rejected = true; }
     Check(rejected && first.Render().Boxes.Count == originalBoxes, "changed candidate image is rejected and the old module remains usable");
-    var retired = first.ContextReference;
     first.Dispose();
     var disposed = false;
     try { first.Render(); } catch (ObjectDisposedException) { disposed = true; }
     Check(disposed, "a retired module cannot execute again");
+    // Keep the collection assertion outside the frame that executed the plugin: Debug JIT temporaries
+    // may remain GC roots until that frame returns, even after an explicit Dispose/Unload.
+    var retired = RetireCode(offer1);
     for (var i = 0; i < 3 && retired.IsAlive; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); }
     Check(!retired.IsAlive, "the retired code load context is actually collectible");
 
@@ -99,6 +101,49 @@ try
     failFence = false;
     Check(fenceFailure.Version == new Version(1, 0, 0, 0) && ReferenceEquals(protectedFence, fenceFailure.Surface) && !protectedFence.Disposed && staged is { Disposed: true },
         "a failed GPU fence disposes only the unused candidate resources");
+
+    var root = Path.Combine(Path.GetTempPath(), $"gaia-revert-{Guid.NewGuid():N}");
+    var initial = Path.Combine(root, "initial", "GaiaPresence.Module.dll");
+    var available = Path.Combine(root, "available", "GaiaPresence.Module.dll");
+    var retained = Path.Combine(root, "retained");
+    Directory.CreateDirectory(Path.GetDirectoryName(initial)!);
+    Directory.CreateDirectory(Path.GetDirectoryName(available)!);
+    Directory.CreateDirectory(retained);
+    var retained1 = Path.Combine(retained, offer1.Sha256 + ".dll");
+    var retained2 = Path.Combine(retained, offer2.Sha256 + ".dll");
+    var index = Path.Combine(retained, "versions.json");
+    File.Copy(args[0], initial); File.Copy(args[1], available);
+    File.Copy(args[0], retained1); File.Copy(args[1], retained2);
+    File.WriteAllText(index, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
+        { [offer1.Version.ToString()] = offer1.Sha256, [offer2.Version.ToString()] = offer2.Sha256 }));
+    try
+    {
+        using var roundtrip = new SceneModuleHost<TestSurface>(initial, available, "en",
+            (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { });
+        roundtrip.PollAvailable(1); roundtrip.RequestReplacement(); roundtrip.Advance("en");
+        var green = roundtrip.ContextId;
+        roundtrip.PollAvailable(2);
+        Check(roundtrip.Version == offer2.Version && roundtrip.Available?.Version == offer1.Version, "green offers the verified previous version without auto-reverting");
+        Check(roundtrip.RequestReplacement(), "the previous-version action is explicitly clicked");
+        roundtrip.Advance("fr");
+        Check(roundtrip.Version == offer1.Version && roundtrip.ActiveSlot == "blue" && roundtrip.ContextId != green && roundtrip.Surface.Visual.Boxes.Count == originalBoxes,
+            "revert reloads actual V1 code and geometry into blue on the same host");
+        roundtrip.PollAvailable(3); roundtrip.RequestReplacement(); roundtrip.Advance("en");
+        Check(roundtrip.Version == offer2.Version && roundtrip.ActiveSlot == "green", "the same host can reswap from V1 blue to V1.1 green");
+        roundtrip.PollAvailable(4);
+        var protectedRevert = roundtrip.Surface;
+        var protectedCode = roundtrip.ContextId;
+        roundtrip.RequestReplacement();
+        File.WriteAllBytes(retained1, new byte[16]);
+        roundtrip.Advance("en");
+        Check(roundtrip.Version == offer2.Version && roundtrip.ContextId == protectedCode && ReferenceEquals(roundtrip.Surface, protectedRevert) && !protectedRevert.Disposed,
+            "a corrupted retained DLL cannot replace the current green code or resources");
+    }
+    finally
+    {
+        foreach (var file in new[] { initial, available, retained1, retained2, index }) File.Delete(file);
+        Directory.Delete(Path.GetDirectoryName(initial)!); Directory.Delete(Path.GetDirectoryName(available)!); Directory.Delete(retained); Directory.Delete(root);
+    }
 }
 catch (Exception error)
 {
@@ -106,6 +151,15 @@ catch (Exception error)
 }
 
 return failures == 0 ? 0 : 1;
+
+[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+static WeakReference RetireCode(ModuleOffer offer)
+{
+    using var module = LoadedSceneModule.Load(offer);
+    module.Update(new("en"));
+    _ = module.Render();
+    return module.ContextReference;
+}
 
 sealed class TestSurface(Version version, ModuleVisual visual, List<string> trace) : IDisposable
 {

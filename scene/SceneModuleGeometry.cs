@@ -26,7 +26,9 @@ internal static class SceneModuleGeometry
         {
             Boxes.Add(vertices, new(0.88f, 0.095f, 0.375f), new(0.98f, 0.06f, 0.025f), dark);
             Boxes.Add(vertices, new(0.43f, 0.095f, 0.395f), new(0.022f), presentation.ActiveSlot == "blue" ? green : blue);
-            var label = presentation.Language == "fr" ? $"v{available.ToString(2)} candidate — cliquer" : $"v{available.ToString(2)} candidate — click";
+            var label = available < presentation.Version
+                ? (presentation.Language == "fr" ? $"Revenir à v{available.ToString(2)}" : $"Revert to v{available.ToString(2)}")
+                : (presentation.Language == "fr" ? $"Gaia v{available.ToString(2)} disponible" : $"Gaia v{available.ToString(2)} available");
             Text(vertices, new(label, new(0.91f, 0.095f, 0.395f), 0.86f, new(1f, 0.76f, 0.35f)));
         }
         else if (presentation.Error is not null)
