@@ -12,10 +12,23 @@ try
     if (args.Length != 2) throw new ArgumentException("Expected paths to the real V1 and V1.1 module assemblies.");
     var offer1 = LoadedSceneModule.Probe(args[0]);
     var offer2 = LoadedSceneModule.Probe(args[1]);
+    foreach (var (utc, expected) in new[] {
+        ("2026-10-24T19:00:00Z", "Ottawa 15:00 EDT | Paris 21:00 CEST"),
+        ("2026-10-25T00:30:00Z", "Ottawa 20:30 EDT | Paris 02:30 CEST"),
+        ("2026-10-25T01:30:00Z", "Ottawa 21:30 EDT | Paris 02:30 CET"),
+        ("2026-10-25T19:00:00Z", "Ottawa 15:00 EDT | Paris 20:00 CET"),
+        ("2026-11-01T05:30:00Z", "Ottawa 01:30 EDT | Paris 06:30 CET"),
+        ("2026-11-01T06:30:00Z", "Ottawa 01:30 EST | Paris 07:30 CET"),
+        ("2026-03-08T12:00:00Z", "Ottawa 08:00 EDT | Paris 13:00 CET"),
+        ("2026-03-29T01:30:00Z", "Ottawa 21:30 EDT | Paris 03:30 CEST") })
+        Check(ModTimeZones.Format(DateTimeOffset.Parse(utc)).Clocks == expected, $"Ottawa and Paris apply their own DST rules at {utc}");
+    Check(ModTimeZones.Format(DateTimeOffset.Parse("2026-10-25T00:30:00Z")).Dates == "Ottawa 2026-10-24 | Paris 2026-10-25" &&
+        ModTimeZones.Format(DateTimeOffset.Parse("2026-10-25T19:00:00Z")).Dates is null,
+        "different local days are explicit while same-day clocks stay compact");
     var preparing = new ModulePresentation(offer2.Version, null, "en", null) { Preparation = new Dictionary<string, string>
         { ["state"] = "preparing", ["next_en"] = "Isolated Vulkan planet preview", ["next_fr"] = "Apercu Vulkan isole de la planete", ["updated_utc"] = "2026-10-25T19:00:00Z" } };
     Check(preparing.PreparationLines.Contains("Gaia v1.2 preparing") && preparing.PreparationLines.Contains("Progress: unknown") &&
-        preparing.PreparationLines.Contains("Next demo ETA: unknown") && preparing.PreparationLines.Contains("Updated: 19:00 UTC"),
+        preparing.PreparationLines.Contains("Next demo ETA: unknown") && preparing.PreparationLines.Contains("Updated: Ottawa 15:00 EDT | Paris 20:00 CET"),
         "the preparation card names a next increment without inventing progress or an ETA");
     Check((preparing with { Language = "fr" }).PreparationLines.Contains("Gaia v1.2 en pr\u00e9paration") &&
         (preparing with { Language = "fr" }).PreparationLines.Contains("Avancement : inconnu"), "the same preparation data follows French selection");

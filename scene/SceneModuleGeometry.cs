@@ -45,7 +45,8 @@ internal static class SceneModuleGeometry
         var preparation = presentation.PreparationLines;
         if (preparation.Length > 0)
         {
-            Boxes.Add(vertices, new(0.82f, 1.25f, 0.35f), new(1.18f, 0.48f, 0.025f), dark);
+            var height = 0.48f + Math.Max(0, preparation.Length - 6) * 0.07f;
+            Boxes.Add(vertices, new(0.82f, 1.49f - height / 2, 0.35f), new(1.18f, height, 0.025f), dark);
             for (var line = 0; line < preparation.Length; line++)
             {
                 var width = Math.Min(1.08f, preparation[line].Length * 0.028f);

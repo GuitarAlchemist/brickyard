@@ -1,6 +1,36 @@
 using Delta.SceneModules;
 using System.Diagnostics;
 
+internal static class ModTimeZones
+{
+    public static (string Clocks, string? Dates) Format(DateTimeOffset instant)
+    {
+        try
+        {
+            var torontoZone = Resolve("America/Toronto", "Eastern Standard Time");
+            var parisZone = Resolve("Europe/Paris", "Romance Standard Time");
+            var toronto = TimeZoneInfo.ConvertTime(instant, torontoZone);
+            var paris = TimeZoneInfo.ConvertTime(instant, parisZone);
+            var torontoName = torontoZone.IsDaylightSavingTime(instant) ? "EDT" : "EST";
+            var parisName = parisZone.IsDaylightSavingTime(instant) ? "CEST" : "CET";
+            var clocks = $"Ottawa {toronto:HH:mm} {torontoName} | Paris {paris:HH:mm} {parisName}";
+            var dates = toronto.Date != paris.Date ? $"Ottawa {toronto:yyyy-MM-dd} | Paris {paris:yyyy-MM-dd}" : null;
+            return (clocks, dates);
+        }
+        catch (Exception error) when (error is TimeZoneNotFoundException or InvalidTimeZoneException or System.Security.SecurityException)
+        {
+            return ("Ottawa ? | Paris ?", null);
+        }
+    }
+
+    private static TimeZoneInfo Resolve(string iana, string windows)
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById(iana); }
+        // The renderer uses invariant globalization; Windows then needs its rule-based ID.
+        catch (TimeZoneNotFoundException) when (OperatingSystem.IsWindows()) { return TimeZoneInfo.FindSystemTimeZoneById(windows); }
+    }
+}
+
 internal sealed record ModulePresentation(Version Version, Version? Available, string Language, string? Error, string ActiveSlot = "blue", Version? Retired = null)
 {
     public bool Validated { get; init; }
@@ -14,15 +44,16 @@ internal sealed record ModulePresentation(Version Version, Version? Available, s
             var known = data.TryGetValue("state", out var state) && state == "preparing";
             var next = data.TryGetValue(fr ? "next_fr" : "next_en", out var name) ? name : (fr ? "inconnu" : "unknown");
             var updated = data.TryGetValue("updated_utc", out var stamp) && DateTimeOffset.TryParse(stamp, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.RoundtripKind, out var at) ? at.UtcDateTime.ToString("HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture) : (fr ? "inconnue" : "unknown");
-            return [
+                System.Globalization.DateTimeStyles.RoundtripKind, out var at) ? ModTimeZones.Format(at) : (Clocks: fr ? "inconnue" : "unknown", Dates: (string?)null);
+            string[] lines = [
                 known ? (fr ? "Gaia v1.2 en pr\u00e9paration" : "Gaia v1.2 preparing") : (fr ? "Gaia v1.2 : \u00e9tat inconnu" : "Gaia v1.2: state unknown"),
                 known ? (fr ? "Constat\u00e9 : prototype CPU" : "Verified: CPU prototype") : (fr ? "Donn\u00e9es indisponibles" : "Data unavailable"),
                 (fr ? "Prochain : " : "Next: ") + next,
                 fr ? "Avancement : inconnu" : "Progress: unknown",
                 fr ? "ETA prochaine d\u00e9mo : inconnue" : "Next demo ETA: unknown",
-                (fr ? "MAJ : " : "Updated: ") + updated
+                (fr ? "MAJ : " : "Updated: ") + updated.Clocks
             ];
+            return updated.Dates is null ? lines : [.. lines, "Dates: " + updated.Dates];
         }
     }
     public string ActiveLabel => $"v{Version.ToString(2)} active - {(Language == "fr" ? (Validated ? "Valid\u00e9e" : "Valider") : (Validated ? "Validated" : "Validate"))}";
@@ -225,7 +256,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         return true;
     }
 
-    private string Key(string language) => $"{language}|{Available?.Sha256}|{Error}|{IsValidated}|{preparationRevision}";
+    private string Key(string language) => $"{language}|{Available?.Sha256}|{Error}|{IsValidated}|{preparationRevision}|ottawa-paris-v1";
 
     private void PollPreparation()
     {
