@@ -145,6 +145,9 @@ static void Activities(Action<bool, string> check)
     var answered = OfficeActivities.Derive([S("w", "blocked")], [], 0);
     var dismissed = OfficeActivities.Derive([S("w", "idle")], new() { ["w"] = (OfficeActivity.Waiting, 0) }, 1);
     check(answered[0].Activity == OfficeActivity.Waiting && dismissed[0].Activity == OfficeActivity.Idle, "a wait ended without work is not shown as done");
+    var resumed = OfficeActivities.Derive([new("r", "ix-51", 1, "busy", "", ""), S("q", "idle", started: 2), new("r", "ix-ad", 3, "idle", "", "")], [], 0);
+    check(resumed.Count == 2 && resumed.Select(s => s.Id).SequenceEqual(["q", "r"]) && resumed[1].Name == "ix-ad" && resumed[1].Activity == OfficeActivity.Idle,
+        "two processes with one session ID make one desk, the one started last");
 }
 
 static void Office(Action<bool, string> check, string image)
