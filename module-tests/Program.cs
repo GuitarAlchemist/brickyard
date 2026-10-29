@@ -28,10 +28,21 @@ try
     var preparing = new ModulePresentation(offer2.Version, null, "en", null) { Preparation = new Dictionary<string, string>
         { ["state"] = "preparing", ["next_en"] = "Isolated Vulkan planet preview", ["next_fr"] = "Apercu Vulkan isole de la planete", ["updated_utc"] = "2026-10-25T19:00:00Z" } };
     Check(preparing.PreparationLines.Contains("Gaia v1.2 preparing") && preparing.PreparationLines.Contains("Progress: unknown") &&
-        preparing.PreparationLines.Contains("Next demo ETA: unknown") && preparing.PreparationLines.Contains("Updated: Ottawa 15:00 EDT | Paris 20:00 CET"),
+        preparing.PreparationLines.Contains("Next demo ETA: unknown") && preparing.PreparationLines.Contains("Last tracking update:") &&
+        preparing.PreparationLines.Contains("Ottawa 15:00 EDT | Paris 20:00 CET"),
         "the preparation card names a next increment without inventing progress or an ETA");
     Check((preparing with { Language = "fr" }).PreparationLines.Contains("Gaia v1.2 en pr\u00e9paration") &&
         (preparing with { Language = "fr" }).PreparationLines.Contains("Avancement : inconnu"), "the same preparation data follows French selection");
+    var fixedClock = preparing with { CurrentUtc = DateTimeOffset.Parse("2026-10-26T01:20:00Z") };
+    Check(fixedClock.PreparationLines.Contains("Last tracking update:") &&
+        fixedClock.PreparationLines.Contains("Ottawa 15:00 EDT | Paris 20:00 CET") &&
+        fixedClock.PreparationLines.Contains("Now:") &&
+        fixedClock.PreparationLines.Contains("Ottawa 21:20 EDT | Paris 02:20 CET") &&
+        fixedClock.PreparationLines.Contains("Dates: Ottawa 2026-10-25 | Paris 2026-10-26"),
+        "the fixed tracking event and the current local clocks are separate, including different calendar days");
+    Check((fixedClock with { Language = "fr" }).PreparationLines.Contains("Derni\u00e8re mise \u00e0 jour du suivi :") &&
+        (fixedClock with { Language = "fr" }).PreparationLines.Contains("Maintenant :"),
+        "French labels distinguish the last tracking update from now");
     SceneModulePicking.SelfTest(Check);
     using var inputHost = new SceneModuleHost<TestSurface>(args[0], args[1], "en", (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { });
     Check(SceneModuleInteraction.TryClick(inputHost, new(0, 0, 100, 100), 50, 25, true) is null && !inputHost.IsValidated,
@@ -155,6 +166,38 @@ try
         { [offer1.Version.ToString()] = offer1.Sha256, [offer2.Version.ToString()] = offer2.Sha256 }));
     try
     {
+        List<ModulePresentation> clockFrames = [];
+        using var clockHost = new SceneModuleHost<TestSurface>(initial, available, "en",
+            (visual, presentation) => { clockFrames.Add(presentation); return new TestSurface(presentation.Version, visual, []); }, () => { });
+        var originalMetadata = File.ReadAllText(preparationPath);
+        clockHost.PollAvailable(1);
+        clockHost.RequestValidation(offer1.Sha256);
+        var clockContext = clockHost.ContextId;
+        clockHost.Advance("en", DateTimeOffset.Parse("2026-10-26T01:20:15Z"));
+        var clockSurface = clockHost.Surface;
+        var framesBeforeTick = clockFrames.Count;
+        clockHost.Advance("en", DateTimeOffset.Parse("2026-10-26T01:20:59Z"));
+        Check(ReferenceEquals(clockSurface, clockHost.Surface) && clockFrames.Count == framesBeforeTick,
+            "the current clock does not allocate another render surface within the same minute");
+        clockHost.Advance("en", DateTimeOffset.Parse("2026-10-26T01:21:00Z"));
+        Check(clockSurface.Disposed && clockFrames.Count == framesBeforeTick + 1 &&
+            clockFrames[^1].PreparationLines.Contains("Ottawa 21:21 EDT | Paris 02:21 CET") &&
+            clockFrames[^1].PreparationLines.Contains("Ottawa 15:00 EDT | Paris 20:00 CET") &&
+            clockHost.ContextId == clockContext && clockHost.IsValidated && File.ReadAllText(preparationPath) == originalMetadata,
+            "a minute boundary updates only the clock surface, preserving code, validation and the recorded event");
+        clockHost.Advance("en", DateTimeOffset.Parse("2026-10-26T03:59:59Z"));
+        Check(clockFrames[^1].PreparationLines.Contains("Dates: Ottawa 2026-10-25 | Paris 2026-10-26"),
+            "the current clock shows separate dates before Ottawa midnight");
+        clockHost.Advance("en", DateTimeOffset.Parse("2026-10-26T04:00:00Z"));
+        Check(clockFrames[^1].PreparationLines.Contains("Ottawa 00:00 EDT | Paris 05:00 CET") &&
+            !clockFrames[^1].PreparationLines.Any(line => line.StartsWith("Dates:")),
+            "both clock dates agree after Ottawa midnight without a fixed inter-city offset");
+        clockHost.Advance("en", DateTimeOffset.Parse("2026-10-25T00:30:00Z"));
+        Check(clockFrames[^1].PreparationLines.Contains("Ottawa 20:30 EDT | Paris 02:30 CEST"),
+            "the current clock applies Paris daylight time before its fall transition");
+        clockHost.Advance("en", DateTimeOffset.Parse("2026-10-25T01:30:00Z"));
+        Check(clockFrames[^1].PreparationLines.Contains("Ottawa 21:30 EDT | Paris 02:30 CET"),
+            "the current clock handles the repeated Paris hour while Ottawa is still on daylight time");
         using var roundtrip = new SceneModuleHost<TestSurface>(initial, available, "en",
             (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { });
         roundtrip.PollAvailable(1); roundtrip.RequestReplacement(); roundtrip.Advance("en");

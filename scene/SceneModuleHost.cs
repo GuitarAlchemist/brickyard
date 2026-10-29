@@ -35,6 +35,7 @@ internal sealed record ModulePresentation(Version Version, Version? Available, s
 {
     public bool Validated { get; init; }
     public IReadOnlyDictionary<string, string>? Preparation { get; init; }
+    public DateTimeOffset CurrentUtc { get; init; } = DateTimeOffset.UtcNow;
     public string[] PreparationLines
     {
         get
@@ -51,9 +52,13 @@ internal sealed record ModulePresentation(Version Version, Version? Available, s
                 (fr ? "Prochain : " : "Next: ") + next,
                 fr ? "Avancement : inconnu" : "Progress: unknown",
                 fr ? "ETA prochaine d\u00e9mo : inconnue" : "Next demo ETA: unknown",
-                (fr ? "MAJ : " : "Updated: ") + updated.Clocks
+                fr ? "Derni\u00e8re mise \u00e0 jour du suivi :" : "Last tracking update:",
+                updated.Clocks
             ];
-            return updated.Dates is null ? lines : [.. lines, "Dates: " + updated.Dates];
+            if (updated.Dates is not null) lines = [.. lines, "Dates: " + updated.Dates];
+            var current = ModTimeZones.Format(CurrentUtc);
+            lines = [.. lines, fr ? "Maintenant :" : "Now:", current.Clocks];
+            return current.Dates is null ? lines : [.. lines, "Dates: " + current.Dates];
         }
     }
     public string ActiveLabel => $"v{Version.ToString(2)} active - {(Language == "fr" ? (Validated ? "Valid\u00e9e" : "Valider") : (Validated ? "Validated" : "Validate"))}";
@@ -178,7 +183,10 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         return true;
     }
 
-    public void Advance(string language)
+    public void Advance(string language) => Advance(language, DateTimeOffset.UtcNow);
+
+    // Use one sampled instant for the minute cache key and the displayed clocks.
+    public void Advance(string language, DateTimeOffset currentUtc)
     {
         CheckThread();
         if (requested is { } offer)
@@ -187,9 +195,9 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
             if (!Replace(offer, language)) return;
         }
         active.Update(new(language));
-        var nextKey = Key(language);
+        var nextKey = Key(language, currentUtc);
         if (nextKey == key) return;
-        var next = createSurface(active.Render(), new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion) { Validated = IsValidated, Preparation = preparationData });
+        var next = createSurface(active.Render(), new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion) { Validated = IsValidated, Preparation = preparationData, CurrentUtc = currentUtc });
         CreatedSurfaces++;
         try { waitForGpu(); }
         catch { next.Dispose(); DisposedSurfaces++; throw; }
@@ -256,7 +264,10 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         return true;
     }
 
-    private string Key(string language) => $"{language}|{Available?.Sha256}|{Error}|{IsValidated}|{preparationRevision}|ottawa-paris-v1";
+    private string Key(string language) => Key(language, DateTimeOffset.UtcNow);
+
+    private string Key(string language, DateTimeOffset currentUtc) =>
+        $"{language}|{Available?.Sha256}|{Error}|{IsValidated}|{preparationRevision}|ottawa-paris-clock-v2|{(preparationData is null ? 0 : currentUtc.UtcTicks / TimeSpan.TicksPerMinute)}";
 
     private void PollPreparation()
     {

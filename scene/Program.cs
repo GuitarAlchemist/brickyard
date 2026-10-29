@@ -303,6 +303,12 @@ internal static unsafe class Stage
         }
         var shelfAtStart = Option(args, "--shelf");
         Words.Speak(Option(args, "--lang") ?? "en");
+        ScreenModuleSession? arcade = null;
+        if (Option(args, "--arcade-module") is { } arcadePath)
+        {
+            try { arcade = new ScreenModuleSession(arcadePath); }
+            catch (Exception e) { Console.Error.WriteLine($"ARCADE module refused: {e.GetType().Name}: {e.Message}"); return 2; }
+        }
         const double S = Splash.Seconds;
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
         if (moduleClickTest) shots = [(S + 1.0, "module-v1"), (S + 4.0, "module-v11")];
@@ -802,6 +808,8 @@ internal static unsafe class Stage
         Texture[] splashTextures = noticePixels is null
             ? [new Texture(device, physical, upload, logoPixels, logoWidth, logoHeight)]
             : [new Texture(device, physical, upload, logoPixels, logoWidth, logoHeight), new Texture(device, physical, upload, noticePixels, noticeWidth, noticeHeight)];
+        var arcadeGpu = arcade is null ? null : new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight, arcade.Frame);
+        if (arcade is not null) Console.WriteLine($"ARCADE loaded {arcade.Id} v{arcade.Version}; sha256 {arcade.CodeHash}; canvas 160x96 RGBA8; GPU images {arcadeGpu!.ImageCount}; pid {Environment.ProcessId}");
         upload.End();
         var uploadHandle = upload.Handle;
         queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploadHandle }], default);
@@ -1229,6 +1237,7 @@ internal static unsafe class Stage
 
             var dt = (float)(now - last);
             last = now;
+            arcade?.Advance(dt);
             // The splash is timed from the first frame on screen, not from start-up, which takes about a second; --demo's
             // timeline and --shots start with it, while the brain's lines are timed by the link's own clock.
             var shown = firstFrame < 0 ? 0.0 : now - firstFrame;
@@ -1430,6 +1439,7 @@ internal static unsafe class Stage
 
             var cb = commands[slot];
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+            if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
             clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = new float4(0.006f, 0.005f, 0.005f, 1f) } };
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
             cb.BeginRenderPass(new VkRenderPassBeginInfo
@@ -1465,6 +1475,7 @@ internal static unsafe class Stage
                 {
                     Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
                 }
+                arcadeGpu?.Draw(cb, slot, worlds[Robot.Torso] * viewProj);
 
                 if (shelf.Open && card is not null && cardTexture is not null)
                 {
@@ -1789,6 +1800,9 @@ internal static unsafe class Stage
         notesTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();
+        arcadeGpu?.Dispose();
+        arcade?.Dispose();
+        Console.WriteLine($"ARCADE shutdown: uploads {arcadeGpu?.Uploads ?? 0}; native texture images remaining {Texture.LiveCount}; pid {Environment.ProcessId}");
         device.DestroyCommandPool(uploadPool, null);
 
         device.DestroyDescriptorPool(descriptorPool, null);
@@ -1894,7 +1908,7 @@ internal static unsafe class Stage
         SubresourceRange = new VkImageSubresourceRange { AspectMask = aspect, LevelCount = 1, LayerCount = 1 },
     };
 
-    private static VkShaderModule Shader(Device device, string source, ShaderKind kind, string name)
+    internal static VkShaderModule Shader(Device device, string source, ShaderKind kind, string name)
     {
         var compiler = ShaderC.CreateCompiler();
         var options = ShaderC.CreateCompilerOptions();
@@ -1906,7 +1920,7 @@ internal static unsafe class Stage
     }
 
     // The scene's pipeline, or with overlay the splash's: no vertex buffer, no depth, alpha blended.
-    private static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkSampleCountFlags samples, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false)
+    internal static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkSampleCountFlags samples, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false, bool vertexless = false)
     {
         var entry = "main"u8;
         fixed (byte* entryName = entry)
@@ -1926,7 +1940,7 @@ internal static unsafe class Stage
                 new() { Location = 4, Binding = 0, Format = VkFormat.R32G32B32SFloat, Offset = ByteSize.Of<float>(10) },
                 new() { Location = 5, Binding = 0, Format = VkFormat.R32G32B32A32SFloat, Offset = ByteSize.Of<float>(13) },
             };
-            var vertexInput = overlay ? new VkPipelineVertexInputStateCreateInfo() : new VkPipelineVertexInputStateCreateInfo
+            var vertexInput = overlay || vertexless ? new VkPipelineVertexInputStateCreateInfo() : new VkPipelineVertexInputStateCreateInfo
             {
                 VertexBindingDescriptionCount = 1,
                 VertexBindingDescriptions = &binding,
