@@ -303,6 +303,7 @@ internal static unsafe class Stage
         }
         var shelfAtStart = Option(args, "--shelf");
         Words.Speak(Option(args, "--lang") ?? "en");
+        var officePath = Option(args, "--office-module"); // the agents' office: a widget module, reloaded when its file changes
         const double S = Splash.Seconds;
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
         if (moduleClickTest) shots = [(S + 1.0, "module-v1"), (S + 4.0, "module-v11")];
@@ -736,6 +737,33 @@ internal static unsafe class Stage
         }
         ModulePickRect? gaiaPick = null;
         var modulePresentedVersion = gaiaModule?.Version;
+
+        // The agents' office, only when --office-module names its image: a desk per Claude Code session, its widgets
+        // built once and posed every frame. Without it nothing is allocated and the scene is as it was.
+        WidgetModuleSession<Delta.SceneModules.IOfficeModule>? office = null;
+        WidgetStage<Mesh>? officeStage = null;
+        OfficeFeed? officeFeed = null;
+        SN.Matrix4x4? officeView = null; // the frame's camera for clicks; none during the splash
+        int? officeLogged = null;
+        var officeFailed = false; // set by the module's first exception, cleared when new code replaces it
+        if (officePath is not null)
+        {
+            try
+            {
+                office = new WidgetModuleSession<Delta.SceneModules.IOfficeModule>(officePath, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
+                officeStage = new WidgetStage<Mesh>(instance => new Mesh(device, physical, WidgetGeometry.Compile(instance)), FramesInFlight + 1);
+                officeFeed = new OfficeFeed(demo);
+                officeFeed.Start();
+                Console.WriteLine($"WIDGETS agent-office loaded v{office.Version}; sha256 {office.CodeHash}; {(demo ? "demo sessions" : "reading the sessions")}; pid {Environment.ProcessId}");
+            }
+            catch (Exception error)
+            {
+                officeFeed?.Dispose();
+                office?.Dispose();
+                (office, officeStage, officeFeed) = (null, null, null);
+                Console.Error.WriteLine($"WIDGETS agent-office refused ({error.GetType().Name}: {error.Message}); the scene goes on without it");
+            }
+        }
         Console.WriteLine($"SCENE geometry: hall {hallVertices.Length / 36} boxes, robot {parts.Sum(p => p.Count) / 36} boxes in {parts.Length} parts");
 
         // --shots: a frame's pixels, copied from the swapchain image into a host-visible buffer.
@@ -1140,6 +1168,25 @@ internal static unsafe class Stage
             return true;
         }
 
+        // A click on a session's desk shows its pane in wmux; the module only names the session.
+        bool TryOfficeClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeFailed || officeStage is null || officeFeed is null || officeView is not { } view) return false;
+            if (WidgetPicking.Pick(officeStage.Hits, view, extent.Width, extent.Height, x, y) is not { } session) return false;
+            var surface = officeFeed.Surface(session);
+            Console.WriteLine($"WIDGETS agent-office click on session {session}: {(surface is null ? "no wmux pane" : "showing its pane")}");
+            if (surface is not null)
+            {
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try { Shelf.Wmux.Focus(surface); }
+                    catch (Exception e) { Console.Error.WriteLine($"WIDGETS agent-office could not show the pane ({e.GetType().Name}: {e.Message})"); }
+                });
+            }
+
+            return true;
+        }
+
         window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
             var icon = Panel.PhoneSize(extent.Height);
@@ -1185,7 +1232,8 @@ internal static unsafe class Stage
             }
             else if (action == GlfwButtonAction.Press && button == 0)
             {
-                TryModuleClick(w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height), false);
+                var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
+                if (!TryModuleClick(cx, cy, false)) TryOfficeClick(cx, cy);
             }
         });
         window.OnScroll += (w, offset) => Guard("a scroll", () =>
@@ -1255,6 +1303,7 @@ internal static unsafe class Stage
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, new SN.Vector3(0f, 0.7f, 0f), SN.Vector3.UnitY) * projection;
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
+            officeView = splashing ? null : viewProj;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
 
@@ -1406,6 +1455,40 @@ internal static unsafe class Stage
                 gaiaModule?.PollAvailable(now);
                 gaiaModule?.Advance(Words.Language);
             });
+            Guard("agents' office frame", () =>
+            {
+                if (office is null || officeStage is null || officeFeed is null) return;
+                if (office.Poll(now))
+                {
+                    officeStage.Reset();
+                    officeFailed = false;
+                }
+
+                if (officeFailed) return;
+
+                // Module code may throw: the first exception is one line in the log and turns the office off until a
+                // new image replaces the code, rather than a stack trace every frame.
+                try
+                {
+                    officeFeed.Advance(now);
+                    office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions));
+                    if (officeStage.Sync(office.Module)) Console.WriteLine($"WIDGETS agent-office tree: {officeStage.Instances} instances, {officeStage.Meshes} meshes; native mesh buffers live {Mesh.LiveCount}");
+                    else if (officeStage.Problems.Count > 0 && officeLogged != officeStage.Revision)
+                    {
+                        officeLogged = officeStage.Revision;
+                        Console.Error.WriteLine($"WIDGETS agent-office tree refused, keeping the one shown: {string.Join("; ", officeStage.Problems.Take(5))}");
+                    }
+
+                    officeStage.Frame(office.Module, now);
+                }
+                catch (Exception e)
+                {
+                    officeFailed = true;
+                    officeStage.Items.Clear();
+                    officeStage.Hits.Clear();
+                    Console.Error.WriteLine($"WIDGETS agent-office off until its next image: {e.GetType().Name}: {e.Message.ReplaceLineEndings(" ")}");
+                }
+            });
             VkResult result;
             int imageIndex;
             try
@@ -1464,6 +1547,14 @@ internal static unsafe class Stage
                 for (var i = 0; i < parts.Length; i++)
                 {
                     Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
+                }
+
+                if (officeStage is not null)
+                {
+                    foreach (var item in officeStage.Items)
+                    {
+                        Draw(cb, layout, item.Surface, new Push(item.World, viewProj, item.Glow));
+                    }
                 }
 
                 if (shelf.Open && card is not null && cardTexture is not null)
@@ -1764,6 +1855,15 @@ internal static unsafe class Stage
         }
 
         gaiaModule?.Dispose();
+        officeFeed?.Dispose();
+        if (officeStage is not null)
+        {
+            Console.WriteLine($"WIDGETS agent-office shutdown: meshes built {officeStage.Built}, released before shutdown {officeStage.Released}, {officeStage.Meshes} still held; code reloads {office?.Reloads ?? 0}");
+        }
+
+        officeStage?.Dispose();
+        office?.Dispose();
+
         foreach (var presence in gaiaFallback?.Values ?? Enumerable.Empty<Mesh>())
         {
             presence.Dispose();

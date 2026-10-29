@@ -528,6 +528,34 @@ internal sealed class Shelf
             return new Snapshot(workspaceOf, surfaceOf, blocked);
         }
 
+        // Each session's surface and state ("working", "idle", "blocked"), from agent-state alone: one call, for the
+        // agents' office, which asks every few seconds.
+        public static Dictionary<string, (string Surface, string State)> AgentStates()
+        {
+            var states = new Dictionary<string, (string, string)>();
+            if (!File.Exists(Exe))
+            {
+                return states;
+            }
+
+            using var doc = Run("agent-state");
+            if (doc is null || !doc.RootElement.TryGetProperty("states", out var list) || list.ValueKind != JsonValueKind.Array)
+            {
+                return states;
+            }
+
+            foreach (var s in list.EnumerateArray())
+            {
+                var id = Text(s, "sessionId");
+                if (id.Length > 0)
+                {
+                    states[id] = (Text(s, "surfaceId"), Text(s, "state"));
+                }
+            }
+
+            return states;
+        }
+
         // Shows a surface's pane: its workspace first, then the surface.
         public static void Focus(string surface)
         {

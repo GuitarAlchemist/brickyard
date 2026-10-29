@@ -46,3 +46,9 @@ Ollama and qwen3:8b are not used.
 
 `/delta:setup` does not install the camera process: uv fetches MediaPipe and OpenCV when you first start it, and the
 process downloads its model.
+
+## Ideas, not code
+
+The agents' office (`modules/AgentOffice`) takes its idea from
+[agent-office](https://github.com/AgentSystemLabs/agent-office) (MIT), and its widgets compose as GA's Lego demo
+(ga-brutal, MIT) does. Neither's code nor assets are copied.

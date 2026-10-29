@@ -717,6 +717,27 @@ with Low, 0.37 against 0.43 ms at p50. Visible with vsync, beside Delta's own wi
 and max about 50 ms: frames that miss a vsync came before this change. `--shots` before and after: the splash is the
 same to the pixel, and the cards and the QR stay sharp.
 
+## The agents' office, and widgets (2026-10-29)
+
+The user asked for an office of agents beside the robot: one desk per Claude Code session, its robot typing while the
+session works, a red beacon while it waits for an answer, a jump when it is done, and a click that opens the session's
+wmux pane. The idea comes from agent-office (AgentSystemLabs, MIT); none of its code or assets is used. The model of
+composition follows GA's Lego demo, ideas only. They asked as well that a scene module can declare 3D widgets, nested
+or flat, composed fractally: `docs/widgets.md` describes the contract (`module-contracts/Widgets.cs`), the stage that
+draws it, hot reload and the office module (`modules/AgentOffice`). `--office-module <dll>` loads it; without it the
+scene is as before.
+
+The office reads `~/.claude/sessions` and one `wmux agent-state` every 3 s on the thread pool, skips a read while the
+last one waits, and writes nothing. Flat quality shows a board with a lamp and a name per session instead of desks.
+
+Measured, isolated, `--demo --hidden --cap 10`, the RTX 5080:
+
+- Low, 26 s, v0.2 of the module copied over v0.1 at 12 s: 192 instances in 19 meshes, the reload logged at about
+  12 s, 38 meshes built and 38 freed (19 at the reload, 19 at shutdown), 0 native mesh buffers left, exit 0. The splash
+  is unchanged.
+- Flat, 14 s: 13 instances in 8 meshes, 0 buffers left, exit 0.
+- `widget-tests`: 43 checks pass, the reload from v0.1 to v0.2 and the old context collected among them.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
@@ -772,3 +793,5 @@ same to the pixel, and the cards and the QR stay sharp.
 - The ring, live: whether 30 s suits, and whether talk to people in the room now reaches Claude too often.
 - The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
 - A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.
+- The agents' office with real sessions, beside Delta's window: each activity as wmux reports it, a click on a desk
+  focusing the right pane, and the frame time with 20 desks.
