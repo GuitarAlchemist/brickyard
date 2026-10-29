@@ -10,11 +10,13 @@ internal static class OfficeActivities
     // One session as read: its ID, name, start, its own status and wmux's state and surface ("" when outside wmux).
     internal sealed record Seen(string Id, string Name, long Started, string Status, string State, string Surface);
 
-    // The activities, keeping in last when each began; ordered by start, so that desks keep their places.
+    // The activities, keeping in last when each began; ordered by start, so that desks keep their places. Two live
+    // processes can carry one session ID (a resumed session): the one started last stands for it, one desk per ID.
     internal static List<OfficeSession> Derive(IReadOnlyList<Seen> seen, Dictionary<string, (OfficeActivity Activity, double Since)> last, double now)
     {
         var sessions = new List<OfficeSession>(seen.Count);
-        foreach (var s in seen.OrderBy(s => s.Started).ThenBy(s => s.Id, StringComparer.Ordinal))
+        var latest = seen.GroupBy(s => s.Id, StringComparer.Ordinal).Select(g => g.MaxBy(s => s.Started)!);
+        foreach (var s in latest.OrderBy(s => s.Started).ThenBy(s => s.Id, StringComparer.Ordinal))
         {
             var working = s.State.Length > 0 ? s.State == "working" : s.Status == "busy";
             var activity = s.State == "blocked" ? OfficeActivity.Waiting : working ? OfficeActivity.Working : OfficeActivity.Idle;
