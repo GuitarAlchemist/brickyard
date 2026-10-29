@@ -9,7 +9,8 @@
 // and the pairing card in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
-// --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws.
+// --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws. --view N starts
+// the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall).
 //
 // It opens on BRUTAL's logo and copyright notice for 2.6 s, as BRUTAL's licence asks (Splash.cs); --demo's states and
 // --shots' times start after it, and --shots also saves the splash.
@@ -1078,6 +1079,16 @@ internal static unsafe class Stage
             }
         }
 
+        var camera = new FreeCamera();
+        if (int.TryParse(Option(args, "--view"), out var startView) && !camera.GoTo(startView))
+        {
+            Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
+        }
+
+        var looking = false; // the right button is held
+        (double X, double Y) lookFrom = default;
+        const int CursorNormal = 0x00034001, CursorDisabled = 0x00034003; // GLFW_CURSOR_NORMAL, GLFW_CURSOR_DISABLED
+
         window.OnKey += (w, key, scancode, action, mods) => Guard("a key", () =>
         {
             if (action == GlfwKeyAction.Release)
@@ -1110,7 +1121,19 @@ internal static unsafe class Stage
                 return;
             }
 
-            if (key == GlfwKey.P)
+            if (key == GlfwKey.F)
+            {
+                camera.ToggleFlying((float)at);
+            }
+            else if (key == GlfwKey.Home)
+            {
+                camera.Reset();
+            }
+            else if ((int)key is >= '1' and <= '9' && camera.GoTo((int)key - '0'))
+            {
+                // a view, or the drift for 1
+            }
+            else if (key == GlfwKey.P)
             {
                 ShowPairing(!pairingShown);
                 invitationShown &= !pairingShown;
@@ -1205,6 +1228,14 @@ internal static unsafe class Stage
 
         window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
+            if ((int)button == 1) // the right button held turns the view; the cursor hides meanwhile
+            {
+                looking = action == GlfwButtonAction.Press && !shelf.Open;
+                w.SetInputMode(GlfwInputMode.Cursor, looking ? CursorDisabled : CursorNormal);
+                lookFrom = (w.CursorX, w.CursorY);
+                return;
+            }
+
             var icon = Panel.PhoneSize(extent.Height);
             if (action == GlfwButtonAction.Press && (Over(w, PhoneAt(), icon, icon) || (pairingShown && pairingCard is not null && Over(w, PairingAt(), pairingCard.Width, pairingCard.Height))))
             {
@@ -1257,6 +1288,10 @@ internal static unsafe class Stage
             if (shelf.Open && offset.Y != 0)
             {
                 shelf.Move(clock.Elapsed.TotalSeconds, offset.Y > 0 ? -1 : 1);
+            }
+            else if (offset.Y != 0)
+            {
+                camera.Wheel(offset.Y);
             }
         });
 
@@ -1314,11 +1349,33 @@ internal static unsafe class Stage
             robot.Presenting = shelf.Open;
             robot.Pose(time, dt, moment, worlds, glows);
 
-            // The camera drifts a little from side to side in front of the robot, at the height of its face.
-            var eye = new SN.Vector3(0.45f * MathF.Sin(time * 0.11f), 1.08f + (0.04f * MathF.Sin(time * 0.07f)), 2.55f);
+            // The camera drifts in front of the robot until it is moved (FreeCamera); the keys are read while the shelf,
+            // which takes the arrows, is closed.
+            if (looking && !window.IsFocused)
+            {
+                looking = false; // the window lost focus with the button held: give the cursor back
+                window.SetInputMode(GlfwInputMode.Cursor, CursorNormal);
+            }
+
+            if (looking)
+            {
+                var (cx, cy) = (window.CursorX, window.CursorY);
+                camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
+                lookFrom = (cx, cy);
+            }
+
+            if (!shelf.Open && window.IsFocused)
+            {
+                bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press;
+                float Axis(GlfwKey a, GlfwKey b, GlfwKey back, GlfwKey back2) => (Held(a) || Held(b) ? 1f : 0f) - (Held(back) || Held(back2) ? 1f : 0f);
+                camera.Move(time, new(Axis(GlfwKey.W, GlfwKey.Up, GlfwKey.S, GlfwKey.Down), Axis(GlfwKey.D, GlfwKey.Right, GlfwKey.A, GlfwKey.Left),
+                    Axis(GlfwKey.Space, GlfwKey.E, GlfwKey.C, GlfwKey.C), Held(GlfwKey.LeftShift) || Held(GlfwKey.RightShift)), dt);
+            }
+
+            var (eye, lookAt) = camera.View(time);
             var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(0.75f, extent.Width / (float)extent.Height, 0.1f, 40f);
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
-            var viewProj = SN.Matrix4x4.CreateLookAt(eye, new SN.Vector3(0f, 0.7f, 0f), SN.Vector3.UnitY) * projection;
+            var viewProj = SN.Matrix4x4.CreateLookAt(eye, lookAt, SN.Vector3.UnitY) * projection;
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
             officeView = splashing ? null : viewProj;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
