@@ -9,7 +9,7 @@ void Check(bool ok, string message)
 
 try
 {
-    if (args.Length != 2) throw new ArgumentException("Expected paths to the real V1 and V1.1 module assemblies.");
+    if (args.Length is not (2 or 3)) throw new ArgumentException("Expected paths to the real V1 and V1.1 module assemblies, and optionally V1.2's.");
     var offer1 = LoadedSceneModule.Probe(args[0]);
     var offer2 = LoadedSceneModule.Probe(args[1]);
     foreach (var (utc, expected) in new[] {
@@ -33,6 +33,9 @@ try
         "the preparation card names a next increment without inventing progress or an ETA");
     Check((preparing with { Language = "fr" }).PreparationLines.Contains("Gaia v1.2 en pr\u00e9paration") &&
         (preparing with { Language = "fr" }).PreparationLines.Contains("Avancement : inconnu"), "the same preparation data follows French selection");
+    Check((preparing with { Version = new Version(1, 2, 0, 0), Preparation = new Dictionary<string, string>(preparing.Preparation!) { ["version"] = "1.2" } }).PreparationLines.Length == 0 &&
+        (preparing with { Preparation = new Dictionary<string, string>(preparing.Preparation!) { ["version"] = "1.2" } }).PreparationLines.Length > 0,
+        "the preparation card goes once the prepared version is the active one, and stays before");
     var fixedClock = preparing with { CurrentUtc = DateTimeOffset.Parse("2026-10-26T01:20:00Z") };
     Check(fixedClock.PreparationLines.Contains("Last tracking update:") &&
         fixedClock.PreparationLines.Contains("Ottawa 15:00 EDT | Paris 20:00 CET") &&
@@ -233,6 +236,8 @@ try
         foreach (var file in new[] { initial, available, retained1, retained2, index, preparationPath }) File.Delete(file);
         Directory.Delete(Path.GetDirectoryName(initial)!); Directory.Delete(Path.GetDirectoryName(available)!); Directory.Delete(retained); Directory.Delete(root);
     }
+
+    if (args.Length == 3) Planet(args[1], args[2], offer2);
 }
 catch (Exception error)
 {
@@ -240,6 +245,72 @@ catch (Exception error)
 }
 
 return failures == 0 ? 0 : 1;
+
+// V1.1 -> V1.2 -> V1.1 -> V1.2 on one host through the resource port, as the scene does it but without a GPU: V1.2 gives
+// the planet as triangles, which a host whose surfaces cannot draw them refuses.
+void Planet(string v11, string v12, ModuleOffer offer2)
+{
+    var offer3 = LoadedSceneModule.Probe(v12);
+    Check(offer3.Version == new Version(1, 2, 0, 0), "V1.2 is a real 1.2 image of the same module");
+    var root = Path.Combine(Path.GetTempPath(), $"gaia-planet-{Guid.NewGuid():N}");
+    var initial = Path.Combine(root, "initial", "GaiaPresence.Module.dll");
+    var available = Path.Combine(root, "available", "GaiaPresence.Module.dll");
+    var retained = Path.Combine(root, "retained");
+    Directory.CreateDirectory(Path.GetDirectoryName(initial)!);
+    Directory.CreateDirectory(Path.GetDirectoryName(available)!);
+    Directory.CreateDirectory(retained);
+    File.Copy(v11, initial); File.Copy(v12, available);
+    File.Copy(v11, Path.Combine(retained, offer2.Sha256 + ".dll"));
+    File.WriteAllText(Path.Combine(retained, "versions.json"), System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { [offer2.Version.ToString()] = offer2.Sha256 }));
+    try
+    {
+        using (var legacy = new SceneModuleHost<TestSurface>(initial, available, "en", (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { }))
+        {
+            legacy.PollAvailable(1);
+            legacy.Advance("en");
+            var kept = legacy.Surface;
+            legacy.RequestReplacement();
+            legacy.Advance("en");
+            Check(legacy.Version == offer2.Version && ReferenceEquals(kept, legacy.Surface) && !kept.Disposed && legacy.Error == "candidate-rejected",
+                "a host whose surfaces cannot draw triangles refuses V1.2 and keeps V1.1, rather than drawing it without its planet");
+        }
+
+        List<string> lifecycle = [];
+        using var host = new SceneModuleHost<TestSurface>(initial, available, "en",
+            (visual, triangles, presentation) => new TestSurface(presentation.Version, visual, lifecycle, triangles), () => lifecycle.Add("gpu-idle"));
+        Check(host.Surface.Triangles is null, "V1.1 gives no triangles");
+        host.PollAvailable(1);
+        host.Advance("en");
+        var v11Surface = host.Surface;
+        Check(host.Available?.Version == offer3.Version && host.Version == offer2.Version, "V1.2 is offered, not loaded");
+        lifecycle.Clear();
+        host.RequestReplacement();
+        host.Advance("en");
+        var planet = host.Surface.Triangles;
+        Check(host.Version == offer3.Version && planet?.Triangles.Count == 7680 && host.Surface.Visual.Text.Any(t => t.Text == "Gaia - disconnected"),
+            "the click activates V1.2: its 7680 triangles reach the surface, and its placard still says disconnected");
+        Check(v11Surface.Disposed && lifecycle.SequenceEqual(["allocate 1.2", "gpu-idle", "free 1.1"]),
+            "V1.2's resources are staged, the GPU finishes, then V1.1's are freed");
+        var mutable = false;
+        try { ((IList<ModuleTriangle>)planet!.Triangles)[0] = default; }
+        catch (NotSupportedException) { mutable = true; }
+        Check(mutable, "the surface gets the host's read-only copy of the triangles, the one that was checked");
+        host.Advance("fr");
+        Check(host.Surface.Triangles?.Triangles.Count == 7680 && host.Surface.Visual.Text.Any(t => t.Text == "Gaia - non raccordée"),
+            "a change of language rebuilds the surface with the planet");
+        var planetCode = host.ContextId;
+        host.PollAvailable(2);
+        Check(host.Available?.Version == offer2.Version, "V1.2 offers the verified V1.1 back");
+        host.RequestReplacement();
+        host.Advance("en");
+        Check(host.Version == offer2.Version && host.Surface.Triangles is null && host.ContextId != planetCode, "the explicit return reloads V1.1, without the planet");
+        host.PollAvailable(3);
+        host.RequestReplacement();
+        host.Advance("en");
+        Check(host.Version == offer3.Version && host.Surface.Triangles?.Triangles.Count == 7680, "the same host can go to V1.2 again");
+    }
+    finally { Directory.Delete(root, recursive: true); }
+}
 
 [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
 static WeakReference RetireCode(ModuleOffer offer)
@@ -250,10 +321,11 @@ static WeakReference RetireCode(ModuleOffer offer)
     return module.ContextReference;
 }
 
-sealed class TestSurface(Version version, ModuleVisual visual, List<string> trace) : IDisposable
+sealed class TestSurface(Version version, ModuleVisual visual, List<string> trace, ModuleTriangleVisual? triangles = null) : IDisposable
 {
     public bool Disposed { get; private set; }
     public ModuleVisual Visual { get; } = visual;
+    public ModuleTriangleVisual? Triangles { get; } = triangles;
     private readonly string allocation = Allocate(version, trace);
     private static string Allocate(Version version, List<string> trace) { var name = version.ToString(2); trace.Add("allocate " + name); return name; }
     public void Dispose()

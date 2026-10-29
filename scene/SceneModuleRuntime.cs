@@ -78,6 +78,22 @@ internal sealed class LoadedSceneModule : IDisposable
         return module.Render();
     }
 
+    // A module's optional triangles (V1.2's planet), null for a module without them. They are copied before they are
+    // checked, so that what is checked is what is drawn even if the module's list changes afterwards.
+    public ModuleTriangleVisual? RenderTriangles()
+    {
+        ObjectDisposedException.ThrowIf(module is null, this);
+        if (module is not ISceneTriangleModule capable) return null;
+        var source = capable.RenderTriangles()?.Triangles ?? throw new InvalidDataException("Module triangles are missing.");
+        var count = source.Count;
+        if (count > ModuleTriangleValidation.MaxTriangles) throw new InvalidDataException("Module triangles exceed their budget.");
+        var copy = new ModuleTriangle[count];
+        for (var i = 0; i < count; i++) copy[i] = source[i];
+        var snapshot = new ModuleTriangleVisual(Array.AsReadOnly(copy));
+        ModuleTriangleValidation.Validate(snapshot);
+        return snapshot;
+    }
+
     public void Dispose()
     {
         var retired = context;

@@ -742,7 +742,7 @@ internal static unsafe class Stage
         {
             gaiaModule = new SceneModuleHost<Mesh>(Path.Combine(moduleRoot, "initial", "GaiaPresence.Module.dll"),
                 Path.Combine(moduleRoot, "available", "GaiaPresence.Module.dll"), Words.Language,
-                (visual, presentation) => new Mesh(device, physical, SceneModuleGeometry.Compile(visual, presentation)), () => device.WaitIdle());
+                (visual, triangles, presentation) => new Mesh(device, physical, SceneModuleGeometry.Compile(visual, triangles, presentation)), () => device.WaitIdle());
             Console.WriteLine($"MODULE gaia loaded code v{gaiaModule.Version.ToString(2)}; pid {Environment.ProcessId}; sha256 {gaiaModule.CodeHash}");
         }
         catch (Exception error)

@@ -738,6 +738,29 @@ Measured, isolated, `--demo --hidden --cap 10`, the RTX 5080:
 - Flat, 14 s: 13 instances in 8 meshes, 0 buffers left, exit 0.
 - `widget-tests`: 43 checks pass, the reload from v0.1 to v0.2 and the old context collected among them.
 
+## Gaia V1.2's planet, loaded by the host (2026-10-29)
+
+The user asked to prepare Gaia V1.2. Codex's prototype (`docs/gaia-v12-planet-prototype.md`) made it a static planet of
+7680 triangles behind an optional contract, `ISceneTriangleModule`, which the scene could not load. The host now can,
+as the prototype's « Mise à niveau hôte minimale » asks:
+
+- the contract only gains types, so the Pong and office images need no rebuild;
+- `LoadedSceneModule.RenderTriangles` copies a module's triangles, then checks the copy, at most 8192;
+- the host carries them to its surfaces; a host built with the old two-argument factory refuses a module that gives
+  triangles rather than drawing it without them;
+- `SceneModuleGeometry` appends them, matte, to the module's mesh, with an edge of (0, 0, 1, 1) and a side of the
+  triangle as tangent, so that the Low shader neither rounds them nor normalizes a null vector;
+- the preparation card goes once the prepared version is the active one.
+
+Measured, isolated, with V1.1 as the initial image and V1.2 offered, `--demo --hidden --cap 10 --view 3
+--module-click-test`: the simulated click replaces 1.1 with 1.2 in 22 ms in Low and 23 ms in Flat, the retired context
+is collected, 0 native mesh buffers are left at shutdown, exit 0. The planet shows in both, with no shading fault.
+`module-tests` with V1.2's image: 73 checks, of them V1.1 -> V1.2 -> V1.1 -> V1.2 on one host and the old host's
+refusal; 62 without it. `module-mesh-tests`: 23.
+
+Nothing is installed in a live `modules/gaia`, and V1.2 is activated only by the user's click, then validated by
+another. The window must restart to take the new host: the surface factory is built in `Main`.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

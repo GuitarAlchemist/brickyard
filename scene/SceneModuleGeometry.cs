@@ -3,7 +3,10 @@ using SN = System.Numerics;
 
 internal static class SceneModuleGeometry
 {
-    public static Vertex[] Compile(ModuleVisual visual, ModulePresentation presentation)
+    public static Vertex[] Compile(ModuleVisual visual, ModulePresentation presentation) => Compile(visual, null, presentation);
+
+    // triangles is the host's checked copy (LoadedSceneModule.RenderTriangles), drawn matte after the boxes and labels.
+    public static Vertex[] Compile(ModuleVisual visual, ModuleTriangleVisual? triangles, ModulePresentation presentation)
     {
         if (visual.Boxes.Count > 4096 || visual.Text.Count > 16) throw new InvalidDataException("Module geometry exceeds its budget.");
         List<Vertex> vertices = [];
@@ -53,7 +56,23 @@ internal static class SceneModuleGeometry
                 Text(vertices, new(preparation[line], new(0.28f + width / 2, 1.43f - 0.07f * line, 0.37f), width, new(0.84f, 0.78f, 1f)));
             }
         }
+        if (triangles is not null) Triangles(vertices, triangles);
         return vertices.ToArray();
+    }
+
+    // A triangle has no face edge to round: Edge (0, 0, 1, 1) keeps the Low shader's lean at zero, and the tangent, one of
+    // the triangle's sides, is never parallel to its normals, so the shader's normalize stays defined.
+    private static void Triangles(List<Vertex> vertices, ModuleTriangleVisual triangles)
+    {
+        if (triangles.Triangles.Count > ModuleTriangleValidation.MaxTriangles) throw new InvalidDataException("Module triangles exceed their budget.");
+        var flat = new SN.Vector4(0f, 0f, 1f, 1f);
+        vertices.EnsureCapacity(vertices.Count + (3 * triangles.Triangles.Count));
+        foreach (var t in triangles.Triangles)
+        {
+            var tangent = SN.Vector3.Normalize(t.B.Position - t.A.Position);
+            foreach (var v in (ReadOnlySpan<ModuleVertex>)[t.A, t.B, t.C])
+                vertices.Add(new Vertex(v.Position, v.Normal, v.Color, Material.Matte, tangent, flat));
+        }
     }
 
     private static void Text(List<Vertex> vertices, ModuleText text)

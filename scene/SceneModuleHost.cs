@@ -41,6 +41,8 @@ internal sealed record ModulePresentation(Version Version, Version? Available, s
         get
         {
             if (Preparation is not { } data) return [];
+            if (data.TryGetValue("version", out var prepared) && System.Version.TryParse(prepared, out var preparedVersion) && Version >= preparedVersion)
+                return []; // the version being prepared is the one running: nothing left to announce
             var fr = Language == "fr";
             var known = data.TryGetValue("state", out var state) && state == "preparing";
             var next = data.TryGetValue(fr ? "next_fr" : "next_en", out var name) ? name : (fr ? "inconnu" : "unknown");
@@ -70,7 +72,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
 {
     private readonly int owner = Environment.CurrentManagedThreadId;
     private readonly string availablePath;
-    private readonly Func<ModuleVisual, ModulePresentation, TSurface> createSurface;
+    private readonly Func<ModuleVisual, ModuleTriangleVisual?, ModulePresentation, TSurface> createSurface;
     private readonly Action waitForGpu;
     private LoadedSceneModule active;
     private TSurface surface;
@@ -84,8 +86,17 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
     private string? preparationSource;
     private int preparationRevision;
 
+    // A host whose surfaces cannot draw triangles: a module that gives some is refused rather than drawn without them.
     public SceneModuleHost(string initialPath, string availablePath, string language,
         Func<ModuleVisual, ModulePresentation, TSurface> createSurface, Action waitForGpu)
+        : this(initialPath, availablePath, language,
+            (visual, triangles, presentation) => triangles is null ? createSurface(visual, presentation) : throw new InvalidDataException("This host cannot draw module triangles."),
+            waitForGpu)
+    {
+    }
+
+    public SceneModuleHost(string initialPath, string availablePath, string language,
+        Func<ModuleVisual, ModuleTriangleVisual?, ModulePresentation, TSurface> createSurface, Action waitForGpu)
     {
         this.availablePath = availablePath;
         this.createSurface = createSurface;
@@ -94,7 +105,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         try
         {
             active.Update(new(language));
-            surface = createSurface(active.Render(), new(active.Version, null, language, null));
+            surface = Build(active, new(active.Version, null, language, null));
             CreatedSurfaces = 1;
             key = Key(language);
         }
@@ -197,7 +208,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         active.Update(new(language));
         var nextKey = Key(language, currentUtc);
         if (nextKey == key) return;
-        var next = createSurface(active.Render(), new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion) { Validated = IsValidated, Preparation = preparationData, CurrentUtc = currentUtc });
+        var next = Build(active, new(active.Version, Available?.Version, language, Error, ActiveSlot, RetiredVersion) { Validated = IsValidated, Preparation = preparationData, CurrentUtc = currentUtc });
         CreatedSurfaces++;
         try { waitForGpu(); }
         catch { next.Dispose(); DisposedSurfaces++; throw; }
@@ -231,7 +242,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
             }
             next = LoadedSceneModule.Load(offer);
             next.Update(new(language));
-            nextSurface = createSurface(next.Render(), new(next.Version, null, language, null, nextSlot, active.Version) { Validated = validatedImages?.Contains(next.Sha256) == true, Preparation = preparationData });
+            nextSurface = Build(next, new(next.Version, null, language, null, nextSlot, active.Version) { Validated = validatedImages?.Contains(next.Sha256) == true, Preparation = preparationData });
             CreatedSurfaces++;
             prepared = Stopwatch.GetTimestamp();
             waitForGpu(); // old command buffers can still name the old native buffers until this completes
@@ -263,6 +274,10 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         Console.WriteLine($"MODULE gaia code replaced: {previousModule.Version.ToString(2)} -> {active.Version.ToString(2)}; active slot {ActiveSlot}; pid {Environment.ProcessId}; sha256 {active.Sha256}; surfaces {CreatedSurfaces} created/{DisposedSurfaces} disposed; old code unload requested; click-to-active {LastSwapMilliseconds:F2} ms, preparation {LastPreparationMilliseconds:F2} ms (monotonic)");
         return true;
     }
+
+    // A module's frame and its optional triangles, already copied and checked, made into one surface.
+    private TSurface Build(LoadedSceneModule module, ModulePresentation presentation) =>
+        createSurface(module.Render(), module.RenderTriangles(), presentation);
 
     private string Key(string language) => Key(language, DateTimeOffset.UtcNow);
 
