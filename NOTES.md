@@ -761,6 +761,21 @@ refusal; 62 without it. `module-mesh-tests`: 23.
 Nothing is installed in a live `modules/gaia`, and V1.2 is activated only by the user's click, then validated by
 another. The window must restart to take the new host: the surface factory is built in `Main`.
 
+## A validation kept on the machine (2026-10-30)
+
+The user did not want to activate and validate Gaia's version again at every start: once a version passes its checks
+and they validate it, it should stay. The validation was only held in memory, and the scene always started on
+`initial/`. Now the second click also writes the exact bytes the code was loaded from, and a record of its version
+and hash, into `%LOCALAPPDATA%\delta\modules\gaia\validated\` (`<module-dir>\validated` under `--module-dir`, so that
+proofs never touch the user's own). Each file is written whole and then moved into place. At the next start the host
+loads that image instead of the initial one when it is newer, after the same checks as a click: the hash and
+version against the record, the identity, the update, the frame and its triangles. Any refusal starts on the initial
+code, as before. The scene starts in green, validated, with the initial version offered as the return. An explicit
+return forgets the record; activating a newer version without validating it leaves the last validation in place.
+
+Measured: `module-tests` 83 checks, 9 of them on this; isolated Vulkan, `--demo --module-dir ... --view 3` with
+V1.0 initial and V1.2 kept: the window starts on V1.2, planet shown, return to V1.0 offered, no click.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

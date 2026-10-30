@@ -75,6 +75,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
     private readonly string availablePath;
     private readonly Func<ModuleVisual, ModuleTriangleVisual?, ModulePresentation, TSurface> createSurface;
     private readonly Action waitForGpu;
+    private readonly string? validatedStore;
     private LoadedSceneModule active;
     private TSurface surface;
     private ModuleOffer? requested;
@@ -89,28 +90,112 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
 
     // A host whose surfaces cannot draw triangles: a module that gives some is refused rather than drawn without them.
     public SceneModuleHost(string initialPath, string availablePath, string language,
-        Func<ModuleVisual, ModulePresentation, TSurface> createSurface, Action waitForGpu)
+        Func<ModuleVisual, ModulePresentation, TSurface> createSurface, Action waitForGpu, string? validatedStore = null)
         : this(initialPath, availablePath, language,
             (visual, triangles, presentation) => triangles is null ? createSurface(visual, presentation) : throw new InvalidDataException("This host cannot draw module triangles."),
-            waitForGpu)
+            waitForGpu, validatedStore)
     {
     }
 
+    // validatedStore: where the author's last validation is kept on this machine (current.json and the exact image).
+    // The host starts on that image when it is newer than the initial code and passes the same checks; else on the initial code.
     public SceneModuleHost(string initialPath, string availablePath, string language,
-        Func<ModuleVisual, ModuleTriangleVisual?, ModulePresentation, TSurface> createSurface, Action waitForGpu)
+        Func<ModuleVisual, ModuleTriangleVisual?, ModulePresentation, TSurface> createSurface, Action waitForGpu, string? validatedStore = null)
     {
         this.availablePath = availablePath;
         this.createSurface = createSurface;
         this.waitForGpu = waitForGpu;
-        active = LoadedSceneModule.Load(LoadedSceneModule.Probe(initialPath));
+        this.validatedStore = validatedStore;
+        var initial = LoadedSceneModule.Probe(initialPath);
+        (LoadedSceneModule, TSurface)? started = null;
+        if (KeptOffer(initial.Version) is { } kept)
+        {
+            try
+            {
+                started = Start(kept, language, "green", initial.Version, validated: true);
+                validatedImages = new(StringComparer.Ordinal) { kept.Sha256 };
+                ActiveSlot = "green";
+                RetiredVersion = initial.Version;
+                Console.WriteLine($"MODULE gaia started on the validated image v{kept.Version.ToString(2)}; sha256 {kept.Sha256}; initial v{initial.Version.ToString(2)} offered as the return; pid {Environment.ProcessId}");
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"MODULE gaia validated image refused at start ({error.GetType().Name}); starting on the initial code");
+            }
+        }
+        (active, surface) = started ?? Start(initial, language, "blue", null, validated: false);
+        CreatedSurfaces = 1;
+        key = Key(language);
+    }
+
+    private (LoadedSceneModule, TSurface) Start(ModuleOffer offer, string language, string slot, Version? retired, bool validated)
+    {
+        var module = LoadedSceneModule.Load(offer);
         try
         {
-            active.Update(new(language));
-            surface = Build(active, new(active.Version, null, language, null));
-            CreatedSurfaces = 1;
-            key = Key(language);
+            module.Update(new(language));
+            return (module, Build(module, new(module.Version, null, language, null, slot, retired) { Validated = validated }));
         }
-        catch { active.Dispose(); throw; }
+        catch { module.Dispose(); throw; }
+    }
+
+    // The kept validation, if its record names an image still there with that exact hash and version, newer than the initial code.
+    private ModuleOffer? KeptOffer(Version initial)
+    {
+        if (validatedStore is null) return null;
+        var record = Path.Combine(validatedStore, "current.json");
+        try
+        {
+            if (!File.Exists(record)) return null;
+            if (new FileInfo(record).Length > 4096) throw new InvalidDataException("The validated module record is too large.");
+            var data = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(record));
+            if (data is null || !data.TryGetValue("version", out var text) || !System.Version.TryParse(text, out var version) ||
+                !data.TryGetValue("sha256", out var hash) || hash is null || hash.Length != 64 || !hash.All(Uri.IsHexDigit))
+                throw new InvalidDataException("Invalid validated module record.");
+            if (version <= initial) return null;
+            hash = hash.ToUpperInvariant();
+            var offer = LoadedSceneModule.Probe(Path.Combine(validatedStore, hash + ".dll"));
+            if (offer.Version != version || offer.Sha256 != hash) throw new InvalidDataException("The kept image does not match its record.");
+            return offer;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or BadImageFormatException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine($"MODULE gaia validated record refused ({e.GetType().Name}); starting on the initial code");
+            return null;
+        }
+    }
+
+    // Keeps the active image and its record, each written whole then moved into place; a failure leaves the validation in memory only.
+    private void Keep()
+    {
+        if (validatedStore is null) return;
+        try
+        {
+            Directory.CreateDirectory(validatedStore);
+            var image = Path.Combine(validatedStore, active.Sha256 + ".dll");
+            File.WriteAllBytes(image + ".tmp", active.LoadedImage);
+            File.Move(image + ".tmp", image, overwrite: true);
+            var record = Path.Combine(validatedStore, "current.json");
+            File.WriteAllText(record + ".tmp", System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
+                { ["version"] = active.Version.ToString(), ["sha256"] = active.Sha256, ["validated_utc"] = DateTimeOffset.UtcNow.ToString("O") }));
+            File.Move(record + ".tmp", record, overwrite: true);
+            Console.WriteLine($"MODULE gaia validation kept on this machine: v{active.Version.ToString(2)}; {record}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"MODULE gaia validation not kept ({e.GetType().Name}); valid for this run only");
+        }
+    }
+
+    // An explicit return forgets the kept validation: the next start is on the initial code.
+    private void Forget()
+    {
+        if (validatedStore is null) return;
+        try { File.Delete(Path.Combine(validatedStore, "current.json")); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"MODULE gaia kept validation not forgotten ({e.GetType().Name})");
+        }
     }
 
     public Version Version => active.Version;
@@ -136,6 +221,7 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         if (requested is not null || expectedCodeHash != active.Sha256 || IsValidated) return false;
         (validatedImages ??= new(StringComparer.Ordinal)).Add(active.Sha256);
         Console.WriteLine($"MODULE gaia validation recorded: v{active.Version.ToString(2)}; sha256 {active.Sha256}; pid {Environment.ProcessId}; utc {DateTimeOffset.UtcNow:O}");
+        Keep();
         return true;
     }
 
@@ -267,6 +353,8 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
         Error = null;
         key = Key(language);
         LastRetiredCode = previousModule.ContextReference;
+        if (IsValidated) Keep(); // the image validated earlier in this run is the one to start on again
+        else if (active.Version < previousModule.Version) Forget();
         try { previousSurface.Dispose(); DisposedSurfaces++; }
         finally { previousModule.Dispose(); }
         LastRequestTimestamp = requestedAt;

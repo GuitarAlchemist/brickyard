@@ -12,10 +12,13 @@ internal sealed class LoadedSceneModule : IDisposable
     private CodeContext? context;
     private ISceneModule? module;
 
-    private LoadedSceneModule(CodeContext context, ISceneModule module, ModuleOffer offer)
+    private readonly byte[] image;
+
+    private LoadedSceneModule(CodeContext context, ISceneModule module, ModuleOffer offer, byte[] image)
     {
         this.context = context;
         this.module = module;
+        this.image = image;
         Id = module.Id;
         Version = offer.Version;
         Sha256 = offer.Sha256;
@@ -28,6 +31,8 @@ internal sealed class LoadedSceneModule : IDisposable
     public string Sha256 { get; }
     public string ContextId { get; }
     public WeakReference ContextReference { get; }
+    // The bytes the code was loaded from, whose hash is Sha256: what a validation keeps, whatever the disk now holds.
+    public ReadOnlySpan<byte> LoadedImage => image;
 
     // Availability inspection reads PE metadata, not executable module code.
     public static ModuleOffer Probe(string path)
@@ -56,7 +61,7 @@ internal sealed class LoadedSceneModule : IDisposable
             module = Activator.CreateInstance(type) as ISceneModule ?? throw new InvalidDataException("The module does not implement the shared scene contract.");
             if (module.Id != "gaia") throw new InvalidDataException("Unexpected scene module identity.");
             module.Initialize();
-            return new(context, module, offer);
+            return new(context, module, offer, bytes);
         }
         catch
         {

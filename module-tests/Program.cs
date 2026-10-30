@@ -237,6 +237,7 @@ try
         Directory.Delete(Path.GetDirectoryName(initial)!); Directory.Delete(Path.GetDirectoryName(available)!); Directory.Delete(retained); Directory.Delete(root);
     }
 
+    Kept(args[0], args[1], offer1, offer2);
     if (args.Length == 3) Planet(args[1], args[2], offer2);
 }
 catch (Exception error)
@@ -308,6 +309,69 @@ void Planet(string v11, string v12, ModuleOffer offer2)
         host.RequestReplacement();
         host.Advance("en");
         Check(host.Version == offer3.Version && host.Surface.Triangles?.Triangles.Count == 7680, "the same host can go to V1.2 again");
+    }
+    finally { Directory.Delete(root, recursive: true); }
+}
+
+// A validation is kept on the machine: the next start goes straight to the validated image, after the same checks,
+// until the author goes back to the previous version.
+void Kept(string v1, string v11, ModuleOffer offer1, ModuleOffer offer2)
+{
+    var root = Path.Combine(Path.GetTempPath(), $"gaia-kept-{Guid.NewGuid():N}");
+    var initial = Path.Combine(root, "initial", "GaiaPresence.Module.dll");
+    var available = Path.Combine(root, "available", "GaiaPresence.Module.dll");
+    var retained = Path.Combine(root, "retained");
+    var store = Path.Combine(root, "validated");
+    var record = Path.Combine(store, "current.json");
+    var kept = Path.Combine(store, offer2.Sha256 + ".dll");
+    Directory.CreateDirectory(Path.GetDirectoryName(initial)!);
+    Directory.CreateDirectory(Path.GetDirectoryName(available)!);
+    Directory.CreateDirectory(retained);
+    File.Copy(v1, initial); File.Copy(v11, available);
+    File.Copy(v1, Path.Combine(retained, offer1.Sha256 + ".dll"));
+    File.WriteAllText(Path.Combine(retained, "versions.json"), System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { [offer1.Version.ToString()] = offer1.Sha256 }));
+    SceneModuleHost<TestSurface> Start() => new(initial, available, "en", (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { }, store);
+    try
+    {
+        using (var first = Start())
+        {
+            Check(first.Version == offer1.Version && !File.Exists(record), "nothing validated yet: the scene starts on the initial code");
+            first.PollAvailable(1); first.RequestReplacement(); first.Advance("en");
+            Check(first.Version == offer2.Version && !File.Exists(record), "an activation alone is not kept");
+            first.RequestValidation(offer2.Sha256);
+            Check(File.Exists(record) && File.Exists(kept) && LoadedSceneModule.Probe(kept).Sha256 == offer2.Sha256, "a validation keeps the exact image and its record on the machine");
+        }
+        File.Delete(available);
+        using (var second = Start())
+        {
+            second.PollAvailable(1);
+            Check(second.Version == offer2.Version && second.IsValidated && second.RetiredVersion == offer1.Version && second.Available?.Version == offer1.Version,
+                "the next start is on the validated image, still validated, with the return to the initial version offered, even once available/ is emptied");
+        }
+        File.WriteAllText(record, "{\"version\":\"1.1.0.0\",\"sha256\":\"" + offer1.Sha256 + "\"}");
+        using (var mismatch = Start())
+            Check(mismatch.Version == offer1.Version && !mismatch.IsValidated, "a record naming another image is refused: the scene starts on the initial code");
+        File.WriteAllText(record, "{\"version\":\"1.1.0.0\",\"sha256\":\"" + offer2.Sha256 + "\"}");
+        var image = File.ReadAllBytes(kept);
+        File.WriteAllBytes(kept, new byte[16]);
+        using (var corrupted = Start())
+            Check(corrupted.Version == offer1.Version && !corrupted.IsValidated, "a corrupted kept image is refused: the scene starts on the initial code");
+        File.WriteAllBytes(kept, image);
+        File.WriteAllText(record, "{ not json");
+        using (var unreadable = Start())
+            Check(unreadable.Version == offer1.Version, "an unreadable record is refused: the scene starts on the initial code");
+        File.WriteAllText(record, "{\"version\":\"1.1.0.0\",\"sha256\":\"" + offer2.Sha256 + "\"}");
+        using (var back = Start())
+        {
+            back.PollAvailable(1); back.RequestReplacement(); back.Advance("en");
+            Check(back.Version == offer1.Version && !File.Exists(record), "an explicit return to the previous version forgets the kept validation");
+        }
+        using (var after = Start())
+            Check(after.Version == offer1.Version, "after a return the next start is on the initial code again");
+        File.WriteAllText(record, "{\"version\":\"1.0.0.0\",\"sha256\":\"" + offer1.Sha256 + "\"}");
+        File.Copy(v1, Path.Combine(store, offer1.Sha256 + ".dll"));
+        using (var older = new SceneModuleHost<TestSurface>(v11, available, "en", (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { }, store))
+            Check(older.Version == offer2.Version, "a kept image no newer than the initial code is not used");
     }
     finally { Directory.Delete(root, recursive: true); }
 }

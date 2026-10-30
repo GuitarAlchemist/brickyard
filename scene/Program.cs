@@ -738,13 +738,17 @@ internal static unsafe class Stage
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
         var moduleRoot = Option(args, "--module-dir") ?? Path.Combine(AppContext.BaseDirectory, "modules", "gaia");
+        // The author's last validation, kept on this machine across rebuilds; an isolated --module-dir keeps its own.
+        var validatedStore = Option(args, "--module-dir") is null
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "modules", "gaia", "validated")
+            : Path.Combine(moduleRoot, "validated");
         SceneModuleHost<Mesh>? gaiaModule = null;
         Dictionary<string, Mesh>? gaiaFallback = null;
         try
         {
             gaiaModule = new SceneModuleHost<Mesh>(Path.Combine(moduleRoot, "initial", "GaiaPresence.Module.dll"),
                 Path.Combine(moduleRoot, "available", "GaiaPresence.Module.dll"), Words.Language,
-                (visual, triangles, presentation) => new Mesh(device, physical, SceneModuleGeometry.Compile(visual, triangles, presentation)), () => device.WaitIdle());
+                (visual, triangles, presentation) => new Mesh(device, physical, SceneModuleGeometry.Compile(visual, triangles, presentation)), () => device.WaitIdle(), validatedStore);
             Console.WriteLine($"MODULE gaia loaded code v{gaiaModule.Version.ToString(2)}; pid {Environment.ProcessId}; sha256 {gaiaModule.CodeHash}");
         }
         catch (Exception error)
