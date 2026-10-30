@@ -160,6 +160,52 @@ func TestALateAnswerIsRefused(t *testing.T) {
 	}
 }
 
+// The window learns how the bridge stands, once at each change: an agent that listens is not yet Gaia, her answer
+// connects her, a request that expires unanswered degrades the bridge, and the agent leaving takes it offline.
+func TestTheWindowShowsHowTheBridgeToGaiaStands(t *testing.T) {
+	s := newAskServer(t)
+	now := time.Now()
+	s.asks.now = func() time.Time { return now }
+	shown := make(chan string, 8)
+	s.asks.shown = func(bridge string) { shown <- bridge }
+	expect := func(want string) {
+		t.Helper()
+		select {
+		case got := <-shown:
+			if got != want {
+				t.Errorf("the window shows %s, want %s", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("the window was not told %s", want)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.url+"/asks", nil)
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, "s3cret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	expect("listening")
+	id := s.request(t, `{"to":"gaia","text":"Tu es là ?","mute":true,"ttl_s":5}`)
+	s.post(t, "/answer", `{"request_id":"`+id+`","by":"gaia","text":"Oui."}`)
+	expect("connected")
+	s.post(t, "/answer", `{"request_id":"`+id+`","by":"gaia","text":"Oui."}`) // a duplicate changes nothing
+	s.request(t, `{"to":"gaia","text":"Et maintenant ?","mute":true,"ttl_s":5}`)
+	now = now.Add(6 * time.Second)
+	s.asks.expire()
+	expect("degraded")
+	cancel()
+	expect("offline")
+	select {
+	case extra := <-shown:
+		t.Errorf("the window was told %s once more", extra)
+	default:
+	}
+}
+
 // What a request may be, who may post it, and how many the brain keeps.
 func TestDeltaAsksWithinBounds(t *testing.T) {
 	s := newAskServer(t)

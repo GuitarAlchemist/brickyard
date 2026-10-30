@@ -150,8 +150,10 @@ func runMCP(c mcpConfig) {
 	s := startScene(c, logf)
 	var muted atomic.Bool    // the user turned the computer's microphone off from the window
 	var devices atomic.Int64 // how many devices listen to Delta through the phone gateway (remote.go)
-	greet := func() {        // what a window must know whatever it missed: its words (Words.cs), its two buttons, the phone and the version
-		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load(), "devices": devices.Load(), "version": version})
+	var gaia atomic.Value    // how the bridge to Gaia stands (ask.go)
+	gaia.Store("offline")
+	greet := func() { // what a window must know whatever it missed: its words (Words.cs), its two buttons, the phone, the version and Gaia
+		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load(), "devices": devices.Load(), "version": version, "gaia": gaia.Load()})
 	}
 	greet()
 	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code, langOf: m.spokenIn}
@@ -318,6 +320,12 @@ func runMCP(c mcpConfig) {
 		return id, err
 	}
 	m.followSay = rm.asks.said
+	rm.asks.shown = func(bridge string) {
+		gaia.Store(bridge)
+		greet()
+		s.send(map[string]any{"gaia": bridge})
+		m.note("gaia", map[string]any{"bridge": bridge})
+	}
 	if c.hooks != "" {
 		go h.serve(c.hooks)
 	}

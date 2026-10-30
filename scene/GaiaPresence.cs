@@ -1,12 +1,29 @@
 using SN = System.Numerics;
 
-// A separate, static companion in the hall. This is only a visual presence: no transport, microphone, commands or
-// invented connection state. The label stays offline until an authoritative connection is wired in a later change.
+// A separate, static companion in the hall. This is only a visual presence: no transport, microphone or commands. Its
+// placard says how the bridge to Gaia stands as the brain sees it (Link's "gaia"), never a state the window invents.
 internal static class GaiaPresence
 {
     public static readonly string[] Labels = ["Gaia — disconnected", "Gaia — non raccordée"];
 
     public static string Status => Words.Say(Labels[0], Labels[1]);
+
+    // A Gaia module's placard says she is disconnected, in either language and with either dash; while the brain says
+    // otherwise, the host shows the bridge's state in its place. Any other text of the module stays as it is.
+    public static string Bridged(string text, string bridge, string language)
+    {
+        var fr = text is "Gaia — non raccordée" or "Gaia - non raccordée";
+        if (bridge == "offline" || !(fr || text is "Gaia — disconnected" or "Gaia - disconnected")) return text;
+        return (bridge, fr || language == "fr") switch
+        {
+            ("listening", true) => "Gaia — relais à l'écoute",
+            ("listening", false) => "Gaia — relay listening",
+            ("connected", true) => "Gaia — raccordée",
+            ("connected", false) => "Gaia — connected",
+            (_, true) => "Gaia — dégradée",
+            _ => "Gaia — degraded",
+        };
+    }
 
     public static void SelfTest(Action<bool, string> check)
     {
@@ -29,6 +46,10 @@ internal static class GaiaPresence
                 check(Status == expected, $"Gaia's visible label follows {code} on the same scene link");
                 check(Labels.Contains(Status), $"Gaia has a prepared placard for {code}");
             }
+
+            check(Bridged("Gaia - non raccordée", "offline", "fr") == "Gaia - non raccordée" && Bridged("Gaia — non raccordée", "listening", "fr") == "Gaia — relais à l'écoute"
+                && Bridged("Gaia - disconnected", "connected", "en") == "Gaia — connected" && Bridged("Gaia — disconnected", "degraded", "en") == "Gaia — degraded"
+                && Bridged("v1.1 active", "connected", "fr") == "v1.1 active", "the placard says the bridge's state, and only the placard");
         }
         finally
         {

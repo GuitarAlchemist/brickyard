@@ -1527,6 +1527,7 @@ internal static unsafe class Stage
             Guard("Gaia module frame", () =>
             {
                 gaiaModule?.PollAvailable(now);
+                if (gaiaModule is not null) gaiaModule.Bridge = moment.Gaia;
                 gaiaModule?.Advance(Words.Language);
             });
             Guard("agents' office frame", () =>

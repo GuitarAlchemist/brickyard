@@ -1,6 +1,6 @@
 using SN = System.Numerics;
 
-// The hall the robot stands in: concrete slabs with a dashed yellow line around the robot, a brick wall in running bond
+// The hall the robot stands in: concrete slabs, a brick wall in running bond
 // between two board-marked concrete pillars under a beam, a pallet of bricks on the left and a steel cabinet on the right.
 internal static class Brickwork
 {
@@ -18,18 +18,6 @@ internal static class Brickwork
             {
                 var tone = 0.07f + (0.03f * Hash(i, j));
                 Boxes.Add(o, new(2f * i, -0.02f, 2f * j), new(1.975f, 0.04f, 1.975f), new SN.Vector3(tone, tone * 0.96f, tone * 0.9f));
-            }
-        }
-
-        // The dashed line, 2.2 m square, 4 mm proud of the slabs.
-        var yellow = new SN.Vector3(0.62f, 0.42f, 0.02f);
-        for (var k = 0; k <= 10; k++)
-        {
-            var a = -1f + (0.2f * k);
-            foreach (var s in new[] { -1.1f, 1.1f })
-            {
-                Boxes.Add(o, new(a, 0.002f, s), new(0.13f, 0.004f, 0.05f), yellow);
-                Boxes.Add(o, new(s, 0.002f, a), new(0.05f, 0.004f, 0.13f), yellow);
             }
         }
 

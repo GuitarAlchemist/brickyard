@@ -36,6 +36,7 @@ internal sealed record ModulePresentation(Version Version, Version? Available, s
     public bool Validated { get; init; }
     public IReadOnlyDictionary<string, string>? Preparation { get; init; }
     public DateTimeOffset CurrentUtc { get; init; } = DateTimeOffset.UtcNow;
+    public string Bridge { get; init; } = "offline"; // how the bridge to Gaia stands, as the brain says (GaiaPresence.Bridged)
     public string[] PreparationLines
     {
         get
@@ -277,12 +278,15 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
 
     // A module's frame and its optional triangles, already copied and checked, made into one surface.
     private TSurface Build(LoadedSceneModule module, ModulePresentation presentation) =>
-        createSurface(module.Render(), module.RenderTriangles(), presentation);
+        createSurface(module.Render(), module.RenderTriangles(), presentation with { Bridge = Bridge });
+
+    // How the bridge to Gaia stands, as the brain last said; a change rebuilds the surface at the next Advance.
+    public string Bridge { get; set; } = "offline";
 
     private string Key(string language) => Key(language, DateTimeOffset.UtcNow);
 
     private string Key(string language, DateTimeOffset currentUtc) =>
-        $"{language}|{Available?.Sha256}|{Error}|{IsValidated}|{preparationRevision}|ottawa-paris-clock-v2|{(preparationData is null ? 0 : currentUtc.UtcTicks / TimeSpan.TicksPerMinute)}";
+        $"{language}|{Available?.Sha256}|{Error}|{IsValidated}|{preparationRevision}|ottawa-paris-clock-v2|{Bridge}|{(preparationData is null ? 0 : currentUtc.UtcTicks / TimeSpan.TicksPerMinute)}";
 
     private void PollPreparation()
     {

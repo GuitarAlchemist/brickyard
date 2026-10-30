@@ -31,6 +31,10 @@ import (
 // A request's state goes asked → accepted → speaking → spoken, or asked → answered for a mute request, whose answer the
 // brain keeps without saying it; asked → expired when nothing answered in time; accepted → error when Delta could not
 // say it. Its id begins with the brain's own id, so that a brain started since refuses the answer.
+//
+// The window shows how the bridge to Gaia stands (bridge): offline while no agent listens to /asks; listening while
+// one does but Gaia has answered nothing yet, since an agent that listens proves no answer; connected once she
+// answered the latest request that ended; degraded when that one expired or could not be said.
 const (
 	maxAsks       = 64
 	maxAskText    = 1000
@@ -62,18 +66,52 @@ type asks struct {
 	now   func() time.Time
 	say   func(text, by, mood, requestID string) (sayID int, err error) // the say tool's path (mcpServer.sayAs)
 	note  func(event string, fields map[string]any)                     // the journal, or nil
+	shown func(bridge string)                                           // the window's view of the bridge, at each change, or nil
 
-	mu    sync.Mutex
-	n     int
-	all   map[string]*ask
-	order []string // by age, for the bound
-	subs  map[chan []byte]bool
+	mu     sync.Mutex
+	n      int
+	all    map[string]*ask
+	order  []string // by age, for the bound
+	subs   map[chan []byte]bool
+	bridge string // the last one shown
+
+	showing sync.Mutex
 }
 
 func newAsks() *asks {
 	b := make([]byte, 6)
 	rand.Read(b)
-	return &asks{brain: hex.EncodeToString(b), now: time.Now, all: map[string]*ask{}}
+	return &asks{brain: hex.EncodeToString(b), now: time.Now, all: map[string]*ask{}, bridge: "offline"}
+}
+
+// bridged is how the bridge to Gaia stands, as the window shows it. The caller holds mu.
+func (a *asks) bridged() string {
+	if len(a.subs) == 0 {
+		return "offline"
+	}
+	for i := len(a.order) - 1; i >= 0; i-- {
+		switch a.all[a.order[i]].State {
+		case "expired", "error":
+			return "degraded"
+		case "accepted", "speaking", "spoken", "answered":
+			return "connected"
+		}
+	}
+	return "listening"
+}
+
+// show tells the window how the bridge stands, when that changed; one at a time, so that the last word is the latest.
+func (a *asks) show() {
+	a.showing.Lock()
+	defer a.showing.Unlock()
+	a.mu.Lock()
+	now := a.bridged()
+	changed := now != a.bridge
+	a.bridge = now
+	a.mu.Unlock()
+	if changed && a.shown != nil {
+		a.shown(now)
+	}
 }
 
 func (a *asks) handle(mux *http.ServeMux, allowed func(http.ResponseWriter, *http.Request, string) bool) {
@@ -220,6 +258,7 @@ func (a *asks) answer(w http.ResponseWriter, req *http.Request) {
 	a.mu.Lock()
 	state := map[string]any{"request_id": r.ID, "say_id": r.SayID, "state": r.State}
 	a.mu.Unlock()
+	a.show()
 	reply(w, http.StatusAccepted, state)
 }
 
@@ -247,6 +286,7 @@ func (a *asks) expire() {
 	for _, r := range gone {
 		a.record("ask", r)
 	}
+	a.show()
 }
 
 // sweep marks as expired the unanswered requests past their time, and returns them. The caller holds mu.
@@ -343,10 +383,12 @@ func (a *asks) stream(w http.ResponseWriter, req *http.Request) {
 	}
 	a.subs[ch] = true
 	a.mu.Unlock()
+	a.show()
 	defer func() {
 		a.mu.Lock()
 		delete(a.subs, ch)
 		a.mu.Unlock()
+		a.show()
 	}()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

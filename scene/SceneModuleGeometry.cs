@@ -16,7 +16,7 @@ internal static class SceneModuleGeometry
                 throw new InvalidDataException("Invalid module box.");
             Boxes.Add(vertices, box.Centre, box.Size, new Finish(box.Color, (Material)box.Material));
         }
-        foreach (var text in visual.Text) Text(vertices, text);
+        foreach (var text in visual.Text) Text(vertices, text with { Text = GaiaPresence.Bridged(text.Text, presentation.Bridge, presentation.Language) });
 
         // This version is read from the code image loaded by the host, not supplied as cosmetic module text.
         var dark = new SN.Vector3(0.055f, 0.045f, 0.08f);
