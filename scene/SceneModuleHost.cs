@@ -179,6 +179,9 @@ internal sealed class SceneModuleHost<TSurface> : IDisposable where TSurface : c
             File.WriteAllText(record + ".tmp", System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
                 { ["version"] = active.Version.ToString(), ["sha256"] = active.Sha256, ["validated_utc"] = DateTimeOffset.UtcNow.ToString("O") }));
             File.Move(record + ".tmp", record, overwrite: true);
+            foreach (var old in Directory.EnumerateFiles(validatedStore, "*.dll")) // only the image the record names stays
+                if (!string.Equals(old, image, StringComparison.OrdinalIgnoreCase) && Path.GetFileNameWithoutExtension(old) is { Length: 64 } name && name.All(Uri.IsHexDigit))
+                    File.Delete(old);
             Console.WriteLine($"MODULE gaia validation kept on this machine: v{active.Version.ToString(2)}; {record}");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

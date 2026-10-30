@@ -371,7 +371,11 @@ void Kept(string v1, string v11, ModuleOffer offer1, ModuleOffer offer2)
         File.WriteAllText(record, "{\"version\":\"1.0.0.0\",\"sha256\":\"" + offer1.Sha256 + "\"}");
         File.Copy(v1, Path.Combine(store, offer1.Sha256 + ".dll"));
         using (var older = new SceneModuleHost<TestSurface>(v11, available, "en", (visual, presentation) => new TestSurface(presentation.Version, visual, []), () => { }, store))
+        {
             Check(older.Version == offer2.Version, "a kept image no newer than the initial code is not used");
+            older.RequestValidation(offer2.Sha256);
+            Check(Directory.GetFiles(store, "*.dll").Select(Path.GetFileName).SequenceEqual([offer2.Sha256 + ".dll"]), "a validation leaves only the image its record names");
+        }
     }
     finally { Directory.Delete(root, recursive: true); }
 }
