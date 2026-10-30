@@ -1,0 +1,979 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "Delta's brain",
+    "version": "1.0.0",
+    "summary": "The local HTTP contract of Delta's brain, on the hooks' address.",
+    "description": "Delta's brain (brain/, Go) answers HTTP on the hooks' address, 127.0.0.1:8807 unless `-hooks` names another, and nowhere when `-hooks` is empty. Every path sits behind `localOnly` (hooks.go): a request with an `Origin` header, which browsers add, or whose `Host` is not 127.0.0.1, localhost or ::1, gets 403 in text/plain. Every path also needs the `X-Delta-Hook` header, which a web page cannot send to another origin without a preflight that nobody answers.\n\nThe remote gateway's paths (/hear, /said, /link, /guests) and Delta's requests to another assistant (/ask, /asks, /answer) also need `X-Delta-Remote`: the secret the brain writes at each start into %LOCALAPPDATA%\\delta\\remote.secret (`os.UserCacheDir()`/delta/remote.secret), readable by the user's account alone. A client reads that file locally at each request. The secret must never be transmitted anywhere but in this header to this local address, and never logged. `remote.allowed` (remote.go) checks the method, the hooks' header and the secret together, in constant time, and answers 403 in text/plain for any of them missing or wrong: a wrong method is 403 too, never 405. /hook and /gesture need only `X-Delta-Hook`.\n\nThe gateway's paths are registered only when the brain has a gateway (`hooks.remote`), and /ask, /asks, /answer only when it keeps requests (`remote.asks`); the voice brain has both. A path not listed here gets the mux's 404 `404 page not found` in text/plain.\n\nError bodies: `http.Error` writes text/plain (localOnly, remote.allowed, hooks.go, remote.go); ask.go's own refusals are application/json `{\"error\"}`.\n\nServer-sent events (/said, /asks): each event is one `data:` line holding a JSON object and a blank line, with no `event:`, `id:` or `retry:` field. Every 15 s without an event the brain writes the SSE comment `: alive` and a blank line, which clients ignore, to keep the connection open. A listener that does not read misses events rather than holding the brain back.\n\nThe window's view of the bridge to Gaia (offline, listening, connected, degraded) has no route of its own: the brain derives it (`asks.bridged`, ask.go) from the agents listening to /asks and from the requests' states. It is offline while no agent listens to /asks; listening while one does and every request the brain keeps is still asked, or there is none; connected when the latest request that left `asked` was accepted, speaking, spoken or answered; degraded when it expired or ended in error."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8807",
+      "description": "The brain's default hooks' address (main.go `-hooks`)."
+    }
+  ],
+  "security": [
+    {
+      "deltaHook": [],
+      "deltaRemote": []
+    }
+  ],
+  "paths": {
+    "/hook": {
+      "post": {
+        "operationId": "postHook",
+        "summary": "A Claude Code hook's JSON",
+        "description": "Every Claude Code hook posts its JSON here, whatever the event (`curl -s -m 2 -H \"X-Delta-Hook: 1\" --data-binary @- http://127.0.0.1:8807/hook`). The brain answers 204 at once, with nothing on curl's stdout, and handles the payload afterwards: hooks of another session than its own are ignored. PreCompact starts a compaction; PostCompact, or SessionStart with source compact, ends it; a transcript_path makes the brain measure the context. Only `X-Delta-Hook` is needed.",
+        "security": [
+          {
+            "deltaHook": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HookPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Taken; the brain handles it afterwards."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequestText"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/gesture": {
+      "post": {
+        "operationId": "postGesture",
+        "summary": "A hand gesture a camera process saw",
+        "description": "The camera process (hands/delta_hands.py, which the user starts) posts each gesture it sees. The brain records it in the journal and acts on it, in order, when its confidence is at least 0.6: a face, hearts, a step through the shelf while the shelf is open, or opening the conversation. Only `X-Delta-Hook` is needed. The body is read up to 64 KiB.",
+        "security": [
+          {
+            "deltaHook": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Gesture"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded, and acted on if sure enough."
+          },
+          "400": {
+            "description": "Not JSON, or a gesture the brain does not know (`unknown gesture \"...\"`).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/hear": {
+      "post": {
+        "operationId": "postHear",
+        "summary": "A sentence another device heard",
+        "description": "A gateway posts what a device's microphone heard while its button was held. The brain transcribes it with Whisper, unless it is silent, and routes it as a sentence addressed to Delta, with source remote: it needs no wake word. A chime tells the room unless the route is channel, local or duplicate. The request's Content-Type is not checked.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "audio/wav": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeechWav"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Transcribed and routed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Heard"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body could not be read, or is not a 16 kHz mono 16-bit PCM WAV.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "description": "More than 30 s of speech (a body over 961024 bytes).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Whisper failed to transcribe it (`transcription: ...`).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Delta cannot hear yet: its ears are loading, or missing.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/said": {
+      "get": {
+        "operationId": "getSaid",
+        "summary": "What Delta says, sentence by sentence",
+        "description": "Server-sent events: one event per sentence as it starts playing on the computer, with its sound, for every listening device. Nothing is replayed at connection. The window's phone icon counts the listeners that sent `X-Delta-Plays: own`. Every 15 s without an event the stream carries the comment `: alive`.",
+        "parameters": [
+          {
+            "name": "X-Delta-Plays",
+            "in": "header",
+            "required": false,
+            "description": "`own`: this device plays the answers to its own sentences, so the computer does not play them while it listens. Any other value, or none, leaves every answer to the computer, as in Delta 0.5.0.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "own"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream, open until the client leaves.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always `no-cache`.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "$ref": "#/components/schemas/SaidStreamItem"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/NoStreaming"
+          }
+        }
+      }
+    },
+    "/link": {
+      "post": {
+        "operationId": "postLink",
+        "summary": "The link a phone opens to pair with the gateway",
+        "description": "The gateway posts its pairing link at each of its starts. The link holds the pairing code, a credential for about 120 s: the brain shows it in the window as a QR code behind the phone icon, and nowhere else. The body is read up to 4 KiB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Link"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Shown as a QR code."
+          },
+          "400": {
+            "description": "Not `{\"url\"}`, not an https link with a host, or longer than a QR code holds (106 bytes).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/guests": {
+      "post": {
+        "operationId": "postGuests",
+        "summary": "How many guests watch the window from afar",
+        "description": "The gateway posts how many guests it lets watch Delta's window, and whether they hear the room through its microphone, at each change and every 30 s while any watch. The window shows it until 60 s after the last post. The body is read up to 4 KiB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Guests"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Shown in the window."
+          },
+          "400": {
+            "description": "Not JSON, or `watching` missing or outside 0 to 99.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/ask": {
+      "post": {
+        "operationId": "postAsk",
+        "summary": "A request from Delta to another assistant",
+        "description": "Makes a request from Delta to an assistant it may ask (Gaia), in state `asked`, for the agents listening to /asks to carry. It expires after ttl_s seconds without an answer. The brain keeps the last 64 requests, forgetting finished ones first. The body is read up to 8 KiB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The request, made.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not JSON, an assistant Delta does not ask, a text of 0 or more than 1000 characters, or ttl_s outside 1 to 600.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/asks": {
+      "get": {
+        "operationId": "getAsks",
+        "summary": "Delta's requests and each change of their state",
+        "description": "Server-sent events: at connection, each live request (asked, accepted or speaking), oldest first; then the request, whole, at each change of its state. At most 8 agents listen at once. Listening or leaving changes the window's view of the bridge to Gaia (see the description of this document). Every 15 s without an event the stream carries the comment `: alive`.",
+        "responses": {
+          "200": {
+            "description": "The stream, open until the client leaves.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always `no-cache`.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "$ref": "#/components/schemas/AsksStreamItem"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "description": "8 agents listen already.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/NoStreaming"
+          }
+        }
+      }
+    },
+    "/answer": {
+      "post": {
+        "operationId": "postAnswer",
+        "summary": "An assistant's answer to one of Delta's requests",
+        "description": "Answers a request. A spoken request goes to `accepted` and Delta says the answer as its say tool would, then `speaking` and `spoken` as its mouth plays it, or `error` when it could not; a mute request goes to `answered`, and the brain keeps the answer without saying it. The answer is taken once: the same text again is a duplicate, not said twice. The checks run in this order: request_id, another brain's id (410), an unknown id (404), the assistant (403), the text (400), the mood (400), a duplicate (200), another answer (409), an expired request (410). The body is read up to 8 KiB.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Taken, once: accepted rather than spoken. `state` is the request's state when the brain answers, `accepted`, `answered` for a mute request, `error` when Delta could not say it, or `speaking` when its mouth already started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerAccepted"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The same text as the answer already taken: not said again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerDuplicate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not JSON, no request_id, a text of 0 or more than 1000 characters, or a mood Delta has no face for.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "In application/json, from another assistant than the one asked; in text/plain, from remote.allowed (see the document's description).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Delta asked nothing by this id, or forgot it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request has another answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The request expired, or another brain made it: Delta has started since.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "deltaHook": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Delta-Hook",
+        "description": "Any non-empty value, such as `1`. It proves no identity: it keeps web pages out, since a browser cannot send it to another origin without a preflight that the brain does not answer."
+      },
+      "deltaRemote": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Delta-Remote",
+        "description": "The secret in %LOCALAPPDATA%\\delta\\remote.secret, 64 hex characters that each brain writes anew at its start, readable by the user's account alone. A client reads it locally, at each request, since a brain started since has another. Send it only in this header to the brain's local address: never transmit it elsewhere, and never log it. Without it, or with another, the brain answers 403; when the brain could not write the file, every path that needs it answers 403."
+      }
+    },
+    "responses": {
+      "Forbidden": {
+        "description": "From localOnly (an Origin header, or a Host other than 127.0.0.1, localhost or ::1), or for a wrong method, a missing X-Delta-Hook, or a missing or wrong X-Delta-Remote where the path needs it.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainError"
+            }
+          }
+        }
+      },
+      "BadRequestText": {
+        "description": "The body is not the JSON the path takes.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainError"
+            }
+          }
+        }
+      },
+      "NoStreaming": {
+        "description": "The connection cannot stream (`no streaming here`).",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainError"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "PlainError": {
+        "description": "A plain-English reason, as Go's http.Error writes it, ending with a newline.",
+        "type": "string"
+      },
+      "Error": {
+        "description": "A refusal from ask.go.",
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "description": "Why, in plain English.",
+            "type": "string"
+          }
+        }
+      },
+      "HookPayload": {
+        "description": "What Delta reads of a Claude Code hook's JSON; every other field is ignored. The body is read up to 1 MiB.",
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "description": "The session the hook belongs to. Another session's hooks are ignored once the brain knows its own.",
+            "type": "string"
+          },
+          "transcript_path": {
+            "description": "The session's transcript, from which the brain measures the context.",
+            "type": "string"
+          },
+          "hook_event_name": {
+            "description": "The hook's event. PreCompact, PostCompact and SessionStart change what the robot shows; the others only name the transcript.",
+            "type": "string"
+          },
+          "trigger": {
+            "description": "PreCompact and PostCompact: `auto` or `manual`.",
+            "type": "string"
+          },
+          "source": {
+            "description": "SessionStart: `startup`, `resume`, `clear` or `compact`.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "Gesture": {
+        "description": "One gesture the camera saw.",
+        "type": "object",
+        "required": [
+          "gesture"
+        ],
+        "properties": {
+          "gesture": {
+            "description": "Which gesture; the brain knows these (gesture.go `gestures`).",
+            "type": "string",
+            "enum": [
+              "fist",
+              "i_love_you",
+              "open_palm",
+              "point_down",
+              "point_up",
+              "swipe_left",
+              "swipe_right",
+              "thumbs_down",
+              "thumbs_up",
+              "wave"
+            ]
+          },
+          "hand": {
+            "description": "Which hand, such as `right`; recorded only.",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "How sure the camera is, from 0 to 1. Below 0.6 the gesture is recorded but not acted on. Not checked.",
+            "type": "number"
+          },
+          "t_ms": {
+            "description": "When the camera saw it, in Unix milliseconds; recorded as seen_ms.",
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SpeechWav": {
+        "description": "A RIFF WAVE file of 16-bit mono PCM at 16000 Hz, at most 30 s of speech (961024 bytes in all).",
+        "contentMediaType": "audio/wav"
+      },
+      "Heard": {
+        "description": "What the brain heard in a posted WAV, and where it went.",
+        "type": "object",
+        "required": [
+          "utterance_id",
+          "text",
+          "route"
+        ],
+        "properties": {
+          "utterance_id": {
+            "description": "The sentence's number, in decimal, which the answers to it carry in /said; \"\" when nothing was heard.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The transcript as the session gets it, with a sentence Whisper repeated written once; \"\" for silence.",
+            "type": "string"
+          },
+          "route": {
+            "description": "Where it went: `nothing` for silence; `listen` to a pending listen call; `channel` to the session; `ignored` by the wake gate; `dropped` or `local` by the triage, `local` also when the fact sheet answered; `duplicate` when the other device heard it too; `language`, `shelf` or `window` for a command Delta carried out itself.",
+            "type": "string",
+            "enum": [
+              "nothing",
+              "listen",
+              "channel",
+              "ignored",
+              "dropped",
+              "local",
+              "duplicate",
+              "language",
+              "shelf",
+              "window"
+            ]
+          }
+        }
+      },
+      "SaidEvent": {
+        "description": "One sentence Delta starts saying, with its sound (remote.publish).",
+        "type": "object",
+        "required": [
+          "say_id",
+          "utterance_id",
+          "by",
+          "text",
+          "seconds",
+          "t_ms",
+          "wav_b64"
+        ],
+        "properties": {
+          "say_id": {
+            "description": "The say call the sentence belongs to; a call's sentences share it.",
+            "type": "integer"
+          },
+          "utterance_id": {
+            "description": "The utterance it answers, as /hear gave it, or \"\" for none.",
+            "type": "string"
+          },
+          "by": {
+            "description": "Who wrote it: `claude`, `local`, `ack`, or the assistant Delta asked, such as `gaia`; \"\" when unknown.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "The request it answers (/ask), present only then.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The sentence.",
+            "type": "string"
+          },
+          "seconds": {
+            "description": "How long its sound plays.",
+            "type": "number"
+          },
+          "t_ms": {
+            "description": "When it started playing, in Unix milliseconds.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "wav_b64": {
+            "description": "The sentence's WAV file, in standard base64.",
+            "type": "string",
+            "contentEncoding": "base64",
+            "contentMediaType": "audio/wav"
+          }
+        }
+      },
+      "SaidStreamItem": {
+        "description": "One server-sent event of /said: a single data line holding a SaidEvent.",
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "contentMediaType": "application/json",
+            "contentSchema": {
+              "$ref": "#/components/schemas/SaidEvent"
+            }
+          }
+        }
+      },
+      "Link": {
+        "description": "The gateway's pairing link.",
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "description": "An https link with a host, of at most 106 bytes, which a QR code holds.",
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https:"
+          }
+        }
+      },
+      "Guests": {
+        "description": "Who watches Delta's window from afar.",
+        "type": "object",
+        "required": [
+          "watching"
+        ],
+        "properties": {
+          "watching": {
+            "description": "How many guests the gateway lets watch the window.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 99
+          },
+          "mic": {
+            "description": "Whether they hear the room through the gateway's microphone; false when absent.",
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "AskRequest": {
+        "description": "A request from Delta to another assistant.",
+        "type": "object",
+        "required": [
+          "to",
+          "text"
+        ],
+        "properties": {
+          "to": {
+            "description": "The assistant asked, one of those Delta may ask (ask.go `askable`).",
+            "type": "string",
+            "enum": [
+              "gaia"
+            ]
+          },
+          "text": {
+            "description": "The request, 1 to 1000 characters once trimmed of white space.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "mute": {
+            "description": "Whether the answer is kept without being said.",
+            "type": "boolean",
+            "default": false
+          },
+          "ttl_s": {
+            "description": "Seconds until the request expires unanswered: 1 to 600, or 0 or absent for 120.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600,
+            "default": 120
+          }
+        }
+      },
+      "AskCreated": {
+        "description": "A request just made.",
+        "type": "object",
+        "required": [
+          "request_id",
+          "brain_id",
+          "expires"
+        ],
+        "properties": {
+          "request_id": {
+            "description": "The request's id: the brain's id, a dash and a number.",
+            "type": "string"
+          },
+          "brain_id": {
+            "description": "This brain's id, 12 hex characters, new at each start.",
+            "type": "string"
+          },
+          "expires": {
+            "description": "When it expires unanswered, in UTC, RFC 3339 to the second.",
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AskState": {
+        "description": "Where a request stands: asked → accepted → speaking → spoken; asked → answered for a mute request; asked → expired when nothing answered in time; accepted → error when Delta could not say it.",
+        "type": "string",
+        "enum": [
+          "asked",
+          "accepted",
+          "speaking",
+          "spoken",
+          "answered",
+          "expired",
+          "error"
+        ]
+      },
+      "AskEvent": {
+        "description": "A request, whole, as /asks sends it at connection and at each change of its state.",
+        "type": "object",
+        "required": [
+          "request_id",
+          "brain_id",
+          "to",
+          "text",
+          "mute",
+          "state",
+          "t_ms",
+          "expires_ms"
+        ],
+        "properties": {
+          "request_id": {
+            "description": "The request's id.",
+            "type": "string"
+          },
+          "brain_id": {
+            "description": "The id of the brain that made it.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The assistant asked.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The request.",
+            "type": "string"
+          },
+          "mute": {
+            "description": "Whether the answer is kept without being said.",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AskState"
+          },
+          "answer": {
+            "description": "The answer taken, present once there is one.",
+            "type": "string"
+          },
+          "say_id": {
+            "description": "The say call that says the answer, present once Delta has started saying it.",
+            "type": "integer"
+          },
+          "error": {
+            "description": "Why Delta could not say the answer, present in state error.",
+            "type": "string"
+          },
+          "t_ms": {
+            "description": "When Delta asked, in Unix milliseconds.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_ms": {
+            "description": "When it expires unanswered, in Unix milliseconds.",
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AsksStreamItem": {
+        "description": "One server-sent event of /asks: a single data line holding an AskEvent.",
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "contentMediaType": "application/json",
+            "contentSchema": {
+              "$ref": "#/components/schemas/AskEvent"
+            }
+          }
+        }
+      },
+      "AnswerRequest": {
+        "description": "An assistant's answer to one of Delta's requests.",
+        "type": "object",
+        "required": [
+          "request_id",
+          "by",
+          "text"
+        ],
+        "properties": {
+          "request_id": {
+            "description": "The request answered.",
+            "type": "string",
+            "minLength": 1
+          },
+          "by": {
+            "description": "The assistant answering, which must be the one asked.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The answer, 1 to 1000 characters once trimmed of white space.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "mood": {
+            "description": "The face Delta makes as it says the answer; none when absent or empty.",
+            "type": "string",
+            "enum": [
+              "",
+              "neutral",
+              "joy",
+              "surprise",
+              "doubt",
+              "sorry",
+              "proud",
+              "wink",
+              "focus",
+              "sleepy"
+            ]
+          }
+        }
+      },
+      "AnswerAccepted": {
+        "description": "An answer just taken.",
+        "type": "object",
+        "required": [
+          "request_id",
+          "say_id",
+          "state"
+        ],
+        "properties": {
+          "request_id": {
+            "description": "The request answered.",
+            "type": "string"
+          },
+          "say_id": {
+            "description": "The say call that says the answer; 0 for a mute request.",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AskState"
+          }
+        }
+      },
+      "AnswerDuplicate": {
+        "description": "The answer already taken, posted again.",
+        "type": "object",
+        "required": [
+          "request_id",
+          "say_id",
+          "state",
+          "duplicate"
+        ],
+        "properties": {
+          "request_id": {
+            "description": "The request answered.",
+            "type": "string"
+          },
+          "say_id": {
+            "description": "The say call that says the answer; 0 for a mute request.",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AskState"
+          },
+          "duplicate": {
+            "description": "Always true.",
+            "type": "boolean",
+            "const": true
+          }
+        }
+      }
+    }
+  }
+}
