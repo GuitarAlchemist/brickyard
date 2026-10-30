@@ -13,6 +13,16 @@
 // the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks). H hides or shows
 // the wall clocks of Ottawa and Paris (WallClocks), shown by default.
 //
+// The camera has the Observatory's controls (FreeCamera): it walks, sprints, jumps, crouches, slides and leans, flies with
+// F, turns with the right button held or, after Ctrl and a click, with the mouse until the next Ctrl and click (a click
+// meanwhile acts where the view aims); 1 to 5 fly to views. 0 plays the cinematic (Cinematic), which any key or click
+// ends; Tab opens the wheel (ToolWheel), empty for now, which slows the scene to a quarter; M opens the shelf, which Tab
+// opened before the wheel took it; F1 shows the keys. Esc never moves the camera: with the wheel open it shuts the wheel,
+// during the cinematic it ends it, and otherwise it closes the window as before. --cinematic plays the cinematic
+// (--cinematic-from N from its shot N) and --wheel opens the wheel once the splash is over, --fly-to N flies to a view
+// half a second later and --keys shows the keys' card, for captures; --reduced-motion keeps cuts, no sway, dip or wider
+// field.
+//
 // It opens on BRUTAL's logo and copyright notice for 2.6 s, as BRUTAL's licence asks (Splash.cs); --demo's states and
 // --shots' times start after it, and --shots also saves the splash.
 
@@ -834,8 +844,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 16, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes and its release notes
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 16 }], // one image each
+            MaxSets = 20, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel and the keys' card
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 20 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -889,7 +899,7 @@ internal static unsafe class Stage
         var stale = false; // the swapchain no longer matches the window
         window.OnFramebufferSize += (_, _) => stale = true;
 
-        // The shelf (Shelf.cs): Tab or M opens it; the arrows, Enter, Backspace and the mouse move through it; Esc
+        // The shelf (Shelf.cs): M opens it (Tab, which did too, is the camera's wheel); the arrows, Enter, Backspace and the mouse move through it; Esc
         // closes it, and the window when it is closed. Its card is drawn again when what it shows changes.
         var shelf = new Shelf();
         var cardSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
@@ -1085,24 +1095,80 @@ internal static unsafe class Stage
             }
         }
 
-        var camera = new FreeCamera();
+        var reducedMotion = args.Contains("--reduced-motion");
+        var camera = new FreeCamera { ReducedMotion = reducedMotion };
         if (int.TryParse(Option(args, "--view"), out var startView) && !camera.GoTo(startView))
         {
             Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
         }
 
+        var film = new Cinematic { ReducedMotion = reducedMotion }; // 0, or --cinematic once the splash is over
+        var filmAtStart = args.Contains("--cinematic") || Option(args, "--cinematic-from") is not null;
+        var filmFrom = int.TryParse(Option(args, "--cinematic-from"), out var filmFromValue) ? filmFromValue : 0; // a later shot first, for captures
+        var wheel = new ToolWheel(); // Tab; --wheel opens it once the splash is over, for captures
+        var wheelAtStart = args.Contains("--wheel");
+        var flyTo = int.TryParse(Option(args, "--fly-to"), out var flyToValue) ? flyToValue : 0; // a view's flight half a second after the splash, for captures
+        var keysShown = args.Contains("--keys"); // F1: the camera's keys
         var looking = false; // the right button is held
+        var locked = false; // Ctrl and a click lock the view to the mouse, the Observatory's click; again, or the right button, frees it
+        var ctrlAlone = false; // Ctrl down with nothing else since: let go, it crouches
+        var sceneClock = clock.Elapsed.TotalSeconds; // the scene's time, which the open wheel slows to a quarter
         (double X, double Y) lookFrom = default;
         const int CursorNormal = 0x00034001, CursorDisabled = 0x00034003; // GLFW_CURSOR_NORMAL, GLFW_CURSOR_DISABLED
+        const int ModControl = 0x0002; // GLFW_MOD_CONTROL
+        void Grab(GlfwWindow w)
+        {
+            w.SetInputMode(GlfwInputMode.Cursor, looking || locked ? CursorDisabled : CursorNormal);
+            lookFrom = (w.CursorX, w.CursorY);
+        }
+
+        // The cinematic's title and hint, the wheel and the keys' card, drawn as the shelf's card is (Panel).
+        var filmTitleSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? filmTitleTexture = null;
+        Panel.Card? filmTitle = null;
+        var filmHintSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? filmHintTexture = null;
+        Panel.Card? filmHint = null;
+        var filmDrawn = (Height: 0, Language: "");
+        var wheelSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? wheelTexture = null;
+        Panel.Card? wheelCard = null;
+        var wheelDrawn = (Pick: -2, Width: 0, Height: 0, Language: "");
+        var keysSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? keysTexture = null;
+        Panel.Card? keysCard = null;
+        var keysDrawn = (Flying: false, Width: 0, Height: 0, Language: "");
 
         window.OnKey += (w, key, scancode, action, mods) => Guard("a key", () =>
         {
+            var at = clock.Elapsed.TotalSeconds;
             if (action == GlfwKeyAction.Release)
             {
+                if (key == GlfwKey.Tab)
+                {
+                    wheel.TabUp(at);
+                }
+                else if (key is GlfwKey.LeftControl or GlfwKey.RightControl && ctrlAlone && !shelf.Open)
+                {
+                    camera.Crouch((float)sceneClock);
+                }
+
+                ctrlAlone = false;
                 return;
             }
 
-            var at = clock.Elapsed.TotalSeconds;
+            ctrlAlone = action == GlfwKeyAction.Press && key is GlfwKey.LeftControl or GlfwKey.RightControl;
+            if (film.Playing)
+            {
+                if (action == GlfwKeyAction.Press)
+                {
+                    film.Skip(); // any key ends the cinematic, Esc too, rather than the window
+                }
+
+                ctrlAlone = false;
+                return;
+            }
+
             if (shelf.Open)
             {
                 switch (key)
@@ -1127,9 +1193,42 @@ internal static unsafe class Stage
                 return;
             }
 
-            if (key == GlfwKey.F)
+            if (action == GlfwKeyAction.Repeat)
             {
-                camera.ToggleFlying((float)at);
+                return; // a key held is read each frame (the loop); its repeats toggle nothing
+            }
+
+            if (key == GlfwKey.Escape && wheel.Open)
+            {
+                wheel.Close(false);
+            }
+            else if (key == GlfwKey.Tab)
+            {
+                wheel.TabDown(at);
+            }
+            else if (key == GlfwKey.F)
+            {
+                camera.ToggleFlying((float)sceneClock);
+            }
+            else if (key == GlfwKey.Space)
+            {
+                camera.Jump((float)sceneClock); // flying, Space rises (the loop)
+            }
+            else if (key == GlfwKey.C)
+            {
+                camera.Crouch((float)sceneClock); // flying, C descends
+            }
+            else if (key == GlfwKey.CapsLock)
+            {
+                camera.ToggleSlow();
+            }
+            else if ((int)key == '0')
+            {
+                film.Play();
+            }
+            else if (key == GlfwKey.F1)
+            {
+                keysShown = !keysShown;
             }
             else if (key == GlfwKey.H)
             {
@@ -1139,7 +1238,7 @@ internal static unsafe class Stage
             {
                 camera.Reset();
             }
-            else if ((int)key is >= '1' and <= '9' && camera.GoTo((int)key - '0'))
+            else if ((int)key is >= '1' and <= '9' && camera.GoTo((int)key - '0')) // a flight, from where the picture is
             {
                 // a view, or the drift for 1
             }
@@ -1157,7 +1256,7 @@ internal static unsafe class Stage
             {
                 NextLanguage();
             }
-            else if (key is GlfwKey.Tab or GlfwKey.M)
+            else if (key == GlfwKey.M) // Tab is the wheel's, as in the Observatory
             {
                 shelf.Show(at);
             }
@@ -1238,11 +1337,52 @@ internal static unsafe class Stage
 
         window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
-            if ((int)button == 1) // the right button held turns the view; the cursor hides meanwhile
+            ctrlAlone = false;
+            if (film.Playing)
+            {
+                if (action == GlfwButtonAction.Press)
+                {
+                    film.Skip(); // a click ends the cinematic
+                }
+
+                return;
+            }
+
+            if (wheel.Open)
+            {
+                if (action == GlfwButtonAction.Press && button == 0)
+                {
+                    if (!locked)
+                    {
+                        var (inner, _) = ToolWheel.Radii(extent.Width, extent.Height);
+                        wheel.Point((float)((w.CursorX * extent.Width / Math.Max(1, w.Width)) - (extent.Width / 2.0)), (float)((w.CursorY * extent.Height / Math.Max(1, w.Height)) - (extent.Height / 2.0)), inner);
+                    }
+
+                    wheel.Close(true); // a click picks
+                }
+
+                return;
+            }
+
+            if ((int)button == 1) // the right button held turns the view, and frees a locked one; the cursor hides meanwhile
             {
                 looking = action == GlfwButtonAction.Press && !shelf.Open;
-                w.SetInputMode(GlfwInputMode.Cursor, looking ? CursorDisabled : CursorNormal);
-                lookFrom = (w.CursorX, w.CursorY);
+                locked &= !looking;
+                Grab(w);
+                return;
+            }
+
+            if (action == GlfwButtonAction.Press && button == 0 && ((int)mods & ModControl) != 0 && !shelf.Open)
+            {
+                locked = !locked; // Ctrl and a click: the view follows the mouse until the next one
+                Grab(w);
+                return;
+            }
+
+            if (action == GlfwButtonAction.Press && button == 0 && locked)
+            {
+                // Locked, a click is at the screen's centre, where the view aims.
+                if (!TryModuleClick(extent.Width / 2.0, extent.Height / 2.0, false)) TryOfficeClick(extent.Width / 2.0, extent.Height / 2.0);
                 return;
             }
 
@@ -1338,7 +1478,13 @@ internal static unsafe class Stage
 
             var dt = (float)(now - last);
             last = now;
-            arcade?.Advance(dt);
+            // The scene's time goes at a quarter while the wheel is open; the camera, the cinematic and the wheel itself
+            // keep the clock's.
+            var sceneDt = dt * wheel.TimeScale;
+            sceneClock += sceneDt;
+            wheel.Advance(dt);
+            film.Advance(dt);
+            arcade?.Advance(sceneDt);
             // The splash is timed from the first frame on screen, not from start-up, which takes about a second; --demo's
             // timeline and --shots start with it, while the brain's lines are timed by the link's own clock.
             var shown = firstFrame < 0 ? 0.0 : now - firstFrame;
@@ -1354,38 +1500,82 @@ internal static unsafe class Stage
             {
                 pairingShown = linkNow % Link.DemoSeconds >= 20.0; // the demo opens the pairing card for its last second
             }
-            var time = (float)now;
+            var time = (float)sceneClock;
             shelf.Tick(now);
             robot.Presenting = shelf.Open;
-            robot.Pose(time, dt, moment, worlds, glows);
+            robot.Pose(time, sceneDt, moment, worlds, glows);
+
+            // Captures: the cinematic, the wheel or a view's flight, once the splash is over.
+            if (!splashing && filmAtStart)
+            {
+                filmAtStart = false;
+                film.Play(filmFrom);
+            }
+
+            if (!splashing && wheelAtStart)
+            {
+                wheelAtStart = false;
+                wheel.TabDown(now);
+                wheel.TabUp(now);
+            }
+
+            if (!splashing && flyTo != 0 && shown - S >= 0.5)
+            {
+                camera.GoTo(flyTo);
+                flyTo = 0;
+            }
 
             // The camera drifts in front of the robot until it is moved (FreeCamera); the keys are read while the shelf,
-            // which takes the arrows, is closed.
-            if (looking && !window.IsFocused)
+            // which takes the arrows, is closed, and not while the cinematic films.
+            if ((looking || locked) && !window.IsFocused)
             {
-                looking = false; // the window lost focus with the button held: give the cursor back
+                looking = false; // the window lost focus with the view held: give the cursor back
+                locked = false;
                 window.SetInputMode(GlfwInputMode.Cursor, CursorNormal);
             }
 
-            if (looking)
+            if (looking || locked)
             {
                 var (cx, cy) = (window.CursorX, window.CursorY);
-                camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
+                var (inner, outer) = ToolWheel.Radii(extent.Width, extent.Height);
+                if (wheel.Open)
+                {
+                    wheel.Aim((float)(cx - lookFrom.X), (float)(cy - lookFrom.Y), inner, outer);
+                }
+                else if (!film.Playing)
+                {
+                    camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
+                }
+
                 lookFrom = (cx, cy);
             }
+            else if (wheel.Open)
+            {
+                var (inner, _) = ToolWheel.Radii(extent.Width, extent.Height);
+                wheel.Point((float)((window.CursorX * extent.Width / Math.Max(1, window.Width)) - (extent.Width / 2.0)),
+                    (float)((window.CursorY * extent.Height / Math.Max(1, window.Height)) - (extent.Height / 2.0)), inner);
+            }
 
-            if (!shelf.Open && window.IsFocused)
+            if (!shelf.Open && !film.Playing && window.IsFocused)
             {
                 bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press;
                 float Axis(GlfwKey a, GlfwKey b, GlfwKey back, GlfwKey back2) => (Held(a) || Held(b) ? 1f : 0f) - (Held(back) || Held(back2) ? 1f : 0f);
+                var alt = Held(GlfwKey.LeftAlt) || Held(GlfwKey.RightAlt);
                 camera.Move(time, new(Axis(GlfwKey.W, GlfwKey.Up, GlfwKey.S, GlfwKey.Down), Axis(GlfwKey.D, GlfwKey.Right, GlfwKey.A, GlfwKey.Left),
-                    Axis(GlfwKey.Space, GlfwKey.E, GlfwKey.C, GlfwKey.C), Held(GlfwKey.LeftShift) || Held(GlfwKey.RightShift)), dt);
+                    Axis(GlfwKey.Space, GlfwKey.E, GlfwKey.C, GlfwKey.C), Held(GlfwKey.LeftShift) || Held(GlfwKey.RightShift),
+                    camera.Flying || alt ? 0f : Axis(GlfwKey.E, GlfwKey.E, GlfwKey.Q, GlfwKey.Q), alt), dt);
+            }
+            else
+            {
+                camera.Move(time, default, dt); // a flight, a jump or a slide goes on
             }
 
-            var (eye, lookAt) = camera.View(time);
-            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(0.75f, extent.Width / (float)extent.Height, 0.1f, 40f);
+            var aspect = extent.Width / (float)extent.Height;
+            var pose = film.Pose(aspect) ?? camera.View(time);
+            var eye = pose.Eye;
+            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, 40f);
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
-            var viewProj = SN.Matrix4x4.CreateLookAt(eye, lookAt, SN.Vector3.UnitY) * projection;
+            var viewProj = SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up) * projection;
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
             officeView = splashing ? null : viewProj;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
@@ -1415,6 +1605,29 @@ internal static unsafe class Stage
 
             Guard("a card", () =>
             {
+                if (film.Playing && !splashing && filmDrawn != (extent.Height, Words.Language))
+                {
+                    filmDrawn = (extent.Height, Words.Language);
+                    filmTitle = Panel.CinemaTitle(extent.Height);
+                    filmTitleTexture = Upload(filmTitle, filmTitleSet, filmTitleTexture);
+                    filmHint = Panel.Hint(Words.Say("Any key: skip", "Une touche : passer"), extent.Height);
+                    filmHintTexture = Upload(filmHint, filmHintSet, filmHintTexture);
+                }
+
+                if (wheel.Shown > 0f && !splashing && wheelDrawn != (wheel.Pick, extent.Width, extent.Height, Words.Language))
+                {
+                    wheelDrawn = (wheel.Pick, extent.Width, extent.Height, Words.Language);
+                    wheelCard = Panel.Wheel(wheel.Slots, wheel.Pick, wheel.Held, extent.Width, extent.Height);
+                    wheelTexture = Upload(wheelCard, wheelSet, wheelTexture);
+                }
+
+                if (keysShown && !splashing && keysDrawn != (camera.Flying, extent.Width, extent.Height, Words.Language))
+                {
+                    keysDrawn = (camera.Flying, extent.Width, extent.Height, Words.Language);
+                    keysCard = Panel.Keys(camera.Flying, extent.Width, extent.Height);
+                    keysTexture = Upload(keysCard, keysSet, keysTexture);
+                }
+
                 if (shelf.Open && !splashing && (shelf.Version != cardVersion || extent.Height != cardHeight))
                 {
                     cardVersion = shelf.Version;
@@ -1564,7 +1777,7 @@ internal static unsafe class Stage
                         Console.Error.WriteLine($"WIDGETS agent-office tree refused, keeping the one shown: {string.Join("; ", officeStage.Problems.Take(5))}");
                     }
 
-                    officeStage.Frame(office.Module, now);
+                    officeStage.Frame(office.Module, sceneClock); // the desks slow with the scene while the wheel is open
                 }
                 catch (Exception e)
                 {
@@ -1792,6 +2005,65 @@ internal static unsafe class Stage
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
+
+                // The camera's own layers, over the rest: a dot where a locked view aims, the keys' card, the wheel
+                // over a dimmed scene, and last the cinematic's bars, black, title and hint.
+                void Quad(VkDescriptorSet set, int left, int top, int width, int height, SN.Vector4 tint)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var push = new SplashPush(Rect(left, top, width, height), tint);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [set], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (locked && !wheel.Open && !film.Playing && meterTexture is not null)
+                {
+                    var dot = Math.Max(3, extent.Height / 240);
+                    Quad(meterSet, (extent.Width - dot) / 2, (extent.Height - dot) / 2, dot, dot, new SN.Vector4(1f, 1f, 1f, 0.8f));
+                }
+
+                if (keysShown && !film.Playing && wheel.Shown <= 0f && keysCard is not null && keysTexture is not null)
+                {
+                    Quad(keysSet, CardMargin(), extent.Height - keysCard.Height - CardMargin(), keysCard.Width, keysCard.Height, SN.Vector4.One);
+                }
+
+                if (wheel.Shown > 0f && wheelCard is not null && wheelTexture is not null && meterTexture is not null)
+                {
+                    var k = wheel.Shown;
+                    Quad(meterSet, 0, 0, extent.Width, extent.Height, new SN.Vector4(0f, 0f, 0.02f, 0.55f * k));
+                    var grow = 0.85f + (0.15f * k);
+                    var (wide, high) = ((int)MathF.Round(wheelCard.Width * grow), (int)MathF.Round(wheelCard.Height * grow));
+                    Quad(wheelSet, (extent.Width - wide) / 2, (extent.Height - high) / 2, wide, high, new SN.Vector4(1f, 1f, 1f, k));
+                }
+
+                if (film.Playing && meterTexture is not null)
+                {
+                    var bar = (int)MathF.Round(film.BarHeight(aspect) * extent.Height);
+                    if (film.Black > 0f)
+                    {
+                        Quad(meterSet, 0, 0, extent.Width, extent.Height, new SN.Vector4(0f, 0f, 0f, film.Black));
+                    }
+
+                    if (bar > 0)
+                    {
+                        Quad(meterSet, 0, 0, extent.Width, bar, new SN.Vector4(0f, 0f, 0f, 1f));
+                        Quad(meterSet, 0, extent.Height - bar, extent.Width, bar, new SN.Vector4(0f, 0f, 0f, 1f));
+                    }
+
+                    if (film.Title > 0f && filmTitle is not null && filmTitleTexture is not null)
+                    {
+                        Quad(filmTitleSet, (extent.Width - filmTitle.Width) / 2, (extent.Height - filmTitle.Height) / 2, filmTitle.Width, filmTitle.Height, new SN.Vector4(1f, 1f, 1f, film.Title));
+                    }
+
+                    if (film.Hint > 0f && filmHint is not null && filmHintTexture is not null)
+                    {
+                        var margin = CardMargin();
+                        var hintTop = bar >= filmHint.Height ? extent.Height - bar + ((bar - filmHint.Height) / 2) : extent.Height - filmHint.Height - margin; // in the bottom bar
+                        Quad(filmHintSet, extent.Width - filmHint.Width - margin, hintTop, filmHint.Width, filmHint.Height,
+                            new SN.Vector4(1f, 1f, 1f, film.Hint));
+                    }
+                }
             }
 
             cb.EndRenderPass();
@@ -1979,6 +2251,10 @@ internal static unsafe class Stage
         notesTexture?.Dispose();
         leaseTexture?.Dispose();
         leaseDotTexture?.Dispose();
+        filmTitleTexture?.Dispose();
+        filmHintTexture?.Dispose();
+        wheelTexture?.Dispose();
+        keysTexture?.Dispose();
         arcadeGpu?.Dispose();
         arcade?.Dispose();
         Console.WriteLine($"ARCADE shutdown: uploads {arcadeGpu?.Uploads ?? 0}; native texture images remaining {Texture.LiveCount}; pid {Environment.ProcessId}");

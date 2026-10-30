@@ -776,6 +776,35 @@ return forgets the record; activating a newer version without validating it leav
 Measured: `module-tests` 83 checks, 9 of them on this; isolated Vulkan, `--demo --module-dir ... --view 3` with
 V1.0 initial and V1.2 kept: the window starts on V1.2, planet shown, return to V1.0 offered, no click.
 
+## The Observatory's camera, cinematic and wheel (2026-10-30)
+
+The user asked for the Observatory's camera moves in the hall: its keys and its mouse, its cinematic and its weapon
+wheel, left empty for now. Ported from `observatory-prototype-v1/scripts` (`walk_physics.gd`, `view_move.gd`,
+`cinematic.gd`, `curio_wheel.gd`), with the Observatory's heights scaled by its eye's, 1.7 m, to this hall's, 1.1 m,
+and its times kept:
+
+- `FreeCamera` walks a body: inertia, Shift sprints (1.6 times), Space jumps 0.55 m for 0.65 s, C or Ctrl tapped alone
+  crouches, C while sprinting slides and ends crouched, Q and E (A and E on AZERTY) lean, Alt with the moving keys
+  leans or peeks with the body standing, Caps Lock walks at half pace; a landing dips the eye, a sprint widens the field
+  6°, a slide 8.4° and rolls it. F still flies. The views 1 to 5 are flights after GTA V's character switch, 1.4 to
+  2.4 s, lifting, looking down 26° and widening 9° on the way; under `--reduced-motion`, cuts.
+- Ctrl and a click lock the view to the mouse, the Observatory's click, since a plain click is the desks' and Gaia's;
+  locked, a dot marks the centre and a click acts there. Ctrl and a click again, the right button or a lost focus free
+  it. Esc never moves the camera: it shuts the open wheel, ends the cinematic, or closes the window as before.
+- `Cinematic`, key 0 or `--cinematic`: bars to 2.39:1, the title over black, seven shots (the hall, the office, Delta's
+  face, the Pong, Gaia's planet, the clocks, a pull back to the whole hall) in 51 s with an operator's sway and dips
+  between acts, the title again, then the player's view back. Any key or click ends it through black.
+- `ToolWheel`, Tab: held, the scene's time (the robot, the Pong, the desks) goes at a quarter and the wheel opens; let go,
+  it shuts on what it points at; a tap leaves it open. Eight empty slots for now; `Items` takes things to hold.
+- The shelf, which Tab opened too, keeps M. F1 shows the keys.
+
+Measured, isolated (`--demo --hidden`, own ports, V1.2's planet and the office's demo sessions): the scene's selftest
+(Debug and Release) with the new checks, among them the jump's height and time, the slide, the lean, a flight's length,
+lift and landing, the cinematic's order, length and skip, and the wheel's tap and hold; `module-tests` 73,
+`widget-tests` passed. Captures in Low of a flight half-way from view 4 to view 2, the title, every shot between bars,
+and the open wheel; in Flat the title and the wheel. The Pong's shot shows the chest without the Pong in these
+captures: the isolated bin had no arcade module.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
@@ -833,3 +862,6 @@ V1.0 initial and V1.2 kept: the window starts on V1.2, planet shown, return to V
 - A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.
 - The agents' office with real sessions, beside Delta's window: each activity as wmux reports it, a click on a desk
   focusing the right pane, and the frame time with 20 desks.
+- The camera by hand, live: the jump, the slide and the leans as they feel, Alt not opening Windows' window menu, Ctrl
+  and a click with the desks under the cursor, the wheel's slowing with the Pong running, and the cinematic's shots
+  with the Pong on Delta's chest.

@@ -81,7 +81,7 @@ and in French whatever its language, and answers in its own:
   project, the most recent first, each opening onto its last requests. "Show the plugins" and "show the marketplaces"
   list what is installed. While the shelf is open, "go down", "go up", "open" and "back" move through it, without
   "Delta" within 20 seconds of the last step, and "close the menu" closes it. In French: « montre-moi les sessions »,
-  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». Tab or M opens it
+  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». M opens it
   with the keyboard too, then the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session
   that runs in wmux, "Go to this session" shows its pane. The shelf's labels follow Delta's language.
 

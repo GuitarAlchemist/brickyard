@@ -362,6 +362,161 @@ internal static class Panel
         return new Card(rgba, width, height, []);
     }
 
+    // The wheel (ToolWheel), drawn as the Observatory's curio wheel is: slots of dark lacquer edged in gilt round a hole,
+    // the picked one gilt, its title above, the held thing's name in the middle and a line about it below. The ring's
+    // centre is the card's, so that the window centres it on the screen; slots without a name are empty.
+    public static Card Wheel(int slots, int pick, string? name, int windowWidth, int windowHeight)
+    {
+        var (inner, outer) = ToolWheel.Radii(windowWidth, windowHeight);
+        var fsTitle = (int)MathF.Round(outer * 0.07f);
+        var fsName = (int)MathF.Round(outer * 0.11f);
+        var fsAmmo = (int)MathF.Round(outer * 0.072f);
+        var fsLine = (int)MathF.Round(outer * 0.078f);
+        var title = Words.Say("THE WHEEL", "LA ROUE");
+        var shown = name ?? Words.Say("Empty", "Vide");
+        var ammo = name is null ? Words.Say("nothing to hold yet", "rien à tenir pour l'instant") : "";
+        var line = Words.Say("Hold Tab, point, let go. Things to hold will come.", "Maintiens Tab, vise, relâche. Les objets viendront.");
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var band = (int)MathF.Ceiling(fsLine * 2.9f);
+        var rim = Math.Max((int)MathF.Ceiling(fsTitle * 2.4f), band + (int)MathF.Ceiling(fsLine * 0.5f));
+        var width = Math.Max((int)MathF.Ceiling(2 * outer) + 8, Wide(line, fsLine, false) + 40);
+        var height = (int)MathF.Ceiling(2 * (outer + rim));
+        var (cx, cy) = (width / 2f, height / 2f);
+        var rgba = new byte[width * height * 4];
+        (int, int, int) gilt = (219, 179, 107);
+        (int, int, int) lacquer = (9, 8, 7);
+        (int, int, int) picked = (142, 116, 70);
+        var sector = 2f * MathF.PI / slots;
+        const float Gap = 0.025f;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var (dx, dy) = (x + 0.5f - cx, y + 0.5f - cy);
+                var r = MathF.Sqrt((dx * dx) + (dy * dy));
+                if (r < inner - 1f || r > outer + 1f)
+                {
+                    continue;
+                }
+
+                var slot = ToolWheel.Slot(dx, dy, slots);
+                var mid = (-MathF.PI * 0.5f) + (slot * sector);
+                var off = MathF.Atan2(dy, dx) - mid;
+                off = MathF.Abs(off - (2f * MathF.PI * MathF.Round(off / (2f * MathF.PI))));
+                var toSide = r * ((sector / 2f) - Gap - off);
+                var edge = Math.Min(Math.Min(r - inner, outer - r), toSide); // pixels inside the slot's outline
+                var cover = Math.Clamp(edge + 0.5f, 0f, 1f);
+                if (cover <= 0f)
+                {
+                    continue;
+                }
+
+                var chosen = slot == pick;
+                Over(rgba, width, height, x, y, chosen ? picked : lacquer, (int)(cover * (chosen ? 0.9f : 0.92f) * 255));
+                var stroke = Math.Max(1.5f, outer * (chosen ? 0.012f : 0.006f));
+                var outline = Math.Clamp(stroke - edge + 0.5f, 0f, 1f) * cover;
+                if (outline > 0f)
+                {
+                    Over(rgba, width, height, x, y, gilt, (int)(outline * (chosen ? 0.95f : 0.55f) * 255));
+                }
+            }
+        }
+
+        // The centre: a dark disc, the name and what there is of it; the title above, a line below.
+        var hole = inner * 0.96f;
+        for (var y = (int)(cy - hole - 1); y <= cy + hole + 1; y++)
+        {
+            for (var x = (int)(cx - hole - 1); x <= cx + hole + 1; x++)
+            {
+                var (dx, dy) = (x + 0.5f - cx, y + 0.5f - cy);
+                var cover = Math.Clamp(hole + 0.5f - MathF.Sqrt((dx * dx) + (dy * dy)), 0f, 1f);
+                if (cover > 0f)
+                {
+                    Over(rgba, width, height, x, y, (5, 5, 4), (int)(cover * 0.94f * 255));
+                }
+            }
+        }
+
+        void Centred(string text, int pixels, bool bold, float middleY, (int, int, int) color)
+        {
+            var fitted = Fit(text, pixels, bold, (int)(inner * 1.75f));
+            Text(rgba, width, height, fitted, pixels, bold, (int)(cx - (Wide(fitted, pixels, bold) / 2f)), (int)(middleY - (pixels * 0.65f)), color);
+        }
+
+        Centred(title, fsTitle, true, cy - outer - (fsTitle * 1.4f), gilt);
+        Centred(shown, fsName, true, cy - (fsName * 0.45f), (247, 240, 222));
+        if (ammo.Length > 0)
+        {
+            Centred(ammo, fsAmmo, false, cy + fsAmmo, gilt);
+        }
+
+        var bandTop = (int)(cy + outer + (fsLine * 0.5f));
+        Fill(rgba, width, 0, bandTop, width, Math.Min(band, height - bandTop), (5, 5, 4), 224);
+        Text(rgba, width, height, line, fsLine, false, (int)(cx - (Wide(line, fsLine, false) / 2f)), bandTop + (int)(fsLine * 0.9f), (224, 217, 199));
+        return new Card(rgba, width, height, []);
+    }
+
+    // The cinematic's title over black (Cinematic): the robot's name in gilt, and under it where it stands.
+    public static Card CinemaTitle(int windowHeight)
+    {
+        var big = Math.Max(24, windowHeight / 12);
+        var small = Math.Max(12, big * 2 / 7);
+        const string Title = "DELTA";
+        var under = Words.Say("The brick hall, where the agents work", "La halle de briques, où travaillent les agents");
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var width = Math.Max(Wide(Title, big, true), Wide(under, small, false)) + 16;
+        var height = big + (small * 3);
+        var rgba = new byte[width * height * 4];
+        Text(rgba, width, height, Title, big, true, (width - Wide(Title, big, true)) / 2, 0, (242, 214, 153));
+        Text(rgba, width, height, under, small, false, (width - Wide(under, small, false)) / 2, big + small, (214, 206, 186));
+        return new Card(rgba, width, height, []);
+    }
+
+    // A line of small text on nothing, such as the cinematic's "Any key: skip".
+    public static Card Hint(string text, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        var pixels = (int)MathF.Round(13 * scale);
+        var width = Math.Max(1, (Splash.Text(text, pixels, out var w, out _) is null ? 0 : w) + 4);
+        var height = (int)MathF.Round(pixels * 1.6f);
+        var rgba = new byte[width * height * 4];
+        Text(rgba, width, height, text, pixels, false, 2, 0, (230, 226, 216));
+        return new Card(rgba, width, height, []);
+    }
+
+    // The camera's keys (FreeCamera, Cinematic, ToolWheel), as the Observatory's controls bar has them; F1 shows it.
+    public static Card Keys(bool flying, int windowWidth, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var look = Words.Say("Right button held, or Ctrl + click: look   Home: back to Delta   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine : revenir à Delta   F1 : masquer");
+        string[] lines = flying
+            ? [Words.Say("FLYING", "EN VOL"),
+               Words.Say("ZQSD, WASD or arrows: move   Space or E: rise   C: descend   Shift: faster", "ZQSD, WASD ou flèches : avancer   Espace ou E : monter   C : descendre   Maj : plus vite"),
+               Words.Say("F: walk   Wheel: pace   1 to 5: views   0: the cinematic   Tab: the wheel", "F : marcher   Molette : allure   1 à 5 : vues   0 : la cinématique   Tab : la roue"),
+               look]
+            : [Words.Say("WALKING", "À PIED"),
+               Words.Say("ZQSD, WASD or arrows: move   Shift: sprint   Space: jump   C or Ctrl: crouch (sprinting: slide)", "ZQSD, WASD ou flèches : avancer   Maj : sprint   Espace : sauter   C ou Ctrl : s'accroupir (en sprint : glissade)"),
+               Words.Say("Q and E (AZERTY: A and E): lean   Alt + moving keys: lean or peek   Caps Lock: walk slowly", "A et E (QWERTY : Q et E) : se pencher   Alt + déplacement : se pencher ou se hausser   Verr. Maj : marcher lentement"),
+               Words.Say("F: fly   Wheel: pace   1 to 5: views   0: the cinematic   Tab: the wheel", "F : voler   Molette : allure   1 à 5 : vues   0 : la cinématique   Tab : la roue"),
+               look];
+        var room = windowWidth - (2 * Px(12)) - (2 * Px(Pad));
+        var fitted = lines.Select((l, i) => Fit(l, Px(i == 0 ? 14 : 13), i == 0, room)).ToArray();
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var width = fitted.Select((l, i) => Wide(l, Px(i == 0 ? 14 : 13), i == 0)).Max() + (2 * Px(Pad));
+        var height = (2 * Px(Pad)) + Px(22) + ((fitted.Length - 1) * Px(19));
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 215);
+        Fill(rgba, width, 0, 0, Px(3), height, (219, 179, 107), 255);
+        Text(rgba, width, height, fitted[0], Px(14), true, Px(Pad), Px(Pad), (242, 214, 153));
+        for (var i = 1; i < fitted.Length; i++)
+        {
+            Text(rgba, width, height, fitted[i], Px(13), false, Px(Pad), Px(Pad) + Px(22) + ((i - 1) * Px(19)), (214, 220, 226));
+        }
+
+        return new Card(rgba, width, height, []);
+    }
+
     // A white square that the window stretches and tints, such as the microphone's meter.
     public static Card Blank() => new([.. Enumerable.Repeat((byte)255, 4 * 4 * 4)], 4, 4, []);
 

@@ -626,6 +626,8 @@ internal sealed class Link(Func<double> clock)
         GaiaPresence.SelfTest(Check);
         SceneModulePicking.SelfTest(Check);
         FreeCamera.SelfTest(Check);
+        Cinematic.SelfTest(Check);
+        ToolWheel.SelfTest(Check);
         WallClocks.SelfTest(Check);
         Check(Parse("""{"language":"fr"}""", out _) is { State: null, Language: "fr" }, "the shelf speaks French");
         Check(Parse("""{"language":"de"}""", out _) is null, "an unknown language is refused");
