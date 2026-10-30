@@ -15,11 +15,13 @@
 //
 // The camera has the Observatory's controls (FreeCamera): it walks, sprints, jumps, crouches, slides and leans, flies with
 // F, turns with the right button held or, after Ctrl and a click, with the mouse until the next Ctrl and click (a click
-// meanwhile acts where the view aims); 1 to 5 fly to views. 0 plays the cinematic (Cinematic), which any key or click
+// meanwhile acts where the view aims); 1 to 5 fly to views, and with Shift film the view as the cinematic's shot of it
+// and leave the camera there. 0 plays the cinematic (Cinematic), which any key or click
 // ends; Tab opens the wheel (ToolWheel), empty for now, which slows the scene to a quarter; M opens the shelf, which Tab
 // opened before the wheel took it; F1 shows the keys. Esc never moves the camera: with the wheel open it shuts the wheel,
 // during the cinematic it ends it, and otherwise it closes the window as before. --cinematic plays the cinematic
-// (--cinematic-from N from its shot N) and --wheel opens the wheel once the splash is over, --fly-to N flies to a view
+// (--cinematic-from N from its shot N, --film-view N view N's shot alone) and --wheel opens the wheel once the splash
+// is over, --fly-to N flies to a view
 // half a second later and --keys shows the keys' card, for captures; --reduced-motion keeps cuts, no sway, dip or wider
 // field.
 //
@@ -1105,6 +1107,8 @@ internal static unsafe class Stage
         var film = new Cinematic { ReducedMotion = reducedMotion }; // 0, or --cinematic once the splash is over
         var filmAtStart = args.Contains("--cinematic") || Option(args, "--cinematic-from") is not null;
         var filmFrom = int.TryParse(Option(args, "--cinematic-from"), out var filmFromValue) ? filmFromValue : 0; // a later shot first, for captures
+        var filmView = int.TryParse(Option(args, "--film-view"), out var filmViewValue) ? filmViewValue : 0; // a view's shot alone, as Shift and its key, for captures
+        var landOn = 0; // the view the player's camera cuts to once a view's shot is in black
         var wheel = new ToolWheel(); // Tab; --wheel opens it once the splash is over, for captures
         var wheelAtStart = args.Contains("--wheel");
         var flyTo = int.TryParse(Option(args, "--fly-to"), out var flyToValue) ? flyToValue : 0; // a view's flight half a second after the splash, for captures
@@ -1115,7 +1119,7 @@ internal static unsafe class Stage
         var sceneClock = clock.Elapsed.TotalSeconds; // the scene's time, which the open wheel slows to a quarter
         (double X, double Y) lookFrom = default;
         const int CursorNormal = 0x00034001, CursorDisabled = 0x00034003; // GLFW_CURSOR_NORMAL, GLFW_CURSOR_DISABLED
-        const int ModControl = 0x0002; // GLFW_MOD_CONTROL
+        const int ModShift = 0x0001, ModControl = 0x0002; // GLFW_MOD_SHIFT, GLFW_MOD_CONTROL
         void Grab(GlfwWindow w)
         {
             w.SetInputMode(GlfwInputMode.Cursor, looking || locked ? CursorDisabled : CursorNormal);
@@ -1237,6 +1241,10 @@ internal static unsafe class Stage
             else if (key == GlfwKey.Home)
             {
                 camera.Reset();
+            }
+            else if ((int)key is >= '1' and <= '9' && ((int)mods & ModShift) != 0 && film.PlayView((int)key - '0'))
+            {
+                landOn = (int)key - '0'; // the view's shot, filmed; the player stands at the view after it
             }
             else if ((int)key is >= '1' and <= '9' && camera.GoTo((int)key - '0')) // a flight, from where the picture is
             {
@@ -1484,6 +1492,17 @@ internal static unsafe class Stage
             sceneClock += sceneDt;
             wheel.Advance(dt);
             film.Advance(dt);
+            if (landOn != 0 && (film.Filming || !film.Playing))
+            {
+                // Behind the black, so the shot hands the view back where it filmed; a skip before the black stays put.
+                if (film.Filming)
+                {
+                    camera.GoTo(landOn, cut: true);
+                }
+
+                landOn = 0;
+            }
+
             arcade?.Advance(sceneDt);
             // The splash is timed from the first frame on screen, not from start-up, which takes about a second; --demo's
             // timeline and --shots start with it, while the brain's lines are timed by the link's own clock.
@@ -1505,11 +1524,17 @@ internal static unsafe class Stage
             robot.Presenting = shelf.Open;
             robot.Pose(time, sceneDt, moment, worlds, glows);
 
-            // Captures: the cinematic, the wheel or a view's flight, once the splash is over.
+            // Captures: the cinematic, a view's shot, the wheel or a view's flight, once the splash is over.
             if (!splashing && filmAtStart)
             {
                 filmAtStart = false;
                 film.Play(filmFrom);
+            }
+
+            if (!splashing && filmView != 0)
+            {
+                landOn = film.PlayView(filmView) ? filmView : 0;
+                filmView = 0;
             }
 
             if (!splashing && wheelAtStart)

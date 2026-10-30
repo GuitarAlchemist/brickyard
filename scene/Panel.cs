@@ -493,12 +493,12 @@ internal static class Panel
         string[] lines = flying
             ? [Words.Say("FLYING", "EN VOL"),
                Words.Say("ZQSD, WASD or arrows: move   Space or E: rise   C: descend   Shift: faster", "ZQSD, WASD ou flèches : avancer   Espace ou E : monter   C : descendre   Maj : plus vite"),
-               Words.Say("F: walk   Wheel: pace   1 to 5: views   0: the cinematic   Tab: the wheel", "F : marcher   Molette : allure   1 à 5 : vues   0 : la cinématique   Tab : la roue"),
+               Words.Say("F: walk   Wheel: pace   1 to 5: views (Shift: filmed)   0: the cinematic   Tab: the wheel", "F : marcher   Molette : allure   1 à 5 : vues (Maj : filmées)   0 : la cinématique   Tab : la roue"),
                look]
             : [Words.Say("WALKING", "À PIED"),
                Words.Say("ZQSD, WASD or arrows: move   Shift: sprint   Space: jump   C or Ctrl: crouch (sprinting: slide)", "ZQSD, WASD ou flèches : avancer   Maj : sprint   Espace : sauter   C ou Ctrl : s'accroupir (en sprint : glissade)"),
                Words.Say("Q and E (AZERTY: A and E): lean   Alt + moving keys: lean or peek   Caps Lock: walk slowly", "A et E (QWERTY : Q et E) : se pencher   Alt + déplacement : se pencher ou se hausser   Verr. Maj : marcher lentement"),
-               Words.Say("F: fly   Wheel: pace   1 to 5: views   0: the cinematic   Tab: the wheel", "F : voler   Molette : allure   1 à 5 : vues   0 : la cinématique   Tab : la roue"),
+               Words.Say("F: fly   Wheel: pace   1 to 5: views (Shift: filmed)   0: the cinematic   Tab: the wheel", "F : voler   Molette : allure   1 à 5 : vues (Maj : filmées)   0 : la cinématique   Tab : la roue"),
                look];
         var room = windowWidth - (2 * Px(12)) - (2 * Px(Pad));
         var fitted = lines.Select((l, i) => Fit(l, Px(i == 0 ? 14 : 13), i == 0, room)).ToArray();

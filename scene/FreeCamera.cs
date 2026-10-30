@@ -224,9 +224,9 @@ internal sealed class FreeCamera
         }
     }
 
-    public void Reset()
+    public void Reset(bool cut = false)
     {
-        StartFlight();
+        StartFlight(cut);
         Free = false;
         Flying = false;
         Settle();
@@ -241,12 +241,13 @@ internal sealed class FreeCamera
         (new(0f, 1.75f, 0.6f), new(0f, 1.78f, -3.3f)), // the clocks of Ottawa and Paris
     ];
 
-    // 1 for the drift, 2 to 5 for the views; false for any other number.
-    public bool GoTo(int view)
+    // 1 for the drift, 2 to 5 for the views; false for any other number. A cut lands at once, as behind the cinematic's
+    // black after Shift and a view's key.
+    public bool GoTo(int view, bool cut = false)
     {
         if (view == 1)
         {
-            Reset();
+            Reset(cut);
             return true;
         }
 
@@ -255,7 +256,7 @@ internal sealed class FreeCamera
             return false;
         }
 
-        StartFlight();
+        StartFlight(cut);
         var (eye, target) = Views[view - 2];
         var d = SN.Vector3.Normalize(target - eye);
         yaw = MathF.Atan2(d.X, -d.Z);
@@ -290,9 +291,9 @@ internal sealed class FreeCamera
 
     // From wherever the picture is now, the last view or the middle of a flight; its length is measured at the next frame,
     // once the destination is known.
-    private void StartFlight()
+    private void StartFlight(bool cut)
     {
-        if (ReducedMotion || !haveDrawn)
+        if (cut || ReducedMotion || !haveDrawn)
         {
             flightTime = -1f;
             return;
@@ -875,5 +876,13 @@ internal sealed class FreeCamera
         camera.View(0f);
         camera.GoTo(3);
         Check(!camera.InFlight && SN.Vector3.Distance(camera.View(0f).Eye, Views[1].Eye) < 1e-4f, "under reduced motion a view is a cut");
+
+        camera = new FreeCamera();
+        camera.View(0f);
+        camera.GoTo(5, cut: true);
+        var landed = camera.View(0f);
+        camera.GoTo(1, cut: true);
+        Check(!camera.InFlight && SN.Vector3.Distance(landed.Eye, Views[3].Eye) < 1e-4f && !camera.Free,
+            "behind the cinematic's black a view is a cut, the drift too");
     }
 }

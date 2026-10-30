@@ -794,6 +794,11 @@ and its times kept:
 - `Cinematic`, key 0 or `--cinematic`: bars to 2.39:1, the title over black, seven shots (the hall, the office, Delta's
   face, the Pong, Gaia's planet, the clocks, a pull back to the whole hall) in 51 s with an operator's sway and dips
   between acts, the title again, then the player's view back. Any key or click ends it through black.
+- Shift and a view's key (asked for on 2026-10-30) film that view as the cinematic's shot of it, alone: 1 Delta's face,
+  2 the office, 3 Gaia, 4 the hall, 5 the clocks. The bars come, the shot comes out of black with no title, and through
+  black the player stands at the view, cut there behind the black; a skip before the black leaves the camera where it
+  was. `--film-view N` does it once the splash is over, for captures; one at `--film-view 3` showed Gaia's shot between
+  bars, then the player at view 3.
 - `ToolWheel`, Tab: held, the scene's time (the robot, the Pong, the desks) goes at a quarter and the wheel opens; let go,
   it shuts on what it points at; a tap leaves it open. Eight empty slots for now; `Items` takes things to hold.
 - The shelf, which Tab opened too, keeps M. F1 shows the keys.

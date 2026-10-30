@@ -108,8 +108,14 @@ internal sealed class Cinematic
             new(Face, new(0f, 0.9f, -0.5f), new(0f, 1.3f, -2.6f)), DipIn: true, Out: "long"),
     ];
 
+    // The shot that films each view, for Shift and the view's key: 1 Delta's face, 2 the office, 3 Gaia, 4 the hall, 5
+    // the clocks, as FreeCamera's views.
+    internal static readonly string[] ViewShots = ["delta", "office", "gaia", "hall", "clocks"];
+
     private float phaseTime;
     private int shot = -1;
+    private int lastShot = Shots.Length - 1; // the film's end, or the one shot of a view
+    private bool alone; // a view's shot alone: no title, no card
     private float shotTime;
     private float clock; // for the sway, which goes on through the shots
 
@@ -149,8 +155,24 @@ internal sealed class Cinematic
         Now = Phase.In;
         phaseTime = 0f;
         shot = Math.Clamp(from, 0, Shots.Length - 1) - 1;
+        lastShot = Shots.Length - 1;
+        alone = false;
         Plays++;
         Begun.Clear();
+        return true;
+    }
+
+    // Films the shot of view 1 to 5 alone (Shift and the view's key): the bars, black, the shot with no title, then the
+    // player's view through black; false for another number or while it plays.
+    public bool PlayView(int view)
+    {
+        if (view < 1 || view > ViewShots.Length || !Play(Array.FindIndex(Shots, s => s.Name == ViewShots[view - 1])))
+        {
+            return false;
+        }
+
+        lastShot = shot + 1;
+        alone = true;
         return true;
     }
 
@@ -195,6 +217,10 @@ internal sealed class Cinematic
                     Now = Phase.Title;
                     phaseTime = 0f;
                     Filming = true;
+                    if (alone)
+                    {
+                        NextShot(); // a view's shot comes straight out of the black
+                    }
                 }
 
                 break;
@@ -317,9 +343,10 @@ internal sealed class Cinematic
     private void NextShot()
     {
         shot++;
-        if (shot >= Shots.Length)
+        if (shot > lastShot)
         {
-            Now = Phase.Card;
+            // The film ends on its card; a view's shot through black, as a skip does.
+            Now = alone ? Phase.Out : Phase.Card;
             phaseTime = 0f;
             return;
         }
@@ -336,7 +363,7 @@ internal sealed class Cinematic
         shotTime += dt;
         // Into and out of black at an act's edges.
         var black = 0f;
-        if (s.DipIn)
+        if (s.DipIn || alone)
         {
             black = Math.Max(black, 1f - Math.Clamp(shotTime / DipS, 0f, 1f));
         }
@@ -433,6 +460,50 @@ internal sealed class Cinematic
 
             Check(inside, $"the shot {s.Name} stays inside the hall and keeps its subject in front");
         }
+
+        // Shift and a view's key: that view's shot alone, from black, with no title, then the player's view.
+        foreach (var (view, name) in new[] { (1, "delta"), (2, "office"), (3, "gaia"), (4, "hall"), (5, "clocks") })
+        {
+            var one = new Cinematic();
+            var played = one.PlayView(view);
+            var lit = 1f;
+            var titledOne = false;
+            var span = 0f;
+            while (one.Playing && span < 20f)
+            {
+                one.Advance(1f / 30f);
+                span += 1f / 30f;
+                titledOne |= one.Title > 0f;
+                if (one.Begun.Count == 1 && one.ShotName == name)
+                {
+                    lit = Math.Min(lit, one.Black);
+                }
+            }
+
+            var length = Shots.First(s => s.Name == name).Seconds;
+            Check(played && one.Begun.SequenceEqual([name]) && !titledOne && lit < 0.05f && !one.Playing && one.Bars == 0f && span < length + 3f,
+                $"Shift and {view} films the shot {name} alone, without the title, and gives the view back ({span:F1} s)");
+        }
+
+        var busy = new Cinematic();
+        Check(!busy.PlayView(0) && !busy.PlayView(6) && busy.PlayView(2) && !busy.PlayView(3), "only the views 1 to 5 have a shot, one at a time");
+        busy = new Cinematic();
+        busy.PlayView(4);
+        busy.Skip();
+        while (busy.Playing)
+        {
+            busy.Advance(1f / 30f);
+        }
+
+        busy.Play();
+        var full = 0f;
+        while (busy.Playing && full < total + 5f)
+        {
+            busy.Advance(1f / 30f);
+            full += 1f / 30f;
+        }
+
+        Check(busy.Begun.Count == Shots.Length, "after a view's shot, 0 plays the whole film again");
 
         var reduced = new Cinematic { ReducedMotion = true };
         reduced.Play();
