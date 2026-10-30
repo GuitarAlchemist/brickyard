@@ -114,7 +114,8 @@ func (a *asks) show() {
 	}
 }
 
-func (a *asks) handle(mux *http.ServeMux, allowed func(http.ResponseWriter, *http.Request, string) bool) {
+// handle registers /ask, /asks and /answer on mux, each behind allowed.
+func (a *asks) handle(mux router, allowed func(http.ResponseWriter, *http.Request, string) bool) {
 	mux.HandleFunc("/ask", func(w http.ResponseWriter, req *http.Request) {
 		if allowed(w, req, http.MethodPost) {
 			a.ask(w, req)

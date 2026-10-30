@@ -97,7 +97,8 @@ func (r *remote) hearWith(transcribe func(samples []float32) (text, lang string,
 	r.transcribe = transcribe
 }
 
-func (r *remote) handle(mux *http.ServeMux) {
+// handle registers the gateway's paths on mux, and Delta's requests' when it keeps them.
+func (r *remote) handle(mux router) {
 	mux.HandleFunc("/hear", r.hear)
 	mux.HandleFunc("/said", r.said)
 	mux.HandleFunc("/link", r.link)
