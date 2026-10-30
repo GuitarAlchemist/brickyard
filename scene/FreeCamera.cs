@@ -3,7 +3,7 @@ using SN = System.Numerics;
 // Delta's camera. At rest it drifts a little from side to side in front of the robot, at the height of its face, as it
 // always has. Moved, it walks the hall as the Observatory's camera does (scripts/fly_camera.gd there): ZQSD, WASD or the
 // arrows move at eye height, Shift runs, the wheel sets the pace, the right button held turns the view, F flies (Space or
-// E up, C down), 2 to 4 jump to views. Home or 1 goes back to the drift. Only the front of the hall is built, so the camera stays between the wall
+// E up, C down), 2 to 5 jump to views. Home or 1 goes back to the drift. Only the front of the hall is built, so the camera stays between the wall
 // and the front of the slabs. Kept apart from the window so that it can be tested alone.
 internal sealed class FreeCamera
 {
@@ -87,15 +87,16 @@ internal sealed class FreeCamera
         Flying = false;
     }
 
-    // The views the keys 2 to 4 jump to, as the Observatory's presets; 1 is the drift. Above eye height, the camera flies.
+    // The views the keys 2 to 5 jump to, as the Observatory's presets; 1 is the drift. Above eye height, the camera flies.
     internal static readonly (SN.Vector3 Eye, SN.Vector3 Target)[] Views =
     [
         (new(-0.95f, 1.35f, 1.75f), new(-1.1f, 0.45f, -0.1f)), // the agents' office
         (new(1.75f, 1.2f, 1.55f), new(0.95f, 0.85f, 0.1f)), // Gaia
         (new(3.4f, 3.1f, 5.2f), new(0f, 0.6f, -0.6f)), // the whole hall
+        (new(0f, 1.75f, 0.6f), new(0f, 1.78f, -3.3f)), // the clocks of Ottawa and Paris
     ];
 
-    // 1 for the drift, 2 to 4 for the views; false for any other number.
+    // 1 for the drift, 2 to 5 for the views; false for any other number.
     public bool GoTo(int view)
     {
         if (view == 1)
@@ -214,6 +215,6 @@ internal sealed class FreeCamera
             views &= eye.X >= Min.X && eye.X <= Max.X && eye.Y >= Min.Y && eye.Y <= Max.Y && eye.Z >= Min.Z && eye.Z <= Max.Z;
         }
 
-        Check(views && camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(5) && !camera.GoTo(0), "the views stand where they say, inside the hall; 1 is the drift");
+        Check(views && camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(6) && !camera.GoTo(0), "the views stand where they say, inside the hall; 1 is the drift");
     }
 }

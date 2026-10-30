@@ -10,7 +10,8 @@
 // waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
 // a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
 // --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws. --view N starts
-// the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall).
+// the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks). H hides or shows
+// the wall clocks of Ottawa and Paris (WallClocks), shown by default.
 //
 // It opens on BRUTAL's logo and copyright notice for 2.6 s, as BRUTAL's licence asks (Splash.cs); --demo's states and
 // --shots' times start after it, and --shots also saves the splash.
@@ -734,6 +735,7 @@ internal static unsafe class Stage
         // The hall, still, and the robot's parts, each moved by its own matrix.
         var hallVertices = Brickwork.Build();
         var hall = new Mesh(device, physical, hallVertices);
+        var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
         var moduleRoot = Option(args, "--module-dir") ?? Path.Combine(AppContext.BaseDirectory, "modules", "gaia");
         SceneModuleHost<Mesh>? gaiaModule = null;
@@ -1124,6 +1126,10 @@ internal static unsafe class Stage
             if (key == GlfwKey.F)
             {
                 camera.ToggleFlying((float)at);
+            }
+            else if (key == GlfwKey.H)
+            {
+                clocks.Shown = !clocks.Shown;
             }
             else if (key == GlfwKey.Home)
             {
@@ -1618,6 +1624,7 @@ internal static unsafe class Stage
                 cb.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
                 cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                clocks.Draw((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)), DateTimeOffset.Now);
                 if (gaiaModule is not null) Draw(cb, layout, gaiaModule.Surface, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 else if (gaiaFallback is not null) Draw(cb, layout, gaiaFallback[GaiaPresence.Status], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 for (var i = 0; i < parts.Length; i++)
@@ -1947,6 +1954,7 @@ internal static unsafe class Stage
             presence.Dispose();
         }
         hall.Dispose();
+        clocks.Dispose();
         Console.WriteLine($"SCENE native mesh buffers remaining after disposal {Mesh.LiveCount}");
         foreach (var texture in splashTextures)
         {
