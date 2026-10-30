@@ -810,6 +810,22 @@ lift and landing, the cinematic's order, length and skip, and the wheel's tap an
 and the open wheel; in Flat the title and the wheel. The Pong's shot shows the chest without the Pong in these
 captures: the isolated bin had no arcade module.
 
+## The picture's latency (2026-10-30)
+
+The user found the hall slow to answer a move. Live it ran FIFO with 3 swapchain images and 2 frames in flight at
+3840x2054: 60 fps, p50 16.66 ms but p95 33.2 ms, max 1.1 s, and the keys and the mouse were read before the wait for
+the GPU, so a move reached the screen three or four refreshes later. Drawing is not the cost: hidden, `--immediate --cap 0
+--size 3840x2054`, Release in Low with 4x MSAA 425 fps (p50 2.3 ms, p99 4.4), Flat 593, Debug 501, and with the live
+bin's modules (the office, Gaia v1.2, the Pong) 1518 fps (p50 0.9, p99 2.9). So:
+
+- Shown, the scene presents through Mailbox when the GPU offers it (no tearing, the newest picture rather than a queue),
+  paced at twice the fastest screen's refresh unless `--cap` says otherwise; `--fifo` keeps FIFO, and a hidden window
+  keeps FIFO at 60 as before.
+- Each frame waits for its slot's fence before polling the keys and the mouse, not after.
+- `--size WxH` sizes the window, for measuring a hidden one at a live one's size.
+
+Still to see live: the `SCENE present mode` line (Mailbox, capped at twice the refresh), and the frames' p95 at exit.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

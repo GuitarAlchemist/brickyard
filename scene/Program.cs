@@ -3,12 +3,14 @@
 // {"state":"idle"}, "listening", "thinking", or {"state":"speaking","seconds":S,"envelope":[...]} with the voice's
 // loudness every 20 ms, which opens the mouth as the sentence plays.
 //
-//	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--shelf SECTION] [--hidden] [--immediate] [--cap N] [--quality auto|flat|low] | --selftest
+//	scene [--listen 8805] [--seconds N] [--demo] [--shots DIR] [--shelf SECTION] [--hidden] [--size WxH] [--immediate] [--fifo] [--cap N] [--quality auto|flat|low] | --selftest
 //
 // --demo plays idle, listening, thinking, speaking, a compaction, each expression, the caption of a sentence let pass
 // and the pairing card in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
-// waits for vsync unless --immediate; --cap N limits it to N frames a second, 60 by default when hidden (nothing paces
-// a hidden window), so that it never takes the GPU from a live view beside it. Esc closes it, as does --seconds.
+// waits for vsync unless --immediate: shown, through Mailbox when the GPU offers it, at twice the screen's refresh unless
+// --cap says otherwise, and through FIFO with --fifo or when hidden; --cap N limits it to N frames a second, 60 by
+// default when hidden (nothing paces a hidden window), so that it never takes the GPU from a live view beside it.
+// --size WxH sizes the window, to measure a hidden one at a live one's size. Esc closes it, as does --seconds.
 // --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws. --view N starts
 // the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks). H hides or shows
 // the wall clocks of Ottawa and Paris (WallClocks), shown by default.
@@ -387,7 +389,11 @@ internal static unsafe class Stage
 
         // A demo's window has its own title, so that the phone's gateway, which shows the one window titled Brickyard,
         // never takes it for Delta's (remote/window_windows.go).
-        var window = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = demo ? "Brickyard demo" : "Brickyard", Size = new int2(Width, Height) });
+        // --size WxH, for measuring a hidden window at a live one's size.
+        var sized = Option(args, "--size")?.Split('x') is [var w, var h] && int.TryParse(w, out var sizeW) && int.TryParse(h, out var sizeH) && sizeW > 0 && sizeH > 0
+            ? new int2(sizeW, sizeH)
+            : new int2(Width, Height);
+        var window = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = demo ? "Brickyard demo" : "Brickyard", Size = sized });
 
         // Instance with the extensions GLFW needs to present, and the window's surface.
         var glfwExtensions = Glfw.GetRequiredInstanceExtensions(out var extensionCount);
@@ -490,6 +496,23 @@ internal static unsafe class Stage
                 {
                     presentMode = wanted;
                 }
+            }
+        }
+        else if (!hidden && !args.Contains("--fifo") && modes.Contains(VkPresentModeKHR.MailboxKHR))
+        {
+            // Shown, Mailbox when offered: no tearing, and the screen takes the newest picture instead of FIFO's queue
+            // of them, so a move shows a refresh or two sooner; paced at twice the fastest screen's refresh, which keeps
+            // the newest picture fresh without drawing hundreds a second. --fifo keeps FIFO.
+            presentMode = VkPresentModeKHR.MailboxKHR;
+            if (Option(args, "--cap") is null)
+            {
+                var refresh = 0;
+                foreach (var monitor in Glfw.GetMonitors())
+                {
+                    refresh = Math.Max(refresh, monitor.VideoMode.RefreshRate);
+                }
+
+                cap = 2 * (refresh > 0 ? refresh : 60);
             }
         }
 
@@ -1475,6 +1498,9 @@ internal static unsafe class Stage
         var loopStart = clock.Elapsed;
         while (!window.ShouldClose)
         {
+            // The GPU done with this slot's last frame before the keys and the mouse are read, not after: the picture
+            // then shows the input it was drawn from without a frame's wait in between.
+            device.WaitForFences([fences[frame % FramesInFlight]], true, -1);
             Glfw.PollEvents();
             placement.Apply(window, tray);
             var now = clock.Elapsed.TotalSeconds;
