@@ -835,6 +835,32 @@ keys to the screen. Mailbox stays where the GPU lacks them, and `--mailbox` take
 `--present-wait --cap 0`: Release 59 fps, frame p95 18.0 ms, keys to screen p50 16.5 p99 18.1; Debug 60 fps, p95 18.0,
 keys to screen p50 16.5 p99 18.1, where Debug in plain FIFO had fallen to 53 fps with p95 49 ms.
 
+## An arcade cabinet, and PARSEC on its screen (2026-10-31)
+
+The user asked for PARSEC (https://parsec.games.bu.app/, a third party's tribute to the TI-99/4A game) on an arcade
+screen in the hall, from its site, without copying it. The page is one HTML file drawing a 256x192 `#cv` canvas, with
+WebAudio, `speechSynthesis` and keys read by `e.code`.
+
+- `WebScreen` starts Edge, already on the machine, in its own profile (`%LOCALAPPDATA%\delta\arcade-edge`) as an app
+  window at -32000,-32000 with the occlusion and background throttling off, so that the page draws and times as shown
+  and its sound and voice play. It drives the page over the DevTools protocol on a 127.0.0.1 port Edge picks
+  (`DevToolsActivePort`); a script the scene puts in the page sends the canvas's RGBA through a binding each animation
+  frame (60 a second, about 260 kB of base64 each), and keys and clicks go back as `Input` events. A job object kills
+  Edge with the scene, however the scene ends. The script is put in again every 250 ms until frames arrive: a script
+  added for new documents does not reach the one already loading.
+- `ArcadeCabinet` is the cabinet: the classic side profile with a lit trim and three bands, the coin door's lit slots,
+  a stick and three buttons, the screen leaning back 13.5 degrees with scanlines, and the lit marquee; at (3.2, 0,
+  -1.95), turned 25 degrees to the room, clear of the steel cabinet and the pillar. Before the game its screen shows a
+  card: PARSEC and "click to play", "loading...", or why it could not start.
+- A click on the cabinet (or, locked, at the centre) flies to view 6, in front of it, and starts the game: Edge in about
+  6 s, then the page's own start is clicked, which also lets it play sound. Every key but Esc is then the game's, by
+  its place (ZQSD on AZERTY are its WASD); the camera does not move. Esc leaves, and Edge closes on the thread pool.
+  `ScreenGpuRenderer` takes any fixed size, rectangle and scanlines now, and `Texture` animates any fixed size.
+
+Measured: the probe, Edge alone, 60 frames a second with the game started and moved by keys; hidden in the scene with
+`--arcade-play`, the card, "loading...", then the page's title screen on the cabinet, 289 frames, and no Edge left
+after the run. Selftest ok.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

@@ -68,7 +68,7 @@ internal sealed unsafe class Texture : IDisposable
     public void UpdateAfterFence(CommandBuffer upload, ReadOnlySpan<byte> rgba, int width, int height)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (!staged || rgba.Length != byteCount || width != 160 || height != 96 || byteCount != width * height * 4)
+        if (!staged || rgba.Length != byteCount || byteCount != width * height * 4)
             throw new InvalidDataException("Animated screen upload exceeds its fixed buffer.");
         var mapped = device.MapMemory<byte>(new MapInfo(stagingMemory) { Region = new MapRegion { Size = new ByteSize((nuint)byteCount) } });
         try { rgba.CopyTo(new Span<byte>((byte*)mapped, byteCount)); }

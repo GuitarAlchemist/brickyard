@@ -29,6 +29,10 @@
 // half a second later and --keys shows the keys' card, for captures; --reduced-motion keeps cuts, no sway, dip or wider
 // field.
 //
+// An arcade cabinet stands on the right (ArcadeCabinet): a click on it, or 6 then a click, walks up to it and starts
+// PARSEC, a web game Edge runs off the screen (WebScreen); every key is then the game's, and Esc leaves it and closes
+// Edge. --arcade-play starts it once the splash is over and --arcade-url plays another page's #cv canvas, for captures.
+//
 // It opens on BRUTAL's logo and copyright notice for 2.6 s, as BRUTAL's licence asks (Splash.cs); --demo's states and
 // --shots' times start after it, and --shots also saves the splash.
 
@@ -908,6 +912,10 @@ internal static unsafe class Stage
             : [new Texture(device, physical, upload, logoPixels, logoWidth, logoHeight), new Texture(device, physical, upload, noticePixels, noticeWidth, noticeHeight)];
         var arcadeGpu = arcade is null ? null : new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight, arcade.Frame);
         if (arcade is not null) Console.WriteLine($"ARCADE loaded {arcade.Id} v{arcade.Version}; sha256 {arcade.CodeHash}; canvas 160x96 RGBA8; GPU images {arcadeGpu!.ImageCount}; pid {Environment.ProcessId}");
+        // The arcade cabinet and the web game on its screen (ArcadeCabinet); --arcade-url plays another page's #cv canvas.
+        var cabinet = new ArcadeStage(vertices => new Mesh(device, physical, vertices),
+            (pixels, width, height, revision, rect, scanlines) => new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight, pixels, width, height, revision, rect, 0f, scanlines),
+            Option(args, "--arcade-url"));
         upload.End();
         var uploadHandle = upload.Handle;
         queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploadHandle }], default);
@@ -1154,6 +1162,7 @@ internal static unsafe class Stage
         var landOn = 0; // the view the player's camera cuts to once a view's shot is in black
         var wheel = new ToolWheel(); // Tab; --wheel opens it once the splash is over, for captures
         var wheelAtStart = args.Contains("--wheel");
+        var arcadeAtStart = args.Contains("--arcade-play"); // the cabinet's game once the splash is over, for captures
         var flyTo = int.TryParse(Option(args, "--fly-to"), out var flyToValue) ? flyToValue : 0; // a view's flight half a second after the splash, for captures
         var keysShown = args.Contains("--keys"); // F1: the camera's keys
         var looking = false; // the right button is held
@@ -1189,6 +1198,22 @@ internal static unsafe class Stage
         window.OnKey += (w, key, scancode, action, mods) => Guard("a key", () =>
         {
             var at = clock.Elapsed.TotalSeconds;
+            if (cabinet.Playing)
+            {
+                // At the cabinet every key is the game's, but Esc, which leaves it.
+                if (key == GlfwKey.Escape)
+                {
+                    if (action == GlfwKeyAction.Press) cabinet.Leave();
+                }
+                else if (action != GlfwKeyAction.Repeat)
+                {
+                    cabinet.Key(key, action == GlfwKeyAction.Press);
+                }
+
+                ctrlAlone = false;
+                return;
+            }
+
             if (action == GlfwKeyAction.Release)
             {
                 if (key == GlfwKey.Tab)
@@ -1386,6 +1411,22 @@ internal static unsafe class Stage
             return true;
         }
 
+        // A click on the arcade cabinet walks up to it and starts its game; the keys are the game's until Esc.
+        bool TryCabinetClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view || !cabinet.Hit(view, extent.Width, extent.Height, x, y)) return false;
+            PlayArcade();
+            return true;
+        }
+
+        void PlayArcade()
+        {
+            camera.GoTo(FreeCamera.ArcadeView);
+            looking = locked = false;
+            Grab(window);
+            cabinet.Play();
+        }
+
         window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
             ctrlAlone = false;
@@ -1433,7 +1474,7 @@ internal static unsafe class Stage
             if (action == GlfwButtonAction.Press && button == 0 && locked)
             {
                 // Locked, a click is at the screen's centre, where the view aims.
-                if (!TryModuleClick(extent.Width / 2.0, extent.Height / 2.0, false)) TryOfficeClick(extent.Width / 2.0, extent.Height / 2.0);
+                if (!TryModuleClick(extent.Width / 2.0, extent.Height / 2.0, false) && !TryOfficeClick(extent.Width / 2.0, extent.Height / 2.0)) TryCabinetClick(extent.Width / 2.0, extent.Height / 2.0);
                 return;
             }
 
@@ -1481,7 +1522,7 @@ internal static unsafe class Stage
             else if (action == GlfwButtonAction.Press && button == 0)
             {
                 var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
-                if (!TryModuleClick(cx, cy, false)) TryOfficeClick(cx, cy);
+                if (!TryModuleClick(cx, cy, false) && !TryOfficeClick(cx, cy)) TryCabinetClick(cx, cy);
             }
         });
         window.OnScroll += (w, offset) => Guard("a scroll", () =>
@@ -1590,6 +1631,7 @@ internal static unsafe class Stage
             }
 
             arcade?.Advance(sceneDt);
+            cabinet.Advance();
             // The splash is timed from the first frame on screen, not from start-up, which takes about a second; --demo's
             // timeline and --shots start with it, while the brain's lines are timed by the link's own clock.
             var shown = firstFrame < 0 ? 0.0 : now - firstFrame;
@@ -1621,6 +1663,12 @@ internal static unsafe class Stage
             {
                 landOn = film.PlayView(filmView) ? filmView : 0;
                 filmView = 0;
+            }
+
+            if (!splashing && arcadeAtStart)
+            {
+                arcadeAtStart = false;
+                PlayArcade();
             }
 
             if (!splashing && wheelAtStart)
@@ -1667,7 +1715,7 @@ internal static unsafe class Stage
                     (float)((window.CursorY * extent.Height / Math.Max(1, window.Height)) - (extent.Height / 2.0)), inner);
             }
 
-            if (!shelf.Open && !film.Playing && window.IsFocused)
+            if (!shelf.Open && !film.Playing && !cabinet.Playing && window.IsFocused)
             {
                 bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press;
                 float Axis(GlfwKey a, GlfwKey b, GlfwKey back, GlfwKey back2) => (Held(a) || Held(b) ? 1f : 0f) - (Held(back) || Held(back2) ? 1f : 0f);
@@ -1923,6 +1971,7 @@ internal static unsafe class Stage
             var cb = commands[slot];
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
             if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
+            cabinet.UploadAfterFence(cb, slot);
             clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = new float4(0.006f, 0.005f, 0.005f, 1f) } };
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
             cb.BeginRenderPass(new VkRenderPassBeginInfo
@@ -1953,6 +2002,7 @@ internal static unsafe class Stage
                 cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 clocks.Draw((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)), DateTimeOffset.Now);
+                cabinet.DrawMeshes((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)));
                 if (gaiaModule is not null) Draw(cb, layout, gaiaModule.Surface, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 else if (gaiaFallback is not null) Draw(cb, layout, gaiaFallback[GaiaPresence.Status], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 for (var i = 0; i < parts.Length; i++)
@@ -1969,6 +2019,7 @@ internal static unsafe class Stage
 
                 // The Pong screen binds its own pipeline and descriptor set, so it comes after every mesh drawn with ours.
                 arcadeGpu?.Draw(cb, slot, worlds[Robot.Torso] * viewProj);
+                cabinet.DrawScreens(cb, slot, viewProj);
 
                 if (shelf.Open && card is not null && cardTexture is not null)
                 {
@@ -2375,6 +2426,7 @@ internal static unsafe class Stage
         wheelTexture?.Dispose();
         keysTexture?.Dispose();
         arcadeGpu?.Dispose();
+        cabinet.Dispose();
         arcade?.Dispose();
         Console.WriteLine($"ARCADE shutdown: uploads {arcadeGpu?.Uploads ?? 0}; native texture images remaining {Texture.LiveCount}; pid {Environment.ProcessId}");
         device.DestroyCommandPool(uploadPool, null);

@@ -6,7 +6,7 @@ using SN = System.Numerics;
 // too, tapped alone), C while sprinting slides and ends crouched, Q and E (A and E on AZERTY) lean, Alt with the moving
 // keys leans or peeks up and down, the body standing, Caps Lock walks at half pace; a landing dips the eye, a sprint
 // widens the field, a slide and a lean roll it. The wheel sets the pace, the right button held or Ctrl and a click turn
-// the view, F flies (Space or E up, C down). 2 to 5 are views, 1 or Home the drift, and going to any of them is a flight
+// the view, F flies (Space or E up, C down). 2 to 6 are views, 1 or Home the drift, and going to any of them is a flight
 // after Grand Theft Auto V's character switch, as the Observatory's view_move.gd: the camera lifts, looks down over the
 // hall and settles, its field widening on the way. The Observatory's heights are scaled by its eye's, 1.7 m, to this
 // one's, 1.1 m; its times are kept. Only the front of the hall is built, so the camera stays between the wall and the
@@ -232,16 +232,19 @@ internal sealed class FreeCamera
         Settle();
     }
 
-    // The views the keys 2 to 5 go to, as the Observatory's presets; 1 is the drift. Above eye height, the camera flies.
+    internal const int ArcadeView = 6; // the arcade cabinet's, where a click on it walks to
+
+    // The views the keys 2 to 6 go to, as the Observatory's presets; 1 is the drift. Above eye height, the camera flies.
     internal static readonly (SN.Vector3 Eye, SN.Vector3 Target)[] Views =
     [
         (new(-0.95f, 1.35f, 1.75f), new(-1.1f, 0.45f, -0.1f)), // the agents' office
         (new(1.75f, 1.2f, 1.55f), new(0.95f, 0.85f, 0.1f)), // Gaia
         (new(3.4f, 3.1f, 5.2f), new(0f, 0.6f, -0.6f)), // the whole hall
         (new(0f, 1.75f, 0.6f), new(0f, 1.78f, -3.3f)), // the clocks of Ottawa and Paris
+        ArcadeCabinet.View, // in front of the arcade cabinet, at a player's height
     ];
 
-    // 1 for the drift, 2 to 5 for the views; false for any other number. A cut lands at once, as behind the cinematic's
+    // 1 for the drift, 2 to 6 for the views; false for any other number. A cut lands at once, as behind the cinematic's
     // black after Shift and a view's key.
     public bool GoTo(int view, bool cut = false)
     {
@@ -697,7 +700,7 @@ internal sealed class FreeCamera
             views &= eye.X >= Min.X && eye.X <= Max.X && eye.Y >= Min.Y && eye.Y <= Max.Y && eye.Z >= Min.Z && eye.Z <= Max.Z;
         }
 
-        Check(views && camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(6) && !camera.GoTo(0), "the views stand where they say, inside the hall; 1 is the drift");
+        Check(views && camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(7) && !camera.GoTo(0), "the views stand where they say, inside the hall; 1 is the drift");
 
         SelfTestBody(Check);
         SelfTestFlight(Check);
