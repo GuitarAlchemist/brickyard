@@ -47,6 +47,8 @@ type server struct {
 
 	guestHost string                          // the guests' host behind the tunnel, delta.<domain>; "": no guests
 	localHost string                          // host:port of Delta's window's own entry, on 127.0.0.1
+	ownerHost string                          // the owner's host behind the tunnel and Cloudflare Access; "": none
+	access    *access                         // checks Access's token there
 	guestAPI  *webrtc.API                     // WebRTC for guests, who are not on this network
 	book      *guestBook                      // their invitations and cookies
 	ice       func() ([]iceServer, error)     // the relay's addresses and credentials for one guest

@@ -81,7 +81,10 @@ async function pair() {
 
 async function connect() {
   go.hidden = true;
-  const pc = new RTCPeerConnection();
+  // Away from home, through the owner's entry, the video comes by the relay, whose addresses that entry gives; on the
+  // Wi-Fi there is no /ice, and none is needed.
+  const ice = await fetch('/ice').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const pc = new RTCPeerConnection(ice ? { iceServers: ice.iceServers } : {});
   pc.addTransceiver('video', { direction: 'recvonly' });
   pc.ontrack = (e) => {
     video.srcObject = e.streams[0] || new MediaStream([e.track]);
@@ -109,6 +112,7 @@ async function connect() {
   });
   if (!r.ok) {
     say({ 401: 'Cet appareil n’est pas appairé : scanne le QR dans la fenêtre de Delta.',
+          403: 'Cloudflare Access ne t’a pas laissé passer : recharge la page pour te reconnecter.',
           409: 'Un autre appareil est déjà connecté.' }[r.status] || ('Refusé : ' + r.status));
     pc.close(); go.hidden = false; return;
   }

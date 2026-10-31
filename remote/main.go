@@ -1,7 +1,8 @@
 // delta-remote shows Delta's window to one device at a time, over WebRTC.
 //
 //	delta-remote [-ip <address>] [-port 8810] [-udp 8811] [-cert <file> -key <file> -name <host>] [-forget-devices]
-//	             [-guest-host <name> [-guest-port 8812] [-local-port 8813] [-turn <file>] [-mic <device>]]
+//	             [-guest-host <name> [-guest-port 8812] [-local-port 8813] [-turn <file>] [-mic <device>]
+//	              [-owner-host <name> -access-team <team> -access-aud <tag> -access-email <email> [-owner-port 8814]]]
 //
 // Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within 100 s. Then a new code
 // replaces it, as soon as a device uses it too: Delta's window shows the current one as a QR, and link.txt holds it. A
@@ -16,7 +17,9 @@
 // Cloudflare tunnel brings https://<guest-host> to the guests' entry on 127.0.0.1:<guest-port>, which serves nothing
 // else (guests.go), and their video goes through Cloudflare's TURN relay, with the key held in -turn. Delta's window
 // invites too, through its own entry on 127.0.0.1:<local-port>, which only the brain's secret opens. With -mic,
-// guests also hear that microphone and Delta's voice, while any of them watches; they cannot speak.
+// guests also hear that microphone and Delta's voice, while any of them watches; they cannot speak. With -owner-host,
+// the owner away from home gets the paired device's page through the tunnel, behind Cloudflare Access, which lets in
+// -access-email only (access.go).
 package main
 
 import (
@@ -27,6 +30,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"math/big"
@@ -49,6 +53,8 @@ type options struct {
 	forget                      bool
 	guestHost, turnFile, mic    string
 	guestPort, localPort        int
+	ownerHost, team, aud, email string
+	ownerPort                   int
 }
 
 func main() {
@@ -69,6 +75,11 @@ func main() {
 	flag.StringVar(&o.guestHost, "guest-host", "", "the host name a tunnel brings to the guests' entry; default: no guests")
 	flag.IntVar(&o.guestPort, "guest-port", 8812, "the guests' entry, on 127.0.0.1 only, for the tunnel")
 	flag.IntVar(&o.localPort, "local-port", 8813, "Delta's window's entry for invitations, on 127.0.0.1 only")
+	flag.StringVar(&o.ownerHost, "owner-host", "", "the host name a tunnel and Cloudflare Access bring to the owner's entry; default: none")
+	flag.IntVar(&o.ownerPort, "owner-port", 8814, "the owner's entry, on 127.0.0.1 only, for the tunnel")
+	flag.StringVar(&o.team, "access-team", "", "the Cloudflare Zero Trust team that guards -owner-host")
+	flag.StringVar(&o.aud, "access-aud", "", "the AUD tag of its Access application")
+	flag.StringVar(&o.email, "access-email", "", "the one email Access lets in")
 	flag.StringVar(&o.mic, "mic", "", `the microphone guests hear, by its DirectShow name ("ffmpeg -list_devices true -f dshow -i dummy"); default: none`)
 	flag.StringVar(&o.turnFile, "turn", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta-remote", "turn.json"),
 		`Cloudflare's TURN key for the guests' video, as {"id": "…", "token": "…"}`)
@@ -161,6 +172,19 @@ func run(o options) error {
 		s.localHost = net.JoinHostPort("127.0.0.1", strconv.Itoa(o.localPort))
 		local := &http.Server{Addr: s.localHost, Handler: s.localHandler(), ReadHeaderTimeout: 5 * time.Second}
 		go func() { logf("the window's entry: %v", local.ListenAndServe()) }()
+		if o.ownerHost != "" {
+			if o.team == "" || o.aud == "" || o.email == "" {
+				return errors.New("-owner-host needs -access-team, -access-aud and -access-email")
+			}
+			s.ownerHost, s.access = o.ownerHost, newAccess(o.team, o.aud, o.email)
+			owner := &http.Server{
+				Addr:              net.JoinHostPort("127.0.0.1", strconv.Itoa(o.ownerPort)),
+				Handler:           s.ownerHandler(),
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			go func() { logf("the owner's entry: %v", owner.ListenAndServe()) }()
+			fmt.Printf("The owner, away, opens https://%s, behind Cloudflare Access for %s\n", o.ownerHost, o.email)
+		}
 		fmt.Printf("Guests invited from a paired device watch at https://%s, through a tunnel to %s\n", o.guestHost, guests.Addr)
 	}
 
