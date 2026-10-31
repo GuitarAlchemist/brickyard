@@ -30,8 +30,8 @@
 // field.
 //
 // An arcade cabinet stands on the right (ArcadeCabinet): a click on it, or 6 then a click, walks up to it and starts
-// PARSEC, a web game Edge runs off the screen (WebScreen); every key is then the game's, and Esc leaves it and closes
-// Edge. --arcade-play starts it once the splash is over and --arcade-url plays another page's #cv canvas, for captures.
+// PARSEC, a web game whose script runs here without a browser (ScriptScreen); every key is then the game's, and Esc
+// leaves it. --arcade-play starts it once the splash is over and --arcade-url plays another page's #cv canvas, for captures.
 //
 // It opens on BRUTAL's logo and copyright notice for 2.6 s, as BRUTAL's licence asks (Splash.cs); --demo's states and
 // --shots' times start after it, and --shots also saves the splash.

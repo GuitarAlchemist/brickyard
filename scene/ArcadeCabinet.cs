@@ -5,9 +5,9 @@ using SN = System.Numerics;
 
 // An upright arcade cabinet on the right of the hall, beside the pillar, turned a little towards the room: side panels
 // with the classic profile and a lit trim, a coin door, a control panel with a stick and three buttons, a screen
-// leaning back under a lit marquee. Its screen shows PARSEC, a web game (parsec.games.bu.app) that Edge runs off the
-// screen (WebScreen): a click on the cabinet, or the view 6, walks up to it and starts the game; the keys then go to the
-// game, and Esc gives them back. The cabinet is built in its own frame, x across, y up and z towards the player.
+// leaning back under a lit marquee. Its screen shows PARSEC, a web game (parsec.games.bu.app) whose script, fetched
+// from its site, runs here without a browser (ScriptScreen): a click on the cabinet, or the view 6, walks up to it and
+// starts the game; the keys then go to the game, and Esc gives them back. The cabinet is built in its own frame, x across, y up and z towards the player.
 internal static class ArcadeCabinet
 {
     public static readonly SN.Vector3 Position = new(3.2f, 0f, -1.95f);
@@ -307,18 +307,18 @@ internal static class ArcadeCabinet
 }
 
 // The cabinet in the frame: its meshes, its screen and marquee, and the game behind the screen. Owned by the render
-// thread; Edge starts and stops on the thread pool, so that neither blocks a frame.
+// thread; the game starts and stops on the thread pool, so that neither blocks a frame.
 internal sealed class ArcadeStage : IDisposable
 {
     public const string Url = "https://parsec.games.bu.app/";
     private const ulong Live = 1UL << 40; // the game's frames are shown as revisions above this, the cards' below
     private readonly Mesh body, trim, lights;
     private readonly ScreenGpuRenderer screen, marquee;
-    private readonly string url, profile;
+    private readonly string url, storage;
     private readonly byte[] live = new byte[256 * 192 * 4];
     private readonly HashSet<string> held = [];
-    private Task<WebScreen>? starting;
-    private WebScreen? game;
+    private Task<ScriptScreen>? starting;
+    private ScriptScreen? game;
     private ulong seen;
     private (string Key, ulong Revision, byte[] Pixels)? card;
     private ulong cards;
@@ -328,7 +328,7 @@ internal sealed class ArcadeStage : IDisposable
     public ArcadeStage(Func<Vertex[], Mesh> mesh, Func<byte[], int, int, ulong, SN.Vector4, float, ScreenGpuRenderer> surface, string? url = null)
     {
         this.url = url ?? Url;
-        profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "arcade-edge");
+        storage = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "arcade-storage.json");
         var (b, t, l) = ArcadeCabinet.Build();
         body = mesh(b);
         trim = mesh(t);
@@ -371,9 +371,9 @@ internal sealed class ArcadeStage : IDisposable
         }
 
         failure = null;
-        var (address, folder) = (url, profile);
-        starting = Task.Run(() => WebScreen.Start(address, folder, "#cv", 256, 192, TimeSpan.FromSeconds(25)));
-        Console.WriteLine($"ARCADE parsec starting Edge on {url}");
+        var (address, file) = (url, storage);
+        starting = Task.Run(() => ScriptScreen.Start(address, file, "#cv", 256, 192, TimeSpan.FromSeconds(25)));
+        Console.WriteLine($"ARCADE parsec fetching {url}");
     }
 
     public void Leave()
@@ -424,7 +424,7 @@ internal sealed class ArcadeStage : IDisposable
             {
                 game = done.Result;
                 game.ClickOn("#start"); // the page's own start, which also lets it play sound
-                Console.WriteLine("ARCADE parsec running in Edge, off the screen");
+                Console.WriteLine("ARCADE parsec running, its script in Jint");
             }
             else
             {
@@ -435,7 +435,7 @@ internal sealed class ArcadeStage : IDisposable
 
         if (game is { Running: false } stopped)
         {
-            failure = stopped.Failure ?? Words.Say("Edge closed", "Edge s'est fermé");
+            failure = stopped.Failure ?? Words.Say("The game stopped", "Le jeu s'est arrêté");
             Console.Error.WriteLine($"ARCADE parsec stopped: {failure}");
             Leave();
         }

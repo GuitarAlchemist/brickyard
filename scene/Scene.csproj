@@ -16,6 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Jint" Version="[4.17.0]" />
     <ProjectReference Include="..\module-contracts\SceneModules.Contracts.csproj" />
     <PackageReference Include="Ahwoo.Brutal.Core" Version="[2026.10.1]" />
     <PackageReference Include="Ahwoo.Brutal.Glfw" Version="[2026.10.4]" />

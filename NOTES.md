@@ -861,6 +861,35 @@ Measured: the probe, Edge alone, 60 frames a second with the game started and mo
 `--arcade-play`, the card, "loading...", then the page's title screen on the cabinet, 289 frames, and no Edge left
 after the run. Selftest ok.
 
+### Without a browser
+
+The user then asked that the game depend on no browser, Edge or other, and chose an interpreter in the scene. Jint
+4.17.0 (BSD-2-Clause, with Acornima 1.7.0, BSD-3-Clause; the texts in `LICENSES\`, since the packages name their
+licences only) replaces Edge, and `WebScreen` is gone:
+
+- `ScriptScreen` fetches the page each time the game starts, takes its inline script and runs it on a thread of its
+  own, 60 animation frames a second, with a 2 s limit per call, 512 MB and a recursion limit. The script sees only a
+  shim of the browser written in JavaScript over a few host functions: elements by id with styles and listeners,
+  canvases (`fillRect`, `clearRect`, `drawImage` of another canvas, nearest pixel, `alpha: false`), CSS colours as
+  `#rgb`, `#rrggbb`, `#rrggbbaa` and `rgb()`/`rgba()`, `keydown`/`keyup` by `code` with `preventDefault`, a click,
+  `setTimeout`/`setInterval`, `requestAnimationFrame`, `matchMedia` (not coarse), and a `localStorage` kept in
+  `%LOCALAPPDATA%\delta\arcade-storage.json` (64 kB at most). It has no network, no files and no .NET of its own. A
+  frame that throws is skipped and logged once a second; 600 in a row end the game, and its card says why.
+- `ScriptAudio` plays the Web Audio the game uses through `waveOut`, 44.1 kHz mono, four 512-sample blocks ahead
+  (46 ms): oscillators (sine, square, sawtooth, triangle) and sample buffers, through gains and biquads (RBJ lowpass,
+  highpass, bandpass), with `setValueAtTime` and linear and exponential ramps. `currentTime` is the samples mixed.
+- `ScriptSpeech` is `speechSynthesis` through SAPI's `SpVoice`, by COM on an STA thread: Windows' voices (David and
+  Zira here), the page's rate, pitch (SAPI XML) and volume, one utterance after another, each one's `onend` fired so
+  the game's queue goes on; `cancel()` purges. The scene runs with invariant globalization, so voices' languages come
+  from their LCID by a small table.
+- Sound and voice open only when the page first uses them, so the selftest, on a small page of our own (a sprite over
+  an opaque canvas, a key, a click, a timer and the storage), opens neither.
+
+Measured: the probe played the real page, 60.5 frames a second, ship flown and firing by keys, score 100, the
+messages of the game; the speech's end events arrive, also after a `cancel()`; the sound's clock runs. Hidden in the
+scene with `--arcade-play`, the page's title screen on the cabinet, 685 frames in about 11 s. Selftest ok, and fails
+when one of its pixels is changed.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
