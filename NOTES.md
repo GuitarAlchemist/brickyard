@@ -932,9 +932,11 @@ that loop until let go, which matches the live line; the live log had no split t
 The hall now goes on moving in those loops: while the pump is held a frame's time (15 ms), a timer's ticks (`PumpTimer`,
 10 ms, which Windows calls from inside the modal loop) and the window's move, size and refresh callbacks draw a frame
 (`Frame(false)`), and each frame's split counts only the pump's time since the frame before it. The move and size
-callbacks alone were not enough: a hand held still, as the drill's, sends none. The drill again, hidden: no slow frame,
-120 frames drawn during the two holds, max 47 ms (1565 ms before); a run without the drill, none drawn aside, p95
-17 ms. Not yet tried by hand on the live window.
+callbacks alone were not enough: a hand held still, as the drill's, sends none. The pace counts from each such frame's
+start, so they come every 16 ms as the others do (from its end, they came every 30 ms), and the window's placement
+(a minimise or a move the brain asked for) waits until the hand lets go. The drill again, hidden: no slow frame, 59
+frames a second through the holds, p95 17.3 ms, max 47 ms (1565 ms before); a run without the drill, none drawn aside,
+p95 17 ms. Not yet tried by hand on the live window, nor measured on a shown window under DWM.
 
 ## Known problems
 

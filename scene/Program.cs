@@ -1600,13 +1600,15 @@ internal static unsafe class Stage
         var polling = false; // inside PollEvents
         var drawingAside = false; // a frame drawn from inside the pump, which draws no other
         var pumpedFrom = 0.0; // when the event pump started, or a frame drawn inside it ended
+        var heldFrom = 0.0; // when the event pump started, or a frame drawn inside it started: the frames' pace
         var drawnAside = 0;
         void DrawAside()
         {
-            if (polling && !drawingAside && clock.Elapsed.TotalSeconds - pumpedFrom >= 0.015)
+            if (polling && !drawingAside && clock.Elapsed.TotalSeconds - heldFrom >= 0.015)
             {
                 drawingAside = true;
                 drawnAside++;
+                heldFrom = clock.Elapsed.TotalSeconds;
                 Guard("a frame while the window is held", () => Frame(false));
                 pumpedFrom = clock.Elapsed.TotalSeconds; // the pump's rest belongs to the next frame
                 drawingAside = false;
@@ -1656,7 +1658,7 @@ internal static unsafe class Stage
 
             if (poll)
             {
-                pumpedFrom = clock.Elapsed.TotalSeconds;
+                pumpedFrom = heldFrom = clock.Elapsed.TotalSeconds;
                 polling = true;
                 Glfw.PollEvents();
                 polling = false;
@@ -1664,7 +1666,10 @@ internal static unsafe class Stage
 
             var inputAt = clock.Elapsed.TotalSeconds;
             gap.Pumped(inputAt - pumpedFrom); // a frame drawn aside counts the pump's time since the last one
-            placement.Apply(window, tray);
+            if (poll)
+            {
+                placement.Apply(window, tray); // a minimise or a move asked for waits until the hand lets go
+            }
             var now = filmDir is null ? clock.Elapsed.TotalSeconds : frame / (double)FilmFps; // a film's time is its frames'
             if (paceToScreen && now >= screenSeen + 2.0)
             {
