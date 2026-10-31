@@ -1581,8 +1581,8 @@ internal static unsafe class Stage
         var screenSeen = double.NegativeInfinity; // when paceToScreen last read the window's screen
         var nextFrame = 0.0;
         var lastPresent = 0.0;
-        var frameTimes = new List<double>(100_000);
-        var screenTimes = new List<double>(100_000); // paceByScreen: from reading the keys to the picture on screen, ms
+        var frameTimes = new FrameStats();
+        var screenTimes = new FrameStats(); // paceByScreen: from reading the keys to the picture on screen, ms
         long presentCount = 0; // the presents' ids, rising across swapchains
         nint waitFor = 0; // the last frame presented, which the next waits for on screen; 0 for none
         var waitForInput = 0.0; // when that frame read the keys
@@ -2650,14 +2650,12 @@ internal static unsafe class Stage
         window.Dispose();
         Glfw.Terminate();
 
-        frameTimes.Sort();
-        double P(double q) => frameTimes.Count == 0 ? double.NaN : frameTimes[Math.Min(frameTimes.Count - 1, (int)(q * frameTimes.Count))];
-        Console.WriteLine($"SCENE frames {frame} in {loopSeconds:F2} s ({frame / loopSeconds:F0} fps); frame ms p50 {P(0.5):F3} p95 {P(0.95):F3} p99 {P(0.99):F3} max {(frameTimes.Count > 0 ? frameTimes[^1] : double.NaN):F3}");
+        double P(double q) => frameTimes.Percentile(q);
+        Console.WriteLine($"SCENE frames {frame} in {loopSeconds:F2} s ({frame / loopSeconds:F0} fps); frame ms p50 {P(0.5):F3} p95 {P(0.95):F3} p99 {P(0.99):F3} max {frameTimes.Max:F3}");
         if (screenTimes.Count > 0)
         {
-            screenTimes.Sort();
-            double Q(double q) => screenTimes[Math.Min(screenTimes.Count - 1, (int)(q * screenTimes.Count))];
-            Console.WriteLine($"SCENE keys to screen ms p50 {Q(0.5):F3} p95 {Q(0.95):F3} p99 {Q(0.99):F3} max {screenTimes[^1]:F3} over {screenTimes.Count} frames");
+            double Q(double q) => screenTimes.Percentile(q);
+            Console.WriteLine($"SCENE keys to screen ms p50 {Q(0.5):F3} p95 {Q(0.95):F3} p99 {Q(0.99):F3} max {screenTimes.Max:F3} over {screenTimes.Count} frames");
         }
 
         Console.WriteLine($"SCENE CPU {cpu.TotalSeconds:F2} s over {loopSeconds:F2} s ({100 * cpu.TotalSeconds / loopSeconds / Environment.ProcessorCount:F1} % of {Environment.ProcessorCount} logical CPUs), peak working set {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024)} MB");
