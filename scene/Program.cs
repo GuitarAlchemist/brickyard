@@ -319,6 +319,11 @@ internal static unsafe class Stage
         }
 
         var shotsDir = Option(args, "--shots");
+        // --film-arcade DIR: the arcade's film (ArcadeFilm), 45 s at 30 frames a second of the scene's own time, encoded
+        // by FFmpeg into DIR\parsec-film.mp4, without the window's buttons; --hidden and --size make it apart from the
+        // live window. Each frame is drawn and read back however long it takes.
+        var filmDir = Option(args, "--film-arcade");
+        const int FilmFps = 30;
         if (moduleClickTest && (!demo || shotsDir is null))
         {
             Console.Error.WriteLine("SCENE refused: --module-click-test requires --demo and --shots; never allowed on the live listener");
@@ -353,6 +358,8 @@ internal static unsafe class Stage
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
             return 2;
         }
+
+        var readsBack = shots.Length > 0 || filmDir is not null; // a frame's pixels come back from the GPU
 
         var logoPath = Path.Combine(AppContext.BaseDirectory, "brand", Splash.LogoFile);
         if (!File.Exists(logoPath))
@@ -650,7 +657,7 @@ internal static unsafe class Stage
                 ImageColorSpace = surfaceFormat.ColorSpace,
                 ImageExtent = extent,
                 ImageArrayLayers = 1,
-                ImageUsage = VkImageUsageFlags.ColorAttachmentBit | (shots.Length == 0 ? default : VkImageUsageFlags.TransferSrcBit),
+                ImageUsage = VkImageUsageFlags.ColorAttachmentBit | (readsBack ? VkImageUsageFlags.TransferSrcBit : default),
                 ImageSharingMode = VkSharingMode.Exclusive,
                 PreTransform = caps.CurrentTransform,
                 CompositeAlpha = VkCompositeAlphaFlagsKHR.OpaqueBitKHR,
@@ -796,6 +803,7 @@ internal static unsafe class Stage
         var hall = new Mesh(device, physical, hallVertices);
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
+        var crate = filmDir is null ? null : new Mesh(device, physical, ArcadeFilm.CrateMesh()); // the film's robot stands on it
         var moduleRoot = Option(args, "--module-dir") ?? Path.Combine(AppContext.BaseDirectory, "modules", "gaia");
         // The author's last validation, kept on this machine across rebuilds; an isolated --module-dir keeps its own.
         var validatedStore = Option(args, "--module-dir") is null
@@ -852,9 +860,9 @@ internal static unsafe class Stage
         var readback = default(VkBuffer);
         var readbackMemory = default(VkDeviceMemory);
         var readbackMapped = nint.Zero;
-        if (shots.Length > 0)
+        if (readsBack)
         {
-            Directory.CreateDirectory(shotsDir!);
+            Directory.CreateDirectory(shotsDir ?? filmDir!);
             readback = device.CreateBuffer(new VkBufferCreateInfo { Size = readbackSize, Usage = VkBufferUsageFlags.TransferDstBit, SharingMode = VkSharingMode.Exclusive }, null);
             readbackMemory = device.AllocateMemory(physical, readback, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
             device.BindBufferMemory(readback, readbackMemory, memoryOffset: ByteSize.Zero);
@@ -1155,7 +1163,10 @@ internal static unsafe class Stage
             Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
         }
 
-        var film = new Cinematic { ReducedMotion = reducedMotion }; // 0, or --cinematic once the splash is over
+        var film = filmDir is null ? new Cinematic { ReducedMotion = reducedMotion } : new Cinematic(ArcadeFilm.Shots, ArcadeFilm.Heading); // 0, or --cinematic once the splash is over
+        var arcadeFilm = filmDir is null ? null : new ArcadeFilm(camera, film);
+        var filmAsked = false; // the film's game asked of the cabinet
+        var hud = filmDir is null; // the window's buttons and cards; a film shows none
         var filmAtStart = args.Contains("--cinematic") || Option(args, "--cinematic-from") is not null;
         var filmFrom = int.TryParse(Option(args, "--cinematic-from"), out var filmFromValue) ? filmFromValue : 0; // a later shot first, for captures
         var filmView = int.TryParse(Option(args, "--film-view"), out var filmViewValue) ? filmViewValue : 0; // a view's shot alone, as Shift and its key, for captures
@@ -1546,6 +1557,12 @@ internal static unsafe class Stage
         var robot = new Robot();
         var worlds = new SN.Matrix4x4[Robot.Parts];
         var glows = new SN.Vector4[Robot.Parts];
+        var player = new Robot(); // the film's robot at the cabinet
+        var playerWorlds = new SN.Matrix4x4[Robot.Parts];
+        var playerGlows = new SN.Vector4[Robot.Parts];
+        Process? encoder = null; // FFmpeg, fed the film's frames
+        var filmFrames = 0;
+        var filmSound = new List<float>(); // the film's sound, the game's, at 44.1 kHz mono
         var period = cap > 0 ? 1.0 / cap : 0.0;
         var screenSeen = double.NegativeInfinity; // when paceToScreen last read the window's screen
         var nextFrame = 0.0;
@@ -1557,7 +1574,7 @@ internal static unsafe class Stage
         var waitForInput = 0.0; // when that frame read the keys
         var frame = 0;
         var shot = 0;
-        var last = clock.Elapsed.TotalSeconds;
+        var last = filmDir is null ? clock.Elapsed.TotalSeconds : 0.0;
         var firstFrame = -1.0;
         var clears = stackalloc VkClearValue[2];
         var cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
@@ -1592,7 +1609,7 @@ internal static unsafe class Stage
             Glfw.PollEvents();
             var inputAt = clock.Elapsed.TotalSeconds;
             placement.Apply(window, tray);
-            var now = clock.Elapsed.TotalSeconds;
+            var now = filmDir is null ? clock.Elapsed.TotalSeconds : frame / (double)FilmFps; // a film's time is its frames'
             if (paceToScreen && now >= screenSeen + 2.0)
             {
                 screenSeen = now;
@@ -1619,6 +1636,7 @@ internal static unsafe class Stage
             sceneClock += sceneDt;
             wheel.Advance(dt);
             film.Advance(dt);
+            arcadeFilm?.Advance(dt);
             if (landOn != 0 && (film.Filming || !film.Playing))
             {
                 // Behind the black, so the shot hands the view back where it filmed; a skip before the black stays put.
@@ -1631,7 +1649,7 @@ internal static unsafe class Stage
             }
 
             arcade?.Advance(sceneDt);
-            cabinet.Advance();
+            cabinet.Advance(sceneDt);
             // The splash is timed from the first frame on screen, not from start-up, which takes about a second; --demo's
             // timeline and --shots start with it, while the brain's lines are timed by the link's own clock.
             var shown = firstFrame < 0 ? 0.0 : now - firstFrame;
@@ -1651,6 +1669,11 @@ internal static unsafe class Stage
             shelf.Tick(now);
             robot.Presenting = shelf.Open;
             robot.Pose(time, sceneDt, moment, worlds, glows);
+            if (arcadeFilm is not null)
+            {
+                player.Pose(time, sceneDt, moment, playerWorlds, playerGlows);
+                arcadeFilm.Pose(sceneDt, cabinet.Holding, playerWorlds);
+            }
 
             // Captures: the cinematic, a view's shot, the wheel or a view's flight, once the splash is over.
             if (!splashing && filmAtStart)
@@ -1669,6 +1692,31 @@ internal static unsafe class Stage
             {
                 arcadeAtStart = false;
                 PlayArcade();
+            }
+
+            // The arcade's film: its game, played by its pilot, then the film from the game's first frame to its end.
+            if (!splashing && arcadeFilm is not null && arcadeFilm.Time < 0f)
+            {
+                if (!filmAsked)
+                {
+                    filmAsked = true;
+                    cabinet.PlayFilmed(ArcadeFilm.Pilot());
+                }
+                else if (cabinet.Frames > 0)
+                {
+                    arcadeFilm.Start();
+                }
+                else if (!cabinet.Playing)
+                {
+                    reason = "film: the game did not start";
+                    break;
+                }
+            }
+
+            if (arcadeFilm is { Done: true })
+            {
+                reason = "film done";
+                break;
             }
 
             if (!splashing && wheelAtStart)
@@ -1767,7 +1815,7 @@ internal static unsafe class Stage
                 if (film.Playing && !splashing && filmDrawn != (extent.Height, Words.Language))
                 {
                     filmDrawn = (extent.Height, Words.Language);
-                    filmTitle = Panel.CinemaTitle(extent.Height);
+                    filmTitle = Panel.CinemaTitle(extent.Height, film.Heading);
                     filmTitleTexture = Upload(filmTitle, filmTitleSet, filmTitleTexture);
                     filmHint = Panel.Hint(Words.Say("Any key: skip", "Une touche : passer"), extent.Height);
                     filmHintTexture = Upload(filmHint, filmHintSet, filmHintTexture);
@@ -2009,6 +2057,15 @@ internal static unsafe class Stage
                 {
                     Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
                 }
+
+                if (arcadeFilm is not null && crate is not null)
+                {
+                    Draw(cb, layout, crate, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                    for (var i = 0; i < parts.Length; i++)
+                    {
+                        Draw(cb, layout, parts[i], new Push(playerWorlds[i], viewProj, playerGlows[i]));
+                    }
+                }
                 if (officeStage is not null)
                 {
                     foreach (var item in officeStage.Items)
@@ -2031,7 +2088,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (moment.HeardAge >= 0f && caption is not null && captionTexture is not null)
+                if (hud && moment.HeardAge >= 0f && caption is not null && captionTexture is not null)
                 {
                     // Centred at the bottom; it comes in over 0.2 s and fades over the last 0.8 s.
                     var fade = Math.Clamp(Math.Min(moment.HeardAge / 0.2f, ((float)Link.HeardSeconds(moment.Heard) - moment.HeardAge) / 0.8f), 0f, 1f);
@@ -2042,7 +2099,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (moment.Lease > 0f && leaseCard is not null && leaseTexture is not null && leaseDot is not null && leaseDotTexture is not null)
+                if (hud && moment.Lease > 0f && leaseCard is not null && leaseTexture is not null && leaseDot is not null && leaseDotTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (left, top) = (CardMargin(), extent.Height - leaseCard.Height - CardMargin());
@@ -2062,7 +2119,7 @@ internal static unsafe class Stage
                     }
                 }
 
-                if (moment.Guests > 0 && guestBadge is not null && guestTexture is not null)
+                if (hud && moment.Guests > 0 && guestBadge is not null && guestTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (guestX, guestY) = GuestAt();
@@ -2072,7 +2129,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (micButton is not null && micTexture is not null)
+                if (hud && micButton is not null && micTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (micX, micY) = MicAt();
@@ -2082,7 +2139,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (versionLabel is not null && versionTexture is not null)
+                if (hud && versionLabel is not null && versionTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (versionX, versionY) = VersionAt();
@@ -2092,7 +2149,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (micButton is not null && meterTexture is not null && !moment.MicOff && moment.MicLevel > 0f)
+                if (hud && micButton is not null && meterTexture is not null && !moment.MicOff && moment.MicLevel > 0f)
                 {
                     var loud = Math.Clamp(((20f * MathF.Log10(Math.Max(moment.MicLevel, 1e-5f))) + 60f) / 50f, 0f, 1f);
                     var (micX, micY) = MicAt();
@@ -2108,7 +2165,7 @@ internal static unsafe class Stage
                     }
                 }
 
-                if (languageButton is not null && languageTexture is not null)
+                if (hud && languageButton is not null && languageTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (languageX, languageY) = LanguageAt();
@@ -2118,7 +2175,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (phone is not null && phoneTexture is not null)
+                if (hud && phone is not null && phoneTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (phoneX, phoneY) = PhoneAt();
@@ -2128,7 +2185,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (inviteButton is not null && inviteTexture is not null)
+                if (hud && inviteButton is not null && inviteTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (inviteX, inviteY) = InviteAt();
@@ -2138,7 +2195,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (pairingShown && pairingCard is not null && pairingTexture is not null)
+                if (hud && pairingShown && pairingCard is not null && pairingTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (cardX, cardY) = PairingAt();
@@ -2148,7 +2205,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (invitationShown && invitationCard is not null && invitationTexture is not null)
+                if (hud && invitationShown && invitationCard is not null && invitationTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (cardX, cardY) = InvitationAt();
@@ -2158,7 +2215,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (notesShown && notesCard is not null && notesTexture is not null)
+                if (hud && notesShown && notesCard is not null && notesTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
                     var (notesX, notesY) = NotesAt();
@@ -2218,7 +2275,7 @@ internal static unsafe class Stage
                         Quad(filmTitleSet, (extent.Width - filmTitle.Width) / 2, (extent.Height - filmTitle.Height) / 2, filmTitle.Width, filmTitle.Height, new SN.Vector4(1f, 1f, 1f, film.Title));
                     }
 
-                    if (film.Hint > 0f && filmHint is not null && filmHintTexture is not null)
+                    if (hud && film.Hint > 0f && filmHint is not null && filmHintTexture is not null)
                     {
                         var margin = CardMargin();
                         var hintTop = bar >= filmHint.Height ? extent.Height - bar + ((bar - filmHint.Height) / 2) : extent.Height - filmHint.Height - margin; // in the bottom bar
@@ -2230,7 +2287,8 @@ internal static unsafe class Stage
 
             cb.EndRenderPass();
             var capturing = shot < shots.Length && shown >= shots[shot].At && extent.Width == shotExtent.Width && extent.Height == shotExtent.Height;
-            if (capturing)
+            var filming = arcadeFilm is { Rolling: true } && extent.Width == shotExtent.Width && extent.Height == shotExtent.Height;
+            if (capturing || filming)
             {
                 cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
                     [Barrier(images[imageIndex], VkImageLayout.PresentSrcKHR, VkImageLayout.TransferSrcOptimal, VkAccessFlags.ColorAttachmentWriteBit, VkAccessFlags.TransferReadBit)]);
@@ -2291,7 +2349,7 @@ internal static unsafe class Stage
                 waitForInput = inputAt;
             }
 
-            var presented = clock.Elapsed.TotalSeconds;
+            var presented = filmDir is null ? clock.Elapsed.TotalSeconds : now;
             if (result == VkResult.Success && !splashing && gaiaModule is not null && gaiaModule.Version != modulePresentedVersion)
             {
                 modulePresentedVersion = gaiaModule.Version;
@@ -2330,6 +2388,30 @@ internal static unsafe class Stage
                 lastPresent = clock.Elapsed.TotalSeconds; // the capture's wait is not a frame time
             }
 
+            if (filming)
+            {
+                device.WaitIdle();
+                var bgra = surfaceFormat.Format.ToString().StartsWith("B8G8R8", StringComparison.Ordinal);
+                encoder ??= Process.Start(new ProcessStartInfo("ffmpeg")
+                {
+                    ArgumentList =
+                    {
+                        "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", bgra ? "bgra" : "rgba", "-s", $"{extent.Width}x{extent.Height}",
+                        "-r", $"{FilmFps}", "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
+                        "-movflags", "+faststart", Path.Combine(filmDir!, "parsec-film-silent.mp4"),
+                    },
+                    RedirectStandardInput = true,
+                    UseShellExecute = false,
+                }) ?? throw new InvalidOperationException("FFmpeg did not start");
+                encoder.StandardInput.BaseStream.Write(new ReadOnlySpan<byte>((byte*)readbackMapped, (int)(extent.Width * extent.Height * 4)));
+                filmFrames++;
+                filmSound.AddRange(cabinet.TakeSound());
+            }
+            else if (arcadeFilm is not null)
+            {
+                cabinet.TakeSound(); // the game's sound before the film rolls is not the film's
+            }
+
             if (cap > 0)
             {
                 // Pace to the cap: sleep while more than 1.5 ms is left, then spin. A frame that falls more than one
@@ -2364,6 +2446,29 @@ internal static unsafe class Stage
             Console.WriteLine($"SCENE missing shots: the run ended at {loopSeconds:F1} s, before {shots[shot].Name} at {shots[shot].At} s");
         }
 
+        if (encoder is not null)
+        {
+            encoder.StandardInput.Close();
+            encoder.WaitForExit();
+            encoder.Dispose();
+            var silent = Path.Combine(filmDir!, "parsec-film-silent.mp4");
+            var sound = Path.Combine(filmDir!, "parsec-film.wav");
+            var movie = Path.Combine(filmDir!, "parsec-film.mp4");
+            ArcadeFilm.SaveWav(sound, CollectionsMarshal.AsSpan(filmSound));
+            using (var mux = Process.Start(new ProcessStartInfo("ffmpeg")
+            {
+                ArgumentList = { "-loglevel", "error", "-y", "-i", silent, "-i", sound, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", movie },
+                UseShellExecute = false,
+            }))
+            {
+                mux?.WaitForExit();
+                Console.WriteLine($"SCENE film {filmFrames} frames ({filmFrames / (double)FilmFps:F1} s), sound {filmSound.Count / (double)ScriptAudio.SampleRate:F1} s, FFmpeg exit {mux?.ExitCode}, {movie}");
+            }
+
+            File.Delete(silent);
+            File.Delete(sound);
+        }
+
         // Clean shutdown, in reverse order of creation.
         device.WaitIdle();
         for (var i = 0; i < FramesInFlight; i++)
@@ -2373,7 +2478,7 @@ internal static unsafe class Stage
             device.DestroyCommandPool(pools[i], null);
         }
 
-        if (shots.Length > 0)
+        if (readsBack)
         {
             device.UnmapMemory(readbackMemory);
             device.DestroyBuffer(readback, null);
@@ -2384,6 +2489,8 @@ internal static unsafe class Stage
         {
             part.Dispose();
         }
+
+        crate?.Dispose();
 
         gaiaModule?.Dispose();
         officeFeed?.Dispose();

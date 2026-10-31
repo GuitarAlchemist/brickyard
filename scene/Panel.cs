@@ -456,13 +456,13 @@ internal static class Panel
         return new Card(rgba, width, height, []);
     }
 
-    // The cinematic's title over black (Cinematic): the robot's name in gilt, and under it where it stands.
-    public static Card CinemaTitle(int windowHeight)
+    // The cinematic's title over black (Cinematic): the robot's name in gilt, and under it where it stands; or another
+    // film's heading.
+    public static Card CinemaTitle(int windowHeight, (string Title, string Under)? heading = null)
     {
         var big = Math.Max(24, windowHeight / 12);
         var small = Math.Max(12, big * 2 / 7);
-        const string Title = "DELTA";
-        var under = Words.Say("The brick hall, where the agents work", "La halle de briques, où travaillent les agents");
+        var (Title, under) = heading ?? ("DELTA", Words.Say("The brick hall, where the agents work", "La halle de briques, où travaillent les agents"));
         int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
         var width = Math.Max(Wide(Title, big, true), Wide(under, small, false)) + 16;
         var height = big + (small * 3);

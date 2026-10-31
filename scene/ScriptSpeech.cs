@@ -7,10 +7,11 @@ using System.Text.Json;
 
 // speechSynthesis for a page's game, by Windows' own voices (SAPI's SpVoice, through COM on a thread of its own):
 // utterances are spoken one after another, and the page learns which have ended, as a browser fires their onend.
+// For a film, Render speaks one into a file instead and gives its samples, for the film's sound.
 internal sealed class ScriptSpeech : IDisposable
 {
     private const int Async = 1, Purge = 2, Xml = 8;
-    private readonly BlockingCollection<(int Id, string? Text, string Voice, double Rate, double Pitch, double Volume)> queue = new(64);
+    private readonly BlockingCollection<(int Id, string? Text, string Voice, double Rate, double Pitch, double Volume, TaskCompletionSource<float[]>? To)> queue = new(64);
     private readonly ConcurrentQueue<int> ended = new();
     private readonly TaskCompletionSource<string> voices = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread thread;
@@ -32,7 +33,7 @@ internal sealed class ScriptSpeech : IDisposable
 
     public void Speak(int id, string text, string voice, double rate, double pitch, double volume)
     {
-        if (!queue.IsAddingCompleted && !queue.TryAdd((id, text, voice, rate, pitch, volume)))
+        if (!queue.IsAddingCompleted && !queue.TryAdd((id, text, voice, rate, pitch, volume, null)))
         {
             ended.Enqueue(id);
         }
@@ -42,7 +43,19 @@ internal sealed class ScriptSpeech : IDisposable
     public void Hush()
     {
         hushed = true;
-        queue.TryAdd((0, null, "", 0, 0, 0));
+        queue.TryAdd((0, null, "", 0, 0, 0, null));
+    }
+
+    // The utterance spoken into a file: its samples at 44.1 kHz in -1 to 1, none if it could not be.
+    public float[] Render(string text, string voice, double rate, double pitch, double volume)
+    {
+        var to = new TaskCompletionSource<float[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (queue.IsAddingCompleted || !queue.TryAdd((0, text, voice, rate, pitch, volume, to)))
+        {
+            return [];
+        }
+
+        return to.Task.Wait(TimeSpan.FromSeconds(15)) ? to.Task.Result : [];
     }
 
     // The utterances that ended since the last call, by number, comma separated.
@@ -96,8 +109,14 @@ internal sealed class ScriptSpeech : IDisposable
         }
 
         voices.TrySetResult("[]");
-        foreach (var (id, text, voice, rate, pitch, volume) in queue.GetConsumingEnumerable())
+        foreach (var (id, text, voice, rate, pitch, volume, to) in queue.GetConsumingEnumerable())
         {
+            if (to is not null)
+            {
+                to.TrySetResult(sapi is null || text is null ? [] : ToFile(sapi, tokens, text, voice, rate, pitch, volume));
+                continue;
+            }
+
             if (text is null)
             {
                 hushed = false;
@@ -112,16 +131,7 @@ internal sealed class ScriptSpeech : IDisposable
 
             try
             {
-                if (tokens.TryGetValue(voice, out var token))
-                {
-                    Set(sapi, "Voice", token);
-                }
-
-                // The page's rate 1 is SAPI's 0, and SAPI's 10 three times as fast; pitch 0 to 2 becomes -10 to 10.
-                Set(sapi, "Rate", (int)Math.Clamp(Math.Round(10 * Math.Log(Math.Max(rate, 0.1)) / Math.Log(3)), -10, 10));
-                Set(sapi, "Volume", (int)Math.Clamp(Math.Round(volume * 100), 0, 100));
-                var tone = (int)Math.Clamp(Math.Round((pitch - 1) * 10), -10, 10);
-                Call(sapi, "Speak", $"<pitch absmiddle=\"{tone}\">{SecurityElement.Escape(text)}</pitch>", Async | Purge | Xml);
+                Call(sapi, "Speak", Prepare(sapi, tokens, text, voice, rate, pitch, volume), Async | Purge | Xml);
                 while (!(bool)Call(sapi, "WaitUntilDone", 30)!)
                 {
                     if (hushed)
@@ -138,6 +148,71 @@ internal sealed class ScriptSpeech : IDisposable
 
             ended.Enqueue(id);
         }
+    }
+
+    // The voice, rate and volume set, and the utterance as SAPI's XML with its pitch: the page's rate 1 is SAPI's 0, and
+    // SAPI's 10 three times as fast; pitch 0 to 2 becomes -10 to 10.
+    private static string Prepare(object sapi, Dictionary<string, object> tokens, string text, string voice, double rate, double pitch, double volume)
+    {
+        if (tokens.TryGetValue(voice, out var token))
+        {
+            Set(sapi, "Voice", token);
+        }
+
+        Set(sapi, "Rate", (int)Math.Clamp(Math.Round(10 * Math.Log(Math.Max(rate, 0.1)) / Math.Log(3)), -10, 10));
+        Set(sapi, "Volume", (int)Math.Clamp(Math.Round(volume * 100), 0, 100));
+        var tone = (int)Math.Clamp(Math.Round((pitch - 1) * 10), -10, 10);
+        return $"<pitch absmiddle=\"{tone}\">{SecurityElement.Escape(text)}</pitch>";
+    }
+
+    // Spoken into a 44.1 kHz 16-bit mono WAV file (SAPI's format 35), then read back as samples.
+    private static float[] ToFile(object sapi, Dictionary<string, object> tokens, string text, string voice, double rate, double pitch, double volume)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), $"delta-arcade-voice-{Environment.ProcessId}.wav");
+        try
+        {
+            var stream = Activator.CreateInstance(Type.GetTypeFromProgID("SAPI.SpFileStream")!)!;
+            var format = Activator.CreateInstance(Type.GetTypeFromProgID("SAPI.SpAudioFormat")!)!;
+            Set(format, "Type", 35);
+            Set(stream, "Format", format);
+            Call(stream, "Open", path, 3, false);
+            Set(sapi, "AudioOutputStream", stream);
+            Call(sapi, "Speak", Prepare(sapi, tokens, text, voice, rate, pitch, volume), Xml);
+            Call(stream, "Close");
+            var wav = File.ReadAllBytes(path);
+            for (var at = 12; at + 8 <= wav.Length;)
+            {
+                var size = BitConverter.ToInt32(wav, at + 4);
+                if (wav[at] == (byte)'d' && wav[at + 1] == (byte)'a' && wav[at + 2] == (byte)'t' && wav[at + 3] == (byte)'a')
+                {
+                    var count = Math.Min(size, wav.Length - at - 8) / 2;
+                    var samples = new float[count];
+                    for (var i = 0; i < count; i++)
+                    {
+                        samples[i] = BitConverter.ToInt16(wav, at + 8 + (2 * i)) / 32768f;
+                    }
+
+                    return samples;
+                }
+
+                at += 8 + size + (size & 1);
+            }
+        }
+        catch (Exception e) when (e is TargetInvocationException or COMException or InvalidCastException or IOException or ArgumentException)
+        {
+            Console.Error.WriteLine($"ARCADE speech to a file failed ({e.GetType().Name}).");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        return [];
     }
 
     // A voice's language from its Windows LCID, as en-US: the scene runs with invariant globalization, without the

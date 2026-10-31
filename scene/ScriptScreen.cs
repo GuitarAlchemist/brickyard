@@ -20,10 +20,16 @@ internal sealed class ScriptScreen : IDisposable
     private readonly Queue<Func<Engine, JsValue>> inputs = new();
     private readonly List<Canvas> canvases = [];
     private readonly Dictionary<string, uint> colors = [];
+    private readonly HashSet<string> down = []; // the keys held, by code, whoever pressed them
     private readonly string? storagePath;
     private readonly Dictionary<string, string> storage;
     private ScriptAudio? audio; // opened by the script's first sound or voice, on its thread
     private ScriptSpeech? speech;
+    private readonly bool stepped;
+    private Engine? engine;
+    private double steppedTime;
+    private long pulled; // stepped: the samples mixed so far
+    private readonly List<float> sound = [];
     private volatile bool stopping;
     private ulong revision;
     private int screenCanvas = -1;
@@ -33,7 +39,7 @@ internal sealed class ScriptScreen : IDisposable
     public int Height { get; }
     public ulong Frames { get; private set; }
     public string? Failure { get; private set; }
-    public bool Running => Failure is null && loop.IsAlive;
+    public bool Running => Failure is null && (stepped || loop.IsAlive);
 
     private sealed class Canvas(int width, int height)
     {
@@ -42,8 +48,9 @@ internal sealed class ScriptScreen : IDisposable
         public byte[] Pixels = new byte[Math.Max(0, width * height * 4)];
     }
 
-    private ScriptScreen(int width, int height, string? storagePath)
+    private ScriptScreen(int width, int height, string? storagePath, bool stepped)
     {
+        this.stepped = stepped;
         Width = width;
         Height = height;
         received = new byte[width * height * 4];
@@ -52,16 +59,17 @@ internal sealed class ScriptScreen : IDisposable
         loop = new Thread(Loop) { IsBackground = true, Name = "arcade script" };
     }
 
-    // Fetches url, runs its inline script with the canvas selector names (#id), width by height, as the screen.
-    public static ScriptScreen Start(string url, string storagePath, string selector, int width, int height, TimeSpan wait)
+    // Fetches url, runs its inline script with the canvas selector names (#id), width by height, as the screen. A pilot,
+    // a script of ours run after the page's in its scope, may play it by keys; stepped, Step drives its frames.
+    public static ScriptScreen Start(string url, string? storagePath, string selector, int width, int height, TimeSpan wait, string? pilot = null, bool stepped = false)
     {
         using var http = new HttpClient { Timeout = wait };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("DeltaArcade/1.0");
-        return Run(http.GetStringAsync(url).GetAwaiter().GetResult(), storagePath, selector, width, height, wait);
+        return Run(http.GetStringAsync(url).GetAwaiter().GetResult(), storagePath, selector, width, height, wait, pilot, stepped);
     }
 
     // The same with the page in hand; without a storage path, its local storage lasts as long as it does.
-    public static ScriptScreen Run(string page, string? storagePath, string selector, int width, int height, TimeSpan wait)
+    public static ScriptScreen Run(string page, string? storagePath, string selector, int width, int height, TimeSpan wait, string? pilot = null, bool stepped = false)
     {
         var scripts = Regex.Matches(page, @"<script(?:\s[^>]*)?>([\s\S]*?)</script>", RegexOptions.IgnoreCase)
             .Select(m => m.Groups[1].Value).Where(s => s.Trim().Length > 0).ToArray();
@@ -70,8 +78,21 @@ internal sealed class ScriptScreen : IDisposable
             throw new InvalidDataException("The page has no inline script.");
         }
 
-        var screen = new ScriptScreen(width, height, storagePath);
-        screen.loop.Start((page, string.Join("\n;\n", scripts), selector.TrimStart('#')));
+        var screen = new ScriptScreen(width, height, storagePath, stepped);
+        var script = string.Join("\n;\n", scripts);
+        if (stepped)
+        {
+            screen.audio = new ScriptAudio(offline: true); // its clock starts with the page's
+            if (!screen.Setup(page, script, selector.TrimStart('#'), pilot) || !screen.Tick(0))
+            {
+                screen.Dispose();
+                throw new InvalidDataException(screen.Failure ?? "The page drew nothing.");
+            }
+
+            return screen;
+        }
+
+        screen.loop.Start((page, script, selector.TrimStart('#'), pilot));
         var clock = Stopwatch.StartNew();
         while (screen.Frames == 0 && screen.Failure is null && clock.Elapsed < wait)
         {
@@ -168,6 +189,15 @@ internal sealed class ScriptScreen : IDisposable
         Post(engine => engine.Invoke("__deltaKey", down ? "keydown" : "keyup", code, key));
     }
 
+    // Whether the key of this DOM code is held, by the scene or by the pilot: a film moves the robot's hands with it.
+    public bool Holding(string code)
+    {
+        lock (down)
+        {
+            return down.Contains(code);
+        }
+    }
+
     // A click on the element selector names (#id), as a person's: it may start the page's sound.
     public void ClickOn(string selector) => Post(engine => engine.Invoke("__deltaClick", selector.TrimStart('#')));
 
@@ -195,13 +225,73 @@ internal sealed class ScriptScreen : IDisposable
         }
     }
 
+    // Stepped: one animation frame of the page, ms after the last, on the caller's thread; the page's time is then the
+    // steps' sum, whatever the time it takes, as a recording needs. False once the game has failed.
+    public bool Step(double ms)
+    {
+        if (!stepped || Failure is not null || engine is null)
+        {
+            return false;
+        }
+
+        steppedTime += ms;
+        if (!Tick(steppedTime))
+        {
+            return false;
+        }
+
+        // The sound of the step, mixed up to the page's new time.
+        var due = (long)Math.Round(steppedTime * ScriptAudio.SampleRate / 1000.0) - pulled;
+        if (due > 0)
+        {
+            sound.AddRange(audio!.Pull((int)due));
+            pulled += due;
+        }
+
+        return true;
+    }
+
+    // Stepped: the sound mixed since the last call, at 44.1 kHz mono.
+    public float[] TakeSound()
+    {
+        var taken = sound.ToArray();
+        sound.Clear();
+        return taken;
+    }
+
     private void Loop(object? start)
     {
-        var (page, script, canvasId) = ((string, string, string))start!;
-        Engine engine;
+        var (page, script, canvasId, pilot) = ((string, string, string, string?))start!;
+        if (!Setup(page, script, canvasId, pilot))
+        {
+            return;
+        }
+
+        var clock = Stopwatch.StartNew();
+        var next = 0.0;
+        while (!stopping && Tick(clock.Elapsed.TotalMilliseconds))
+        {
+            // Sixty frames a second, as a screen's animation frames.
+            next += 1000.0 / 60.0;
+            var late = clock.Elapsed.TotalMilliseconds - next;
+            if (late > 100)
+            {
+                next = clock.Elapsed.TotalMilliseconds;
+            }
+
+            while (!stopping && clock.Elapsed.TotalMilliseconds < next)
+            {
+                Thread.Sleep(next - clock.Elapsed.TotalMilliseconds > 2 ? 1 : 0);
+            }
+        }
+    }
+
+    // The engine, the shim, the page's elements and its script, then the pilot's, if any, in the same global scope.
+    private bool Setup(string page, string script, string canvasId, string? pilot)
+    {
         try
         {
-            engine = new Engine(options => options.TimeoutInterval(TimeSpan.FromSeconds(2)).LimitMemory(512L << 20).LimitRecursion(512));
+            var engine = new Engine(options => options.TimeoutInterval(TimeSpan.FromSeconds(2)).LimitMemory(512L << 20).LimitRecursion(512));
             Host(engine);
             engine.Execute(Shim, "delta-shim.js");
             foreach (Match element in Regex.Matches(page, @"<(\w+)\s[^>]*\bid=""([^""]+)""[^>]*>"))
@@ -219,75 +309,70 @@ internal sealed class ScriptScreen : IDisposable
             }
 
             engine.Execute(script, "page.js");
+            if (pilot is not null)
+            {
+                engine.Execute(pilot, "pilot.js");
+            }
+
+            this.engine = engine;
+            return true;
         }
         catch (Exception e)
         {
             Failure = $"{e.GetType().Name}: {First(e.Message)}";
-            return;
+            return false;
         }
+    }
 
-        var clock = Stopwatch.StartNew();
-        var next = 0.0;
-        while (!stopping)
+    // One animation frame at now, in ms: the inputs that came, the timers and frames, then the screen's pixels kept.
+    private bool Tick(double now)
+    {
+        Func<Engine, JsValue>[] pending;
+        lock (inputs)
         {
-            Func<Engine, JsValue>[] pending;
-            lock (inputs)
+            pending = [.. inputs];
+            inputs.Clear();
+        }
+
+        try
+        {
+            foreach (var input in pending)
             {
-                pending = [.. inputs];
-                inputs.Clear();
+                input(engine!);
             }
 
-            try
+            engine!.Invoke("__deltaTick", now);
+            errors = 0;
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            // A frame that throws is skipped, as a browser would; many in a row end the game.
+            if (++errors == 1 || errors % 60 == 0)
             {
-                foreach (var input in pending)
-                {
-                    input(engine);
-                }
-
-                engine.Invoke("__deltaTick", clock.Elapsed.TotalMilliseconds);
-                errors = 0;
-            }
-            catch (Exception e) when (e is not OutOfMemoryException)
-            {
-                // A frame that throws is skipped, as a browser would; many in a row end the game.
-                if (++errors == 1 || errors % 60 == 0)
-                {
-                    Console.Error.WriteLine($"ARCADE script error ({e.GetType().Name}): {First(e.Message)}");
-                }
-
-                if (errors >= 600)
-                {
-                    Failure = $"{e.GetType().Name}: {First(e.Message)}";
-                    return;
-                }
+                Console.Error.WriteLine($"ARCADE script error ({e.GetType().Name}): {First(e.Message)}");
             }
 
-            var shown = canvases[screenCanvas];
-            lock (gate)
+            if (errors >= 600)
             {
-                shown.Pixels.CopyTo(received, 0);
-                for (var i = 3; i < received.Length; i += 4)
-                {
-                    received[i] = 255;
-                }
-
-                revision++;
-                Frames++;
-            }
-
-            // Sixty frames a second, as a screen's animation frames.
-            next += 1000.0 / 60.0;
-            var late = clock.Elapsed.TotalMilliseconds - next;
-            if (late > 100)
-            {
-                next = clock.Elapsed.TotalMilliseconds;
-            }
-
-            while (!stopping && clock.Elapsed.TotalMilliseconds < next)
-            {
-                Thread.Sleep(next - clock.Elapsed.TotalMilliseconds > 2 ? 1 : 0);
+                Failure = $"{e.GetType().Name}: {First(e.Message)}";
+                return false;
             }
         }
+
+        var shown = canvases[screenCanvas];
+        lock (gate)
+        {
+            shown.Pixels.CopyTo(received, 0);
+            for (var i = 3; i < received.Length; i += 4)
+            {
+                received[i] = 255;
+            }
+
+            revision++;
+            Frames++;
+        }
+
+        return true;
     }
 
     // The functions the shim calls, by name under __host; each takes plain numbers and strings.
@@ -334,6 +419,15 @@ internal sealed class ScriptScreen : IDisposable
             Draw(canvases[(int)N(args, 0)], canvases[(int)N(args, 1)], N(args, 2), N(args, 3), N(args, 4), N(args, 5), N(args, 6), N(args, 7), N(args, 8), N(args, 9));
             return JsValue.Undefined;
         });
+        Function("held", args =>
+        {
+            lock (down)
+            {
+                _ = args.Length > 1 && args[1].AsBoolean() ? down.Add(S(args, 0)) : down.Remove(S(args, 0));
+            }
+
+            return JsValue.Undefined;
+        });
         Function("log", args =>
         {
             Console.Error.WriteLine($"ARCADE page says: {First(S(args, 0))}");
@@ -355,8 +449,11 @@ internal sealed class ScriptScreen : IDisposable
             storage.Remove(S(args, 0));
             return JsValue.Undefined;
         });
-        Function("audioNow", _ => (audio ??= new()).Now);
-        Function("sound", args => (audio ??= new()).Play(S(args, 0), args.Length > 1 ? args[1] : JsValue.Undefined));
+        // Stepped, for a film, the page's sound is mixed offline as its frames go (Step), on their clock, and each
+        // utterance is spoken into a file and mixed in; it ends when its samples have played.
+        var saying = new List<(int Id, int Voice, double End)>();
+        Function("audioNow", _ => (audio ??= new(stepped)).Now);
+        Function("sound", args => (audio ??= new(stepped)).Play(S(args, 0), args.Length > 1 ? args[1] : JsValue.Undefined));
         Function("soundStop", args =>
         {
             audio?.Stop((int)N(args, 0), N(args, 1));
@@ -365,12 +462,38 @@ internal sealed class ScriptScreen : IDisposable
         Function("voices", _ => (speech ??= new()).Voices is { } known ? known : JsValue.Null);
         Function("speak", args =>
         {
+            if (stepped)
+            {
+                var samples = (speech ??= new()).Render(S(args, 1), S(args, 2), N(args, 3), N(args, 4), N(args, 5));
+                var mixer = audio ??= new(true);
+                saying.Add(((int)N(args, 0), mixer.PlaySamples(samples, mixer.Now), mixer.Now + (samples.Length / (double)ScriptAudio.SampleRate)));
+                return JsValue.Undefined;
+            }
+
             (speech ??= new()).Speak((int)N(args, 0), S(args, 1), S(args, 2), N(args, 3), N(args, 4), N(args, 5));
             return JsValue.Undefined;
         });
-        Function("spoken", _ => speech?.Ended() ?? "");
+        Function("spoken", _ =>
+        {
+            if (!stepped)
+            {
+                return speech?.Ended() ?? "";
+            }
+
+            var now = audio?.Now ?? 0;
+            var ended = string.Join(",", saying.Where(s => s.End <= now).Select(s => s.Id));
+            saying.RemoveAll(s => s.End <= now);
+            return ended;
+        });
         Function("hush", _ =>
         {
+            var now = audio?.Now ?? 0;
+            for (var i = 0; i < saying.Count; i++)
+            {
+                audio?.Stop(saying[i].Voice, now);
+                saying[i] = saying[i] with { End = now };
+            }
+
             speech?.Hush();
             return JsValue.Undefined;
         });
@@ -648,7 +771,7 @@ internal sealed class ScriptScreen : IDisposable
             if (error) throw error;
           };
           const event = (type, more) => Object.assign({ type, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, stopImmediatePropagation() {} }, more);
-          g.__deltaKey = (type, code, key) => { const e = event(type, { code, key, repeat: false, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false }); fire(g.document, type, e); fire(g, type, e); };
+          g.__deltaKey = (type, code, key) => { H.held(code, type === "keydown"); const e = event(type, { code, key, repeat: false, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false }); fire(g.document, type, e); fire(g, type, e); };
           g.__deltaClick = id => { const target = g.document.getElementById(id); for (const type of ["mousedown", "mouseup", "click"]) fire(target, type, event(type, { target, button: 0, clientX: 0, clientY: 0 })); };
 
           // Web Audio: each source, once started, goes to the host with the chain it feeds and every scheduled value.

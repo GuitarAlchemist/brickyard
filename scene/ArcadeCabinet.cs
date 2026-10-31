@@ -323,6 +323,8 @@ internal sealed class ArcadeStage : IDisposable
     private (string Key, ulong Revision, byte[] Pixels)? card;
     private ulong cards;
     private string? failure;
+    private string? pilot; // a film's: the game stepped by the scene's time, silent, and played by this script
+    private double owed; // a stepped game's time not yet stepped, ms
 
     // surface makes a screen: its pixels, width, height and revision, its rectangle in its frame, and its scanlines.
     public ArcadeStage(Func<Vertex[], Mesh> mesh, Func<byte[], int, int, ulong, SN.Vector4, float, ScreenGpuRenderer> surface, string? url = null)
@@ -371,10 +373,22 @@ internal sealed class ArcadeStage : IDisposable
         }
 
         failure = null;
-        var (address, file) = (url, storage);
-        starting = Task.Run(() => ScriptScreen.Start(address, file, "#cv", 256, 192, TimeSpan.FromSeconds(25)));
+        var (address, file, script) = (url, storage, pilot);
+        starting = Task.Run(() => ScriptScreen.Start(address, script is null ? file : null, "#cv", 256, 192, TimeSpan.FromSeconds(25), script, stepped: script is not null));
         Console.WriteLine($"ARCADE parsec fetching {url}");
     }
+
+    // For a film (ArcadeFilm): the game played by a pilot script, its frames stepped by the scene's time.
+    public void PlayFilmed(string pilotScript)
+    {
+        pilot = pilotScript;
+        Play();
+    }
+
+    public bool Holding(string code) => game?.Holding(code) ?? false;
+
+    // A filmed game's sound since the last call, at 44.1 kHz mono.
+    public float[] TakeSound() => pilot is not null && game is not null ? game.TakeSound() : [];
 
     public void Leave()
     {
@@ -414,8 +428,8 @@ internal sealed class ArcadeStage : IDisposable
         game.Key(code, down);
     }
 
-    // Once a frame: takes the started game, or why it did not start, and the game's latest picture.
-    public void Advance()
+    // Once a frame, dt seconds after the last: takes the started game, or why it did not start, and steps a filmed one.
+    public void Advance(float dt = 0f)
     {
         if (starting is { IsCompleted: true } done)
         {
@@ -430,6 +444,16 @@ internal sealed class ArcadeStage : IDisposable
             {
                 failure = done.Exception?.InnerException?.Message ?? "?";
                 Console.Error.WriteLine($"ARCADE parsec did not start: {failure}");
+            }
+        }
+
+        if (pilot is not null && game is not null)
+        {
+            const double Frame = 1000.0 / 60.0;
+            owed = Math.Min(owed + (dt * 1000.0), 8 * Frame);
+            while (owed >= Frame && game.Step(Frame))
+            {
+                owed -= Frame;
             }
         }
 

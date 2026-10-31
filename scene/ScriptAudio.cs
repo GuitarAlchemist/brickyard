@@ -6,6 +6,7 @@ using Jint.Native;
 
 // The little of Web Audio a page's game uses, played by Windows' waveOut: oscillators and sample buffers, each through
 // a chain of gains and biquad filters, with values set and ramped at given times. The clock is the samples mixed.
+// Offline, for a film, nothing plays: Pull mixes the samples of a step of the page's time, which the film records.
 internal sealed class ScriptAudio : IDisposable
 {
     private const int Rate = 44100;
@@ -20,9 +21,16 @@ internal sealed class ScriptAudio : IDisposable
     private long mixed;
     private int ids;
     private volatile bool stopping;
+    private readonly bool offline;
 
-    public ScriptAudio()
+    public ScriptAudio(bool offline = false)
     {
+        this.offline = offline;
+        if (offline)
+        {
+            return;
+        }
+
         var format = new WaveFormat { Tag = 1, Channels = 1, Rate = Rate, BytesPerSecond = Rate * 2, Align = 2, Bits = 16 };
         if (waveOutOpen(out device, uint.MaxValue, ref format, IntPtr.Zero, IntPtr.Zero, 0) != 0)
         {
@@ -36,12 +44,34 @@ internal sealed class ScriptAudio : IDisposable
     }
 
     // The context's currentTime, in seconds.
-    public double Now => device == IntPtr.Zero ? fallback.Elapsed.TotalSeconds : Interlocked.Read(ref mixed) / (double)Rate;
+    public double Now => device == IntPtr.Zero && !offline ? fallback.Elapsed.TotalSeconds : Interlocked.Read(ref mixed) / (double)Rate;
+
+    public const int SampleRate = Rate;
+
+    // Offline: the next count samples, mixed, in -1 to 1.
+    public float[] Pull(int count)
+    {
+        var block = new float[count];
+        Render(block);
+        return block;
+    }
+
+    // Plays samples at 44.1 kHz from at, in seconds, as a buffer source with no chain: a voice spoken to a file.
+    public int PlaySamples(float[] samples, double at)
+    {
+        var voice = new Voice { Id = ++ids, Start = at, Kind = "buffer", Samples = samples };
+        lock (gate)
+        {
+            voices.Add(voice);
+        }
+
+        return voice.Id;
+    }
 
     // Starts a source described in JSON by the shim; samples are a buffer source's, in -1 to 1. Returns its number.
     public JsValue Play(string json, JsValue samples)
     {
-        if (device == IntPtr.Zero)
+        if (device == IntPtr.Zero && !offline)
         {
             return -1;
         }

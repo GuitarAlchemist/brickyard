@@ -890,6 +890,29 @@ messages of the game; the speech's end events arrive, also after a `cancel()`; t
 scene with `--arcade-play`, the page's title screen on the cabinet, 685 frames in about 11 s. Selftest ok, and fails
 when one of its pixels is changed.
 
+### A film of a robot at the cabinet
+
+The user asked for a 45 s video, in the hall's two GTA manners (a view's flight after the character switch, and the
+cut scene), of a small robot playing PARSEC on the cabinet with the screen never hidden, and good progress in the game.
+`--film-arcade DIR` (with `--hidden --size 1920x1080 --lang fr --listen <port>`) makes it:
+
+- `ArcadeFilm` directs it: the whole hall, a flight down to a view high on the cabinet's right, a cut scene between
+  bars titled PARSEC (approach, the screen over the robot's shoulder, the hands, from the marquee down, a half orbit),
+  and a flight back out to the hall. Shots on the cabinet's left are behind the steel cabinet, so they keep to its right
+  and above. `Cinematic` takes another film's shots and heading; `FreeCamera.GoTo` flies to any eye and target.
+- The robot is Delta's, at 0.6 of its size, on two crates so that its hands reach the panel: Robot.Pose, then its arms
+  turned to reach the stick and the buttons, which move with the keys held, and its head tilted up to the screen. At
+  full size its head hid the screen's lower half from every shot.
+- The game runs stepped (`ScriptScreen.Step`), two frames of the page for each of the film's at 30 a second, played by
+  `ParsecPilot.js` (built into the scene), which reads the page's state and presses keys only. The scene's time is the
+  frames' while filming, so every frame is recorded however long it takes; the buttons and cards of the window are not
+  drawn. Its sound is mixed offline as the steps go (`ScriptAudio.Pull`), its voice spoken into WAV files by SAPI and
+  mixed in, each utterance ending when its samples have played; FFmpeg encodes the frames (x264, CRF 17) and then puts
+  the sound (AAC) with them into `DIR\parsec-film.mp4`.
+- In 45 s the pilot loses no ship and scores 5200 (an extra ship at 5000), reaching the sixth and last wave of level 1.
+  The game sends its enemies on fixed timers, so the pace is the game's: a level lasts about 65 s and fuel runs low only
+  after about 2 min. The game's random sequence restarts with each game, so the same film comes out each time.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
