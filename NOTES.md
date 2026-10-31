@@ -913,6 +913,22 @@ cut scene), of a small robot playing PARSEC on the cabinet with the screen never
   The game sends its enemies on fixed timers, so the pace is the game's: a level lasts about 65 s and fuel runs low only
   after about 2 min. The game's random sequence restarts with each game, so the same film comes out each time.
 
+## Where a slow frame's time goes (2026-10-31)
+
+The live window logged `swapchain rebuilt at 1280x720 in 7 ms`, then `slow frame 2744 ms`, just after being maximised at
+3840x2054: the rebuild was not the wait. A slow frame's line now splits its time (`FrameGap`): the event pump
+(`Glfw.PollEvents`), a minimised or hidden window's sleep, the swapchain's rebuild, and the rest, with what the window did
+meanwhile (new framebuffer sizes, moves, minimise, maximise, requests to redraw) and when. A gap with a minimised or hidden
+spell in it is logged as a `pause`, and left out of the frame times, where a long minimise used to count as one frame.
+
+`--modal-drill` measures it on a window of its own: it posts to its own window the keyboard's move and size commands,
+which enter Windows' modal loops as a hand on the title bar or the border does, and leaves them with Enter. Hidden, at
+3840x2054: the title bar held 1.5 s gave a 1519 ms frame, 1502 ms of it in one `PollEvents` call; the border dragged 1.5 s
+a 1531 ms frame, 1506 ms in the pump and 8 ms rebuilding, its sizes changing inside the call; a jump to 1280x720 outside
+those loops, a 7 ms rebuild and no slow frame. Windows runs those loops inside the event pump, so the render loop stands
+still as long as the hand holds. Dragging a maximised window by its title bar restores it (here to 1280x720) and holds
+that loop until let go, which matches the live line; the live log had no split to show it was that gesture.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

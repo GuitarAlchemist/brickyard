@@ -958,7 +958,16 @@ internal static unsafe class Stage
         }
 
         var stale = false; // the swapchain no longer matches the window
-        window.OnFramebufferSize += (_, _) => stale = true;
+        var gap = new FrameGap(); // what fills the time between two frames, for a slow frame's line
+        window.OnFramebufferSize += (_, _) =>
+        {
+            stale = true;
+            gap.Saw(clock.Elapsed.TotalSeconds, $"framebuffer {window.FramebufferSize.X}x{window.FramebufferSize.Y}");
+        };
+        window.OnIconify += (_, _) => gap.Saw(clock.Elapsed.TotalSeconds, window.IsIconified ? "minimised" : "restored");
+        window.OnMaximize += (_, _) => gap.Saw(clock.Elapsed.TotalSeconds, "maximised or restored");
+        window.OnPosition += (_, _) => gap.Saw(clock.Elapsed.TotalSeconds, "moved");
+        window.OnRefresh += _ => gap.Saw(clock.Elapsed.TotalSeconds, "asked to redraw");
 
         // The shelf (Shelf.cs): M opens it (Tab, which did too, is the camera's wheel); the arrows, Enter, Backspace and the mouse move through it; Esc
         // closes it, and the window when it is closed. Its card is drawn again when what it shows changes.
@@ -1179,6 +1188,7 @@ internal static unsafe class Stage
         var resizeTo = Option(args, "--resize-to")?.Split('x') is [var rw, var rh] && int.TryParse(rw, out var resizeW) && int.TryParse(rh, out var resizeH) && resizeW > 0 && resizeH > 0
             ? new int2(resizeW, resizeH)
             : default(int2?);
+        var modalDrill = args.Contains("--modal-drill"); // the window's measuring run of a held title bar and a dragged border (ModalDrill.cs)
         var keysShown = args.Contains("--keys"); // F1: the camera's keys
         var looking = false; // the right button is held
         var locked = false; // Ctrl and a click lock the view to the mouse, the Observatory's click; again, or the right button, frees it
@@ -1610,8 +1620,10 @@ internal static unsafe class Stage
                 waitFor = 0;
             }
 
+            var pumping = clock.Elapsed.TotalSeconds;
             Glfw.PollEvents();
             var inputAt = clock.Elapsed.TotalSeconds;
+            gap.Pumped(inputAt - pumping);
             placement.Apply(window, tray);
             var now = filmDir is null ? clock.Elapsed.TotalSeconds : frame / (double)FilmFps; // a film's time is its frames'
             if (paceToScreen && now >= screenSeen + 2.0)
@@ -1736,6 +1748,12 @@ internal static unsafe class Stage
                 resizeTo = null;
             }
 
+            if (!splashing && modalDrill)
+            {
+                modalDrill = false;
+                ModalDrill.Start(what => Console.WriteLine($"DRILL {what} at {clock.Elapsed.TotalSeconds - firstFrame:F2} s"), (w, h) => resizeTo = new int2(w, h));
+            }
+
             if (!splashing && flyTo != 0 && shown - S >= 0.5)
             {
                 camera.GoTo(flyTo);
@@ -1801,7 +1819,9 @@ internal static unsafe class Stage
             // A window hidden by the clock or minimised draws nothing; one whose size changed gets a new swapchain first.
             if (placement.Hidden || window.IsIconified)
             {
+                var sleeping = clock.Elapsed.TotalSeconds;
                 Thread.Sleep(50);
+                gap.Slept(clock.Elapsed.TotalSeconds - sleeping);
                 continue;
             }
 
@@ -1813,10 +1833,12 @@ internal static unsafe class Stage
                 if (!Build())
                 {
                     Thread.Sleep(50);
+                    gap.Rebuilt(rebuilding.Elapsed.TotalSeconds);
                     continue;
                 }
 
                 stale = false;
+                gap.Rebuilt(rebuilding.Elapsed.TotalSeconds);
                 Console.WriteLine($"SCENE swapchain rebuilt at {extent.Width}x{extent.Height} in {rebuilding.Elapsed.TotalMilliseconds:F0} ms");
                 continue; // the projection follows the new size
             }
@@ -2386,17 +2408,26 @@ internal static unsafe class Stage
                 nextFrame = presented;
                 Console.WriteLine($"SCENE first frame presented after {presented * 1000:F0} ms");
             }
+            else if (gap.Paused)
+            {
+                // A minimised or hidden spell is not a frame the window took to draw.
+                if (presented - lastPresent >= 0.25)
+                {
+                    Console.WriteLine($"SCENE pause {(presented - lastPresent) * 1000.0:F0} ms, not counted as a frame, at {presented - firstFrame:F2} s: {gap.Describe(presented - lastPresent)}");
+                }
+            }
             else
             {
                 frameTimes.Add((presented - lastPresent) * 1000.0); // present to present
                 if (presented - lastPresent >= 0.25)
                 {
-                    // Where in the log a long frame falls says what came before it.
-                    Console.WriteLine($"SCENE slow frame {(presented - lastPresent) * 1000.0:F0} ms, frame {frame} at {presented - firstFrame:F2} s");
+                    // Where in the log a long frame falls says what came before it; where its time went, what the window did.
+                    Console.WriteLine($"SCENE slow frame {(presented - lastPresent) * 1000.0:F0} ms, frame {frame} at {presented - firstFrame:F2} s: {gap.Describe(presented - lastPresent)}");
                 }
             }
 
             lastPresent = presented;
+            gap.Begin(presented);
             frame++;
             if (capturing)
             {
@@ -2407,6 +2438,7 @@ internal static unsafe class Stage
                 Console.WriteLine($"SCENE shot {path} at {now:F2} s ({moment.State}, level {moment.Level:F2}, context {moment.Context:F2}{(moment.Compacting ? ", compacting" : "")})");
                 shot++;
                 lastPresent = clock.Elapsed.TotalSeconds; // the capture's wait is not a frame time
+                gap.Begin(lastPresent);
             }
 
             if (filming)
