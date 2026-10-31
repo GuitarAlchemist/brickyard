@@ -7,8 +7,8 @@
 //
 // --demo plays idle, listening, thinking, speaking, a compaction, each expression, the caption of a sentence let pass
 // and the pairing card in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
-// waits for vsync unless --immediate: shown, through Mailbox when the GPU offers it, at twice the screen's refresh unless
-// --cap says otherwise, and through FIFO with --fifo or when hidden; --cap N limits it to N frames a second, 60 by
+// waits for vsync unless --immediate: shown, through Mailbox when the GPU offers it, at twice the refresh of the
+// window's screen unless --cap says otherwise, and through FIFO with --fifo or when hidden; --cap N limits it to N frames a second, 60 by
 // default when hidden (nothing paces a hidden window), so that it never takes the GPU from a live view beside it.
 // --size WxH sizes the window, to measure a hidden one at a live one's size. Esc closes it, as does --seconds.
 // --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws. --view N starts
@@ -303,6 +303,7 @@ internal static unsafe class Stage
         var hidden = args.Contains("--hidden");
         var vsync = !args.Contains("--immediate");
         var cap = int.TryParse(Option(args, "--cap"), out var capValue) ? capValue : hidden ? 60 : 0;
+        var paceToScreen = false; // Mailbox without --cap: the cap follows the window's screen
         var port = int.TryParse(Option(args, "--listen"), out var portValue) ? portValue : 8805;
         var qualityAsked = Option(args, "--quality") ?? "auto";
         if (qualityAsked is not ("auto" or "flat" or "low"))
@@ -501,18 +502,14 @@ internal static unsafe class Stage
         else if (!hidden && !args.Contains("--fifo") && modes.Contains(VkPresentModeKHR.MailboxKHR))
         {
             // Shown, Mailbox when offered: no tearing, and the screen takes the newest picture instead of FIFO's queue
-            // of them, so a move shows a refresh or two sooner; paced at twice the fastest screen's refresh, which keeps
-            // the newest picture fresh without drawing hundreds a second. --fifo keeps FIFO.
+            // of them, so a move shows a refresh or two sooner; paced at twice the refresh of the screen the window is
+            // on (the loop looks again every 2 s, as the window is placed or moved): at the refresh itself the pacing
+            // drifts against the screen's and now and then a picture shows twice. --fifo keeps FIFO.
             presentMode = VkPresentModeKHR.MailboxKHR;
             if (Option(args, "--cap") is null)
             {
-                var refresh = 0;
-                foreach (var monitor in Glfw.GetMonitors())
-                {
-                    refresh = Math.Max(refresh, monitor.VideoMode.RefreshRate);
-                }
-
-                cap = 2 * (refresh > 0 ? refresh : 60);
+                paceToScreen = true;
+                cap = 120;
             }
         }
 
@@ -1486,6 +1483,7 @@ internal static unsafe class Stage
         var worlds = new SN.Matrix4x4[Robot.Parts];
         var glows = new SN.Vector4[Robot.Parts];
         var period = cap > 0 ? 1.0 / cap : 0.0;
+        var screenSeen = double.NegativeInfinity; // when paceToScreen last read the window's screen
         var nextFrame = 0.0;
         var lastPresent = 0.0;
         var frameTimes = new List<double>(100_000);
@@ -1504,6 +1502,18 @@ internal static unsafe class Stage
             Glfw.PollEvents();
             placement.Apply(window, tray);
             var now = clock.Elapsed.TotalSeconds;
+            if (paceToScreen && now >= screenSeen + 2.0)
+            {
+                screenSeen = now;
+                var refresh = Placement.MonitorOf(window).VideoMode.RefreshRate;
+                if (2 * refresh != cap && refresh > 0)
+                {
+                    cap = 2 * refresh;
+                    period = 1.0 / cap;
+                    Console.WriteLine($"SCENE paced at {cap} fps, twice the window's screen");
+                }
+            }
+
             if (now >= limit)
             {
                 reason = "time limit";

@@ -819,8 +819,9 @@ the GPU, so a move reached the screen three or four refreshes later. Drawing is 
 bin's modules (the office, Gaia v1.2, the Pong) 1518 fps (p50 0.9, p99 2.9). So:
 
 - Shown, the scene presents through Mailbox when the GPU offers it (no tearing, the newest picture rather than a queue),
-  paced at twice the fastest screen's refresh unless `--cap` says otherwise; `--fifo` keeps FIFO, and a hidden window
-  keeps FIFO at 60 as before.
+  paced at twice the refresh of the screen the window is on, read again every 2 s as the window is placed or moved
+  (`SCENE paced at N fps`), unless `--cap` says otherwise: at the refresh itself the pacing drifts against the
+  screen's and a picture now and then shows twice. `--fifo` keeps FIFO, and a hidden window keeps FIFO at 60 as before.
 - Each frame waits for its slot's fence before polling the keys and the mouse, not after.
 - `--size WxH` sizes the window, for measuring a hidden one at a live one's size.
 
