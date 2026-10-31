@@ -1164,6 +1164,10 @@ internal static unsafe class Stage
         var wheelAtStart = args.Contains("--wheel");
         var arcadeAtStart = args.Contains("--arcade-play"); // the cabinet's game once the splash is over, for captures
         var flyTo = int.TryParse(Option(args, "--fly-to"), out var flyToValue) ? flyToValue : 0; // a view's flight half a second after the splash, for captures
+        // --resize-to WxH resizes the window a second after the splash, to measure the rebuild a live window's maximising makes
+        var resizeTo = Option(args, "--resize-to")?.Split('x') is [var rw, var rh] && int.TryParse(rw, out var resizeW) && int.TryParse(rh, out var resizeH) && resizeW > 0 && resizeH > 0
+            ? new int2(resizeW, resizeH)
+            : default(int2?);
         var keysShown = args.Contains("--keys"); // F1: the camera's keys
         var looking = false; // the right button is held
         var locked = false; // Ctrl and a click lock the view to the mouse, the Observatory's click; again, or the right button, frees it
@@ -1678,6 +1682,12 @@ internal static unsafe class Stage
                 wheel.TabUp(now);
             }
 
+            if (!splashing && resizeTo is { } resized && shown - S >= 1.0)
+            {
+                window.Size = resized;
+                resizeTo = null;
+            }
+
             if (!splashing && flyTo != 0 && shown - S >= 0.5)
             {
                 camera.GoTo(flyTo);
@@ -1749,6 +1759,7 @@ internal static unsafe class Stage
 
             if (stale)
             {
+                var rebuilding = Stopwatch.StartNew();
                 device.WaitIdle();
                 Teardown();
                 if (!Build())
@@ -1758,10 +1769,11 @@ internal static unsafe class Stage
                 }
 
                 stale = false;
-                Console.WriteLine($"SCENE swapchain rebuilt at {extent.Width}x{extent.Height}");
+                Console.WriteLine($"SCENE swapchain rebuilt at {extent.Width}x{extent.Height} in {rebuilding.Elapsed.TotalMilliseconds:F0} ms");
                 continue; // the projection follows the new size
             }
 
+            var carding = Stopwatch.StartNew();
             Guard("a card", () =>
             {
                 if (film.Playing && !splashing && filmDrawn != (extent.Height, Words.Language))
@@ -1903,6 +1915,10 @@ internal static unsafe class Stage
                     invitationTexture = Upload(invitationCard, invitationSet, invitationTexture);
                 }
             });
+            if (carding.Elapsed.TotalMilliseconds >= 50)
+            {
+                Console.WriteLine($"SCENE cards drawn in {carding.Elapsed.TotalMilliseconds:F0} ms at {extent.Width}x{extent.Height}");
+            }
 
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
@@ -2315,6 +2331,11 @@ internal static unsafe class Stage
             else
             {
                 frameTimes.Add((presented - lastPresent) * 1000.0); // present to present
+                if (presented - lastPresent >= 0.25)
+                {
+                    // Where in the log a long frame falls says what came before it.
+                    Console.WriteLine($"SCENE slow frame {(presented - lastPresent) * 1000.0:F0} ms, frame {frame} at {presented - firstFrame:F2} s");
+                }
             }
 
             lastPresent = presented;
