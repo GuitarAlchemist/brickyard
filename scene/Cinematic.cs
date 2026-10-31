@@ -112,9 +112,22 @@ internal sealed class Cinematic
     // the clocks, as FreeCamera's views.
     internal static readonly string[] ViewShots = ["delta", "office", "gaia", "hall", "clocks"];
 
+    private readonly Shot[] shots;
+
+    // The hall's film, or another's shots under its own title (ArcadeFilm).
+    public Cinematic(Shot[]? film = null, (string Title, string Under)? heading = null)
+    {
+        shots = film ?? Shots;
+        lastShot = shots.Length - 1;
+        Heading = heading;
+    }
+
+    // The title over black and the line under it; null for the hall's own.
+    public (string Title, string Under)? Heading { get; }
+
     private float phaseTime;
     private int shot = -1;
-    private int lastShot = Shots.Length - 1; // the film's end, or the one shot of a view
+    private int lastShot; // the film's end, or the one shot of a view
     private bool alone; // a view's shot alone: no title, no card
     private float shotTime;
     private float clock; // for the sway, which goes on through the shots
@@ -134,7 +147,7 @@ internal sealed class Cinematic
 
     public float Hint { get; private set; } // "Any key: skip"
 
-    public string ShotName => shot >= 0 && shot < Shots.Length && Now == Phase.Shot ? Shots[shot].Name : "";
+    public string ShotName => shot >= 0 && shot < shots.Length && Now == Phase.Shot ? shots[shot].Name : "";
 
     public int Plays { get; private set; }
 
@@ -154,8 +167,8 @@ internal sealed class Cinematic
 
         Now = Phase.In;
         phaseTime = 0f;
-        shot = Math.Clamp(from, 0, Shots.Length - 1) - 1;
-        lastShot = Shots.Length - 1;
+        shot = Math.Clamp(from, 0, shots.Length - 1) - 1;
+        lastShot = shots.Length - 1;
         alone = false;
         Plays++;
         Begun.Clear();
@@ -166,7 +179,7 @@ internal sealed class Cinematic
     // player's view through black; false for another number or while it plays.
     public bool PlayView(int view)
     {
-        if (view < 1 || view > ViewShots.Length || !Play(Array.FindIndex(Shots, s => s.Name == ViewShots[view - 1])))
+        if (view < 1 || view > ViewShots.Length || !Play(Array.FindIndex(shots, s => s.Name == ViewShots[view - 1])))
         {
             return false;
         }
@@ -288,7 +301,7 @@ internal sealed class Cinematic
             return null;
         }
 
-        var s = Shots[Math.Clamp(shot, 0, Shots.Length - 1)];
+        var s = shots[Math.Clamp(shot, 0, shots.Length - 1)];
         var u = Now == Phase.Shot ? Math.Clamp(shotTime / s.Seconds, 0f, 1f) : Now == Phase.Title ? 0f : 1f;
         if (ReducedMotion)
         {
@@ -353,13 +366,13 @@ internal sealed class Cinematic
 
         Now = Phase.Shot;
         shotTime = 0f;
-        Begun.Add(Shots[shot].Name);
+        Begun.Add(shots[shot].Name);
         Film(0f);
     }
 
     private void Film(float dt)
     {
-        var s = Shots[shot];
+        var s = shots[shot];
         shotTime += dt;
         // Into and out of black at an act's edges.
         var black = 0f;

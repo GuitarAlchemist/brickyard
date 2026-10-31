@@ -259,8 +259,15 @@ internal sealed class FreeCamera
             return false;
         }
 
-        StartFlight(cut);
         var (eye, target) = Views[view - 2];
+        GoTo(eye, target, cut);
+        return true;
+    }
+
+    // To any eye and target, as a view's flight or cut, for films (ArcadeFilm).
+    public void GoTo(SN.Vector3 eye, SN.Vector3 target, bool cut = false)
+    {
+        StartFlight(cut);
         var d = SN.Vector3.Normalize(target - eye);
         yaw = MathF.Atan2(d.X, -d.Z);
         pitch = MathF.Asin(d.Y);
@@ -268,7 +275,6 @@ internal sealed class FreeCamera
         Flying = MathF.Abs(position.Y - WalkHeight) > 0.01f;
         Free = true;
         Settle();
-        return true;
     }
 
     private Pose Remember(Pose pose)

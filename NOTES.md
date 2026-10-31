@@ -861,6 +861,58 @@ Measured: the probe, Edge alone, 60 frames a second with the game started and mo
 `--arcade-play`, the card, "loading...", then the page's title screen on the cabinet, 289 frames, and no Edge left
 after the run. Selftest ok.
 
+### Without a browser
+
+The user then asked that the game depend on no browser, Edge or other, and chose an interpreter in the scene. Jint
+4.17.0 (BSD-2-Clause, with Acornima 1.7.0, BSD-3-Clause; the texts in `LICENSES\`, since the packages name their
+licences only) replaces Edge, and `WebScreen` is gone:
+
+- `ScriptScreen` fetches the page each time the game starts, takes its inline script and runs it on a thread of its
+  own, 60 animation frames a second, with a 2 s limit per call, 512 MB and a recursion limit. The script sees only a
+  shim of the browser written in JavaScript over a few host functions: elements by id with styles and listeners,
+  canvases (`fillRect`, `clearRect`, `drawImage` of another canvas, nearest pixel, `alpha: false`), CSS colours as
+  `#rgb`, `#rrggbb`, `#rrggbbaa` and `rgb()`/`rgba()`, `keydown`/`keyup` by `code` with `preventDefault`, a click,
+  `setTimeout`/`setInterval`, `requestAnimationFrame`, `matchMedia` (not coarse), and a `localStorage` kept in
+  `%LOCALAPPDATA%\delta\arcade-storage.json` (64 kB at most). It has no network, no files and no .NET of its own. A
+  frame that throws is skipped and logged once a second; 600 in a row end the game, and its card says why.
+- `ScriptAudio` plays the Web Audio the game uses through `waveOut`, 44.1 kHz mono, four 512-sample blocks ahead
+  (46 ms): oscillators (sine, square, sawtooth, triangle) and sample buffers, through gains and biquads (RBJ lowpass,
+  highpass, bandpass), with `setValueAtTime` and linear and exponential ramps. `currentTime` is the samples mixed.
+- `ScriptSpeech` is `speechSynthesis` through SAPI's `SpVoice`, by COM on an STA thread: Windows' voices (David and
+  Zira here), the page's rate, pitch (SAPI XML) and volume, one utterance after another, each one's `onend` fired so
+  the game's queue goes on; `cancel()` purges. The scene runs with invariant globalization, so voices' languages come
+  from their LCID by a small table.
+- Sound and voice open only when the page first uses them, so the selftest, on a small page of our own (a sprite over
+  an opaque canvas, a key, a click, a timer and the storage), opens neither.
+
+Measured: the probe played the real page, 60.5 frames a second, ship flown and firing by keys, score 100, the
+messages of the game; the speech's end events arrive, also after a `cancel()`; the sound's clock runs. Hidden in the
+scene with `--arcade-play`, the page's title screen on the cabinet, 685 frames in about 11 s. Selftest ok, and fails
+when one of its pixels is changed.
+
+### A film of a robot at the cabinet
+
+The user asked for a 45 s video, in the hall's two GTA manners (a view's flight after the character switch, and the
+cut scene), of a small robot playing PARSEC on the cabinet with the screen never hidden, and good progress in the game.
+`--film-arcade DIR` (with `--hidden --size 1920x1080 --lang fr --listen <port>`) makes it:
+
+- `ArcadeFilm` directs it: the whole hall, a flight down to a view high on the cabinet's right, a cut scene between
+  bars titled PARSEC (approach, the screen over the robot's shoulder, the hands, from the marquee down, a half orbit),
+  and a flight back out to the hall. Shots on the cabinet's left are behind the steel cabinet, so they keep to its right
+  and above. `Cinematic` takes another film's shots and heading; `FreeCamera.GoTo` flies to any eye and target.
+- The robot is Delta's, at 0.6 of its size, on two crates so that its hands reach the panel: Robot.Pose, then its arms
+  turned to reach the stick and the buttons, which move with the keys held, and its head tilted up to the screen. At
+  full size its head hid the screen's lower half from every shot.
+- The game runs stepped (`ScriptScreen.Step`), two frames of the page for each of the film's at 30 a second, played by
+  `ParsecPilot.js` (built into the scene), which reads the page's state and presses keys only. The scene's time is the
+  frames' while filming, so every frame is recorded however long it takes; the buttons and cards of the window are not
+  drawn. Its sound is mixed offline as the steps go (`ScriptAudio.Pull`), its voice spoken into WAV files by SAPI and
+  mixed in, each utterance ending when its samples have played; FFmpeg encodes the frames (x264, CRF 17) and then puts
+  the sound (AAC) with them into `DIR\parsec-film.mp4`.
+- In 45 s the pilot loses no ship and scores 5200 (an extra ship at 5000), reaching the sixth and last wave of level 1.
+  The game sends its enemies on fixed timers, so the pace is the game's: a level lasts about 65 s and fuel runs low only
+  after about 2 min. The game's random sequence restarts with each game, so the same film comes out each time.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

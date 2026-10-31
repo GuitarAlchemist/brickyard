@@ -18,6 +18,8 @@ folder:
 | Native libraries inside the BRUTAL packages (GLFW, shaderc, SPIRV-Tools and the rest) | as packaged | as listed in each package's `THIRD-PARTY-NOTICES` | `scene\` |
 | The Brutal logo | [ahwootech/brutal-branding](https://github.com/ahwootech/brutal-branding/tree/5d38373a24fed6f8afcc8bc803c96b6163ddf4b4) at 5d38373, `LOGO_BRUTAL_WHT.png`, SHA-256 `59768c2ab60fc835af29b1d686e5a76604e959fb4e84adf2bfb7fd26e7355d0c` | Ahwoo's. It is shown as BRUTAL's licence requires (README) | `scene\brand\` |
 | CommunityToolkit.HighPerformance | 8.4.2 | MIT | `scene\` |
+| Jint, the JavaScript interpreter that runs the arcade game's script | 4.17.0 | BSD-2-Clause; its package names the licence only, so its text is kept in `LICENSES\Jint\` | `scene\` |
+| Acornima, Jint's JavaScript parser | 1.7.0 | BSD-3-Clause; text kept in `LICENSES\Acornima\` | `scene\` |
 | .NET runtime (self-contained) | 10.0.13 | MIT, with its third-party notices | `scene\` |
 | Go runtime and standard library | as built | BSD-3-Clause | `brain.exe` |
 
@@ -46,6 +48,12 @@ Ollama and qwen3:8b are not used.
 
 `/delta:setup` does not install the camera process: uv fetches MediaPipe and OpenCV when you first start it, and the
 process downloads its model.
+
+## Fetched, never shipped
+
+The arcade cabinet plays PARSEC, a third party's game at https://parsec.games.bu.app/. Its page is fetched from that
+site each time the game starts and its script runs in the scene; nothing of it is copied into this repository or the
+release, and the scene keeps only its high score (`%LOCALAPPDATA%\delta\arcade-storage.json`).
 
 ## Ideas, not code
 
