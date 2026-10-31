@@ -1593,7 +1593,32 @@ internal static unsafe class Stage
         var clears = stackalloc VkClearValue[2];
         var cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
         var loopStart = clock.Elapsed;
-        while (!window.ShouldClose)
+        // While the window is dragged or resized, Windows keeps PollEvents in its own loop until the button is let go; the
+        // window's callbacks then draw the frames, so the hall goes on moving instead of freezing (a frame of 2744 ms on
+        // 2026-10-31, as the window came back from maximised).
+        var polling = false; // inside PollEvents
+        var drawingAside = false; // a callback's frame, which draws no other
+        var pumpedFrom = 0.0; // when the event pump started, or a frame drawn inside it ended
+        void DrawAside()
+        {
+            if (polling && !drawingAside)
+            {
+                drawingAside = true;
+                Guard("a frame while the window moves", () => Frame(false));
+                pumpedFrom = clock.Elapsed.TotalSeconds; // the pump's rest belongs to the next frame
+                drawingAside = false;
+            }
+        }
+
+        window.OnPosition += (_, _) => DrawAside();
+        window.OnSize += (_, _) => DrawAside();
+        window.OnRefresh += _ => DrawAside();
+        while (!window.ShouldClose && Frame(true))
+        {
+        }
+
+        // One frame, its keys and mouse read when poll; false when the loop ends.
+        bool Frame(bool poll)
         {
             // The GPU done with this slot's last frame before the keys and the mouse are read, not after: the picture
             // then shows the input it was drawn from without a frame's wait in between.
@@ -1620,10 +1645,16 @@ internal static unsafe class Stage
                 waitFor = 0;
             }
 
-            var pumping = clock.Elapsed.TotalSeconds;
-            Glfw.PollEvents();
+            if (poll)
+            {
+                pumpedFrom = clock.Elapsed.TotalSeconds;
+                polling = true;
+                Glfw.PollEvents();
+                polling = false;
+            }
+
             var inputAt = clock.Elapsed.TotalSeconds;
-            gap.Pumped(inputAt - pumping);
+            gap.Pumped(inputAt - pumpedFrom); // a frame drawn aside counts the pump's time since the last one
             placement.Apply(window, tray);
             var now = filmDir is null ? clock.Elapsed.TotalSeconds : frame / (double)FilmFps; // a film's time is its frames'
             if (paceToScreen && now >= screenSeen + 2.0)
@@ -1641,7 +1672,7 @@ internal static unsafe class Stage
             if (now >= limit)
             {
                 reason = "time limit";
-                break;
+                return false;
             }
 
             var dt = (float)(now - last);
@@ -1725,14 +1756,14 @@ internal static unsafe class Stage
                 else if (!cabinet.Playing)
                 {
                     reason = "film: the game did not start";
-                    break;
+                    return false;
                 }
             }
 
             if (arcadeFilm is { Done: true })
             {
                 reason = "film done";
-                break;
+                return false;
             }
 
             if (!splashing && wheelAtStart)
@@ -1822,7 +1853,7 @@ internal static unsafe class Stage
                 var sleeping = clock.Elapsed.TotalSeconds;
                 Thread.Sleep(50);
                 gap.Slept(clock.Elapsed.TotalSeconds - sleeping);
-                continue;
+                return true;
             }
 
             if (stale)
@@ -1834,13 +1865,13 @@ internal static unsafe class Stage
                 {
                     Thread.Sleep(50);
                     gap.Rebuilt(rebuilding.Elapsed.TotalSeconds);
-                    continue;
+                    return true;
                 }
 
                 stale = false;
                 gap.Rebuilt(rebuilding.Elapsed.TotalSeconds);
                 Console.WriteLine($"SCENE swapchain rebuilt at {extent.Width}x{extent.Height} in {rebuilding.Elapsed.TotalMilliseconds:F0} ms");
-                continue; // the projection follows the new size
+                return true; // the projection follows the new size
             }
 
             var carding = Stopwatch.StartNew();
@@ -2047,7 +2078,7 @@ internal static unsafe class Stage
             if (result == VkResult.ErrorOutOfDateKHR)
             {
                 stale = true;
-                continue;
+                return true;
             }
 
             *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye);
@@ -2485,6 +2516,8 @@ internal static unsafe class Stage
                     Thread.SpinWait(20);
                 }
             }
+
+            return true;
         }
 
         var loopSeconds = (clock.Elapsed - loopStart).TotalSeconds;
