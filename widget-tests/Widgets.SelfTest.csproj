@@ -11,6 +11,7 @@
     <Compile Include="../scene/WidgetStage.cs" Link="WidgetStage.cs" />
     <Compile Include="../scene/WidgetModuleSession.cs" Link="WidgetModuleSession.cs" />
     <Compile Include="../scene/OfficeActivities.cs" Link="OfficeActivities.cs" />
+    <Compile Include="../scene/OfficeSelection.cs" Link="OfficeSelection.cs" />
     <Compile Include="../scene/WidgetPicking.cs" Link="WidgetPicking.cs" />
   </ItemGroup>
 </Project>

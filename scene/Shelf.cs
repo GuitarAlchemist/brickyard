@@ -207,9 +207,12 @@ internal sealed class Shelf
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") is { Length: > 0 } dir ? dir : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
 
     // A running Claude Code session, from its file in ~/.claude/sessions.
-    internal sealed record Session(int Pid, string Id, string Name, string Cwd, string Status, string Version, long Started);
+    internal sealed record Session(int Pid, string Id, string Name, string Cwd, string Status, string Version, long Started, bool Alive = true);
 
-    internal static List<Session> RunningSessions()
+    internal static List<Session> RunningSessions() => [.. SessionFiles().Where(s => s.Alive)];
+
+    // Every session file, Alive false where its process is gone: a file a crash left behind.
+    internal static List<Session> SessionFiles()
     {
         var sessions = new List<Session>();
         var dir = Path.Combine(ClaudeDir(), "sessions");
@@ -225,7 +228,7 @@ internal sealed class Shelf
                 using var doc = JsonDocument.Parse(File.ReadAllText(file));
                 var r = doc.RootElement;
                 var pid = r.TryGetProperty("pid", out var p) && p.TryGetInt32(out var n) ? n : 0;
-                if (pid == 0 || !Alive(pid))
+                if (pid == 0)
                 {
                     continue;
                 }
@@ -233,7 +236,7 @@ internal sealed class Shelf
                 var cwd = Text(r, "cwd");
                 var name = Text(r, "name");
                 sessions.Add(new Session(pid, Text(r, "sessionId"), name.Length > 0 ? name : Path.GetFileName(cwd.TrimEnd('\\', '/')), cwd, Text(r, "status"), Text(r, "version"),
-                    r.TryGetProperty("startedAt", out var s) && s.TryGetInt64(out var ms) ? ms : 0));
+                    r.TryGetProperty("startedAt", out var s) && s.TryGetInt64(out var ms) ? ms : 0, Alive(pid)));
             }
             catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
             {
@@ -528,11 +531,11 @@ internal sealed class Shelf
             return new Snapshot(workspaceOf, surfaceOf, blocked);
         }
 
-        // Each session's surface and state ("working", "idle", "blocked"), from agent-state alone: one call, for the
-        // agents' office, which asks every few seconds.
-        public static Dictionary<string, (string Surface, string State)> AgentStates()
+        // Each session's surface, state ("working", "idle", "blocked") and provider ("claude", "codex"), from agent-state
+        // alone: one call, for the agents' office, which asks every few seconds.
+        public static Dictionary<string, (string Surface, string State, string Provider)> AgentStates()
         {
-            var states = new Dictionary<string, (string, string)>();
+            var states = new Dictionary<string, (string, string, string)>();
             if (!File.Exists(Exe))
             {
                 return states;
@@ -549,11 +552,43 @@ internal sealed class Shelf
                 var id = Text(s, "sessionId");
                 if (id.Length > 0)
                 {
-                    states[id] = (Text(s, "surfaceId"), Text(s, "state"));
+                    states[id] = (Text(s, "surfaceId"), Text(s, "state"), Text(s, "sessionProvider"));
                 }
             }
 
             return states;
+        }
+
+        // Each surface's workspace, its stable ID and its title: a call for the workspaces and one for each workspace's
+        // surfaces, so the agents' office asks only now and then.
+        public static Dictionary<string, (string Id, string Title)> SurfaceWorkspaces()
+        {
+            var workspaceOf = new Dictionary<string, (string, string)>();
+            if (!File.Exists(Exe))
+            {
+                return workspaceOf;
+            }
+
+            using var workspaces = Run("list-workspaces");
+            if (workspaces is null || !workspaces.RootElement.TryGetProperty("workspaces", out var ws) || ws.ValueKind != JsonValueKind.Array)
+            {
+                return workspaceOf;
+            }
+
+            foreach (var w in ws.EnumerateArray())
+            {
+                var (id, title) = (Text(w, "id"), Text(w, "title"));
+                using var surfaces = Run("list-surfaces", "--workspace", id);
+                if (id.Length > 0 && surfaces is not null && surfaces.RootElement.TryGetProperty("surfaces", out var ss) && ss.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var surface in ss.EnumerateArray())
+                    {
+                        workspaceOf[Text(surface, "id")] = (id, title);
+                    }
+                }
+            }
+
+            return workspaceOf;
         }
 
         // Shows a surface's pane: its workspace first, then the surface.

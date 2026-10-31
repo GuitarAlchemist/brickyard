@@ -929,6 +929,22 @@ those loops, a 7 ms rebuild and no slow frame. Windows runs those loops inside t
 still as long as the hand holds. Dragging a maximised window by its title bar restores it (here to 1280x720) and holds
 that loop until let go, which matches the live line; the live log had no split to show it was that gesture.
 
+## The agents' office by workspace, and a selection (2026-10-31)
+
+Gaia's UX handoff (BRICKYARD-UX-HANDOFF-REFERENCE.md) asked for a first slice: one desk per session, never per pane;
+a stopped session kept in view; distinct names; desks grouped by workspace; a selection that stays in the scene. The
+contract grew in place: `OfficeActivity` gained Stopped, Stale and Unknown after Done, `OfficeSession` a workspace and a
+start, `OfficeState` the selected session, all with defaults so that the v0.1 test image still loads.
+
+- `OfficeActivities.Merge` reads the session files (dead processes included) with wmux's agent states and providers,
+  and the workspaces of their panes; `Derive` keeps each session as last shown and turns those that went into Stopped.
+- `OfficeSelection` holds the selection; Program.cs passes it in `OfficeState.Selected` and checks it each frame.
+- The module draws an enclosure per workspace and the selection's mark, both from poses and IDs.
+
+Checked: widget tests (seven mutations each fail them) and the scene's selftest. Not checked live: the office module
+was not reloaded in the running window. `SurfaceWorkspaces` costs a wmux call per workspace, about 5 s with nine
+workspaces, once every 30 s, during which the activities wait. Report: docs/office-ux-slice1-report.md.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

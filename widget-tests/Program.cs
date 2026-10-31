@@ -17,8 +17,11 @@ try
     Expansion(Check);
     Stage(Check);
     Activities(Check);
+    Known(Check);
+    Selection(Check);
     WidgetPicking.SelfTest(Check);
     Office(Check, args[0]);
+    Enclosures(Check, args[0]);
     Reload(Check, args[0], args[1]);
 }
 catch (Exception e)
@@ -131,7 +134,7 @@ static void Stage(Action<bool, string> check)
 
 static void Activities(Action<bool, string> check)
 {
-    var last = new Dictionary<string, (OfficeActivity, double)>();
+    var last = new Dictionary<string, OfficeSession>();
     OfficeActivities.Seen S(string id, string state, string status = "idle", long started = 0) => new(id, id, started, status, state, "surf-" + id);
     var first = OfficeActivities.Derive([S("b", "working", started: 2), S("a", "blocked", started: 1), S("c", "", "busy", 3)], last, 10);
     check(first.Select(s => s.Id).SequenceEqual(["a", "b", "c"]) && first[0].Activity == OfficeActivity.Waiting &&
@@ -140,14 +143,89 @@ static void Activities(Action<bool, string> check)
     var later = OfficeActivities.Derive([S("a", "working", started: 1), S("b", "idle", started: 2), S("c", "", "busy", 3)], last, 12);
     check(later[1].Activity == OfficeActivity.Done && later[1].Since == 12 && later[2].Since == 10, "a session that stops working is done, from then; unchanged ones keep their start");
     var after = OfficeActivities.Derive([S("a", "idle", started: 1), S("b", "idle", started: 2)], last, 12 + OfficeActivities.DoneFor);
-    check(after[1].Activity == OfficeActivity.Idle && after[0].Activity == OfficeActivity.Done && !last.ContainsKey("c"),
-        "done lasts a few seconds then is idle; a session gone is forgotten");
+    check(after[1].Activity == OfficeActivity.Idle && after[0].Activity == OfficeActivity.Done && after[2] is { Id: "c", Activity: OfficeActivity.Stopped },
+        "done lasts a few seconds then is idle; a session gone stays, stopped");
     var answered = OfficeActivities.Derive([S("w", "blocked")], [], 0);
-    var dismissed = OfficeActivities.Derive([S("w", "idle")], new() { ["w"] = (OfficeActivity.Waiting, 0) }, 1);
+    var dismissed = OfficeActivities.Derive([S("w", "idle")], new() { ["w"] = new("w", "w", OfficeActivity.Waiting, 0) }, 1);
     check(answered[0].Activity == OfficeActivity.Waiting && dismissed[0].Activity == OfficeActivity.Idle, "a wait ended without work is not shown as done");
     var resumed = OfficeActivities.Derive([new("r", "ix-51", 1, "busy", "", ""), S("q", "idle", started: 2), new("r", "ix-ad", 3, "idle", "", "")], [], 0);
     check(resumed.Count == 2 && resumed.Select(s => s.Id).SequenceEqual(["q", "r"]) && resumed[1].Name == "ix-ad" && resumed[1].Activity == OfficeActivity.Idle,
         "two processes with one session ID make one desk, the one started last");
+}
+
+// The office's first UX slice (BRICKYARD-UX-HANDOFF-REFERENCE.md): who is known, how the panes map to sessions, and
+// what a selection does.
+static void Known(Action<bool, string> check)
+{
+    // Five wmux panes: two Claude sessions with their files, one Claude session wmux knows without a file, a Codex pane
+    // and a pane with no session. Three robots, the third unknown; no robot for the others.
+    List<OfficeActivities.SessionFile> files = [new("a1", "ix", 1, "busy", true), new("b2", "ix", 2, "idle", true)];
+    var states = new Dictionary<string, (string, string, string)>
+    {
+        ["a1"] = ("surf-1", "working", "claude"), ["b2"] = ("surf-2", "idle", "claude"), ["c3"] = ("surf-3", "idle", "claude"),
+        ["x4"] = ("surf-4", "working", "codex"), [""] = ("surf-5", "idle", ""),
+    };
+    var workspaces = new Dictionary<string, (string, string)> { ["surf-1"] = ("ws-1", "ix"), ["surf-2"] = ("ws-1", "ix"), ["surf-3"] = ("ws-2", "ga") };
+    var five = OfficeActivities.Derive(OfficeActivities.Merge(files, states, workspaces), [], 0);
+    check(five.Count == 3 && five.Select(s => s.Id).ToHashSet().SetEquals(["a1", "b2", "c3"]) && five.Single(s => s.Id == "c3").Activity == OfficeActivity.Unknown,
+        $"five panes make three robots: two sessions with their files and one wmux knows, unknown; none for Codex or an empty pane ({five.Count})");
+    check(five.Single(s => s.Id == "a1") is { WorkspaceId: "ws-1", WorkspaceTitle: "ix", Started: 1 } && five.Single(s => s.Id == "c3").WorkspaceId == "ws-2",
+        "each session carries its pane's workspace and its start");
+
+    // A file whose process is gone is stale; a session with no status and no wmux state is unknown.
+    var none = new Dictionary<string, (string, string, string)>();
+    var odd = OfficeActivities.Derive(OfficeActivities.Merge([new("d", "old", 1, "busy", false), new("e", "new", 2, "", true)], none, new Dictionary<string, (string, string)>()), [], 0);
+    check(odd[0].Activity == OfficeActivity.Stale && odd[1].Activity == OfficeActivity.Unknown, "a file without its process is stale; a session that says nothing is unknown");
+
+    // A known session that stops stays, stopped, with its name, place and start; past StoppedKept, the oldest goes.
+    var last = new Dictionary<string, OfficeSession>();
+    OfficeActivities.Derive(OfficeActivities.Merge(files, states, workspaces), last, 0);
+    var stopped = OfficeActivities.Derive(OfficeActivities.Merge([files[1]], states, workspaces), last, 5);
+    var a1 = stopped.FindIndex(s => s.Id == "a1");
+    check(stopped.Count == 3 && a1 >= 0 && stopped[a1] is { Name: "ix", Activity: OfficeActivity.Stopped, WorkspaceId: "ws-1", Since: 5, Started: 1 } && a1 < stopped.FindIndex(s => s.Id == "b2"),
+        "a known session that stops stays visible, stopped, in its place, even while wmux still lists its pane");
+    var many = new Dictionary<string, OfficeSession>();
+    OfficeActivities.Seen Z(int k) => new($"z{k}", $"z{k}", k, "idle", "", "");
+    OfficeActivities.Derive([.. Enumerable.Range(0, OfficeActivities.StoppedKept + 2).Select(Z)], many, 0);
+    for (var i = 0; i < OfficeActivities.StoppedKept + 2; i++)
+    {
+        OfficeActivities.Derive([.. Enumerable.Range(i + 1, OfficeActivities.StoppedKept + 1 - i).Select(Z)], many, 1 + i);
+    }
+
+    var kept = OfficeActivities.Derive([], many, 100);
+    check(kept.Count == OfficeActivities.StoppedKept && kept.All(s => s.Activity == OfficeActivity.Stopped) && !kept.Any(s => s.Id is "z0" or "z1"),
+        $"at most {OfficeActivities.StoppedKept} stopped sessions stay, the latest to stop ({kept.Count})");
+}
+
+// A click on a robot selects it and does nothing else; a second click soon after on the same robot is the explicit
+// move to its pane; the selection is the scene's own and goes when its session is replaced.
+static void Selection(Action<bool, string> check)
+{
+    var selection = new OfficeSelection();
+    var first = selection.Click("a1", 7, 10.0);
+    var other = selection.Click("b2", 8, 12.0);
+    var again = selection.Click("b2", 8, 13.0);
+    check(first == OfficeSelection.Outcome.Selected && other == OfficeSelection.Outcome.Selected && again == OfficeSelection.Outcome.Cleared && selection.Selected is null,
+        "a click selects a robot, another click on it later lets it go; no command");
+    selection.Click("a1", 7, 20.0);
+    var opened = selection.Click("a1", 7, 20.0 + (OfficeSelection.DoubleClick * 0.5));
+    check(opened == OfficeSelection.Outcome.Open && selection.Selected == "a1", "two quick clicks on a robot are the explicit move to its pane, and it stays selected");
+    var commands = 0;
+    foreach (var (id, t) in new[] { ("a1", 30.0), ("b2", 31.0), ("b2", 33.0), ("c3", 34.0) })
+    {
+        commands += selection.Click(id, 1, t) == OfficeSelection.Outcome.Open ? 1 : 0;
+    }
+
+    check(commands == 0, "selecting robots, however many, calls no command and no model");
+    selection.Click(null, 0, 40.0);
+    check(selection.Selected is null, "a click beside the desks lets the selection go");
+
+    selection.Click("a1", 7, 50.0);
+    var same = selection.Validate([new("a1", "ix", OfficeActivity.Stopped, 1, Started: 7)]);
+    var replaced = selection.Validate([new("a1", "ix", OfficeActivity.Working, 2, Started: 9)]);
+    check(!same && replaced && selection.Selected is null, "the selection stays on a stopped session and goes when the session runs again in a new process");
+    selection.Click("b2", 8, 60.0);
+    check(selection.Validate([]) && selection.Selected is null, "and goes with its session");
 }
 
 static void Office(Action<bool, string> check, string image)
@@ -182,6 +260,67 @@ static void Office(Action<bool, string> check, string image)
     check(crowd.Valid && office.Revision != revision, $"24 sessions still fit ({crowd.Instances} instances)");
     office.Update(new("en", false, []));
     check(Widgets.Expand(office.Scene()).Valid, "an office without sessions still shows its empty desk");
+}
+
+// Readable names, an enclosure per workspace, stable identities and the selection's mark, on the real module.
+static void Enclosures(Action<bool, string> check, string image)
+{
+    using var session = new WidgetModuleSession<IOfficeModule>(image, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
+    var office = session.Module;
+    OfficeSession S(string id, string name, string ws, string title, OfficeActivity a = OfficeActivity.Idle) => new(id, name, a, 1, ws, title, 1);
+    List<OfficeSession> sessions =
+    [
+        S("aaaa1111", "ix", "ws-1", "ix"), S("bbbb2222", "ix", "ws-1", "ix"), S("cccc3333", "gaia", "ws-1", "ix"),
+        S("dddd4444", "ga", "ws-2", "ga", OfficeActivity.Stopped), S("eeee5555", "tars", "ws-2", "ga", OfficeActivity.Stale),
+        S("ffff6666", "brickyard", "", "", OfficeActivity.Unknown),
+    ];
+    office.Update(new("fr", false, sessions));
+    var tree = Widgets.Expand(office.Scene());
+    check(tree.Valid, $"the office with workspaces expands within the limits{string.Concat(tree.Problems.Take(3).Select(p => "; " + p))}");
+    string Plate(string id) => Find(tree.Roots, "s-" + id + "/plate")?.Text.FirstOrDefault()?.Text ?? "";
+    check(Plate("aaaa1111") != Plate("bbbb2222") && Plate("aaaa1111").StartsWith("ix") && Plate("bbbb2222").StartsWith("ix") && Plate("cccc3333") == "gaia",
+        $"two sessions with one name keep distinct plates ({Plate("aaaa1111")}, {Plate("bbbb2222")}); a unique name stays as it is");
+
+    // An enclosure per workspace, the sessions outside wmux in one of their own; each station inside its own, none overlapping.
+    var pens = tree.Roots.Where(r => r.Path.StartsWith("w-")).ToList();
+    (Vector2 Min, Vector2 Max) Rect(WidgetInstance pen)
+    {
+        var at = pen.Local.Translation;
+        var boxes = All([pen]).SelectMany(i => i.Boxes).ToList();
+        var min = new Vector2(at.X + boxes.Min(b => b.Centre.X - (b.Size.X / 2)), at.Z + boxes.Min(b => b.Centre.Z - (b.Size.Z / 2)));
+        var max = new Vector2(at.X + boxes.Max(b => b.Centre.X + (b.Size.X / 2)), at.Z + boxes.Max(b => b.Centre.Z + (b.Size.Z / 2)));
+        return (min, max);
+    }
+
+    bool Inside(Vector3 p, (Vector2 Min, Vector2 Max) r) => p.X > r.Min.X && p.X < r.Max.X && p.Z > r.Min.Y && p.Z < r.Max.Y;
+    bool Apart((Vector2 Min, Vector2 Max) a, (Vector2 Min, Vector2 Max) b) => a.Max.X <= b.Min.X || b.Max.X <= a.Min.X || a.Max.Y <= b.Min.Y || b.Max.Y <= a.Min.Y;
+    var rects = pens.ToDictionary(p => p.Path, Rect);
+    var homes = new Dictionary<string, string> { ["aaaa1111"] = "w-ws1", ["bbbb2222"] = "w-ws1", ["cccc3333"] = "w-ws1", ["dddd4444"] = "w-ws2", ["eeee5555"] = "w-ws2", ["ffff6666"] = "w-outside" };
+    var housed = homes.All(h => rects.ContainsKey(h.Value) && tree.Roots.FirstOrDefault(r => r.Path == "s-" + h.Key) is { } st && Inside(st.Local.Translation, rects[h.Value]));
+    var list = rects.Values.ToList();
+    var apart = list.SelectMany((a, i) => list.Skip(i + 1).Select(b => Apart(a, b))).All(x => x);
+    check(pens.Count == 3 && housed && apart, $"an enclosure per workspace and one for the sessions outside wmux, each station in its own, none overlapping ({pens.Count})");
+    check(pens.All(p => All([p]).Any(i => i.Text.Count > 0)), "each enclosure carries its workspace's name");
+
+    // A refresh in another order, a workspace renamed: the same paths, the stations where they were.
+    var before = tree.Roots.ToDictionary(r => r.Path, r => r.Local.Translation);
+    office.Update(new("fr", false, [.. sessions.AsEnumerable().Reverse().Select(s => s.WorkspaceId == "ws-2" ? s with { WorkspaceTitle = "ga-renamed" } : s)]));
+    var after = Widgets.Expand(office.Scene()).Roots.ToDictionary(r => r.Path, r => r.Local.Translation);
+    check(before.Keys.ToHashSet().SetEquals(after.Keys) && homes.Keys.All(id => Near(before["s-" + id], after["s-" + id])),
+        "a refresh in another order or a renamed workspace keeps every path and every station's place");
+
+    // The selection's mark: posed over the selected robot only, the tree untouched.
+    office.Update(new("fr", false, sessions));
+    var revision = office.Revision;
+    office.Update(new("fr", false, sessions, "cccc3333"));
+    var poses = new Dictionary<string, Pose>();
+    office.Pose(2.0, poses);
+    var marks = homes.Keys.Select(id => (Id: id, Pose: poses.TryGetValue("s-" + id + "/mark", out var p) ? p : (Pose?)null)).ToList();
+    check(office.Revision == revision && marks.All(m => m.Pose is { } p && (m.Id == "cccc3333" ? !p.Hidden && p.Glow.W > 0 : p.Hidden)),
+        "selecting a robot lights a mark over it alone and rebuilds nothing");
+    var mark = Find(Widgets.Expand(office.Scene()).Roots, "s-cccc3333/mark");
+    check(mark is not null && mark.Local.Translation.Y > 0.68f && All([mark]).SelectMany(i => i.Boxes).All(b => b.Size.X <= 0.05f),
+        "the mark floats above the robot's head, small enough to hide nothing");
 }
 
 static void Reload(Action<bool, string> check, string v1, string v2)
