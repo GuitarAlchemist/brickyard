@@ -825,7 +825,15 @@ bin's modules (the office, Gaia v1.2, the Pong) 1518 fps (p50 0.9, p99 2.9). So:
 - Each frame waits for its slot's fence before polling the keys and the mouse, not after.
 - `--size WxH` sizes the window, for measuring a hidden one at a live one's size.
 
-Still to see live: the `SCENE present mode` line (Mailbox, capped at twice the refresh), and the frames' p95 at exit.
+Live after the merge (2026-10-31, 02:05) the window ran Mailbox capped at 120, and the user saw the picture jerk. Mailbox
+drew at twice the refresh against the screen's clock, so the picture each refresh showed was by turns fresh and 8 ms old;
+the CPU's pace was even (hidden, `--immediate --cap 120`, Release and Debug p99 9 ms). Now, shown, the scene presents
+through FIFO and each frame waits for the last to be on screen (`VK_KHR_present_id` and `VK_KHR_present_wait`, which the
+RTX 5080 offers) before reading the keys and the mouse: a new picture every refresh, an even step, one refresh from the
+keys to the screen. Mailbox stays where the GPU lacks them, and `--mailbox` takes it; `--fifo` keeps plain FIFO. At exit
+`SCENE keys to screen` gives the time from reading the keys to the picture on screen. Hidden at 3840x2054 with
+`--present-wait --cap 0`: Release 59 fps, frame p95 18.0 ms, keys to screen p50 16.5 p99 18.1; Debug 60 fps, p95 18.0,
+keys to screen p50 16.5 p99 18.1, where Debug in plain FIFO had fallen to 53 fps with p95 49 ms.
 
 ## Known problems
 

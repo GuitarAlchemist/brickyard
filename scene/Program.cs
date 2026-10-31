@@ -7,8 +7,10 @@
 //
 // --demo plays idle, listening, thinking, speaking, a compaction, each expression, the caption of a sentence let pass
 // and the pairing card in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
-// waits for vsync unless --immediate: shown, through Mailbox when the GPU offers it, at twice the refresh of the
-// window's screen unless --cap says otherwise, and through FIFO with --fifo or when hidden; --cap N limits it to N frames a second, 60 by
+// waits for vsync unless --immediate: shown, through FIFO with each frame waiting for the last to be on screen
+// (VK_KHR_present_wait; --present-wait hidden too), else through Mailbox when the GPU offers it (--mailbox), at twice
+// the refresh of the window's screen unless --cap says otherwise, and through plain FIFO with --fifo or when hidden;
+// --cap N limits it to N frames a second, 60 by
 // default when hidden (nothing paces a hidden window), so that it never takes the GPU from a live view beside it.
 // --size WxH sizes the window, to measure a hidden one at a live one's size. Esc closes it, as does --seconds.
 // --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws. --view N starts
@@ -465,10 +467,23 @@ internal static unsafe class Stage
 
         var priority = 1.0f;
         var queueInfo = new VkDeviceQueueCreateInfo { QueueFamilyIndex = family, QueueCount = 1, QueuePriorities = &priority };
+        // The screen's pace (VK_KHR_present_id and VK_KHR_present_wait), when the GPU offers it: a frame can wait for the
+        // last one to be on screen.
+        var presentWaitFeature = new VkPhysicalDevicePresentWaitFeaturesKHR();
+        var presentIdFeature = new VkPhysicalDevicePresentIdFeaturesKHR { Next = &presentWaitFeature };
+        var canWait = DeviceExtensions(physical) is var offered && offered.Contains("VK_KHR_present_id") && offered.Contains("VK_KHR_present_wait");
+        if (canWait)
+        {
+            var asked = new VkPhysicalDeviceFeatures2 { Next = &presentIdFeature };
+            physical.GetFeatures2(ref asked);
+            canWait = presentIdFeature.PresentId && presentWaitFeature.PresentWait;
+        }
+
         var device = physical.CreateDevice(new Device.CreateInfo
         {
-            Extensions = ["VK_KHR_swapchain"],
+            Extensions = canWait ? ["VK_KHR_swapchain", "VK_KHR_present_id", "VK_KHR_present_wait"] : ["VK_KHR_swapchain"],
             QueueCreateInfos = new ReadOnlySpan<VkDeviceQueueCreateInfo>(&queueInfo, 1),
+            Next = canWait ? &presentIdFeature : null,
         });
         var queue = device.GetQueue(family, 0);
 
@@ -489,6 +504,7 @@ internal static unsafe class Stage
         Span<VkPresentModeKHR> modes = stackalloc VkPresentModeKHR[modeCount];
         physical.GetSurfacePresentModesKHR_Write(surface, modes);
         var presentMode = VkPresentModeKHR.FifoKHR;
+        var paceByScreen = vsync && canWait && !args.Contains("--fifo") && !args.Contains("--mailbox") && (!hidden || args.Contains("--present-wait"));
         if (!vsync)
         {
             foreach (var wanted in new[] { VkPresentModeKHR.ImmediateKHR, VkPresentModeKHR.MailboxKHR })
@@ -499,12 +515,19 @@ internal static unsafe class Stage
                 }
             }
         }
+        else if (paceByScreen)
+        {
+            // Shown, FIFO at the screen's own pace: each frame waits for the last one to be on screen before it reads the
+            // keys and the mouse, so a move shows at the next refresh and every refresh shows a new picture, an even step.
+            // Mailbox below drew at twice the refresh against the screen's clock, and the picture it showed was by turns
+            // fresh and 8 ms old: the user saw it jerk. --present-wait does it hidden too, for measuring.
+        }
         else if (!hidden && !args.Contains("--fifo") && modes.Contains(VkPresentModeKHR.MailboxKHR))
         {
             // Shown, Mailbox when offered: no tearing, and the screen takes the newest picture instead of FIFO's queue
             // of them, so a move shows a refresh or two sooner; paced at twice the refresh of the screen the window is
             // on (the loop looks again every 2 s, as the window is placed or moved): at the refresh itself the pacing
-            // drifts against the screen's and now and then a picture shows twice. --fifo keeps FIFO.
+            // drifts against the screen's and now and then a picture shows twice. --fifo keeps FIFO, --mailbox takes this.
             presentMode = VkPresentModeKHR.MailboxKHR;
             if (Option(args, "--cap") is null)
             {
@@ -1473,7 +1496,7 @@ internal static unsafe class Stage
             }
         });
 
-        Console.WriteLine($"SCENE present mode {presentMode}, {images.Length} swapchain images, {extent.Width}x{extent.Height}{(cap > 0 ? $", capped at {cap} fps" : "")}");
+        Console.WriteLine($"SCENE present mode {presentMode}, {images.Length} swapchain images, {extent.Width}x{extent.Height}{(cap > 0 ? $", capped at {cap} fps" : "")}{(paceByScreen ? ", each frame after the last is on screen" : "")}");
         if (cap > 0 && OperatingSystem.IsWindows())
         {
             _ = TimeBeginPeriod(1); // 1 ms sleeps, so the cap paces frames without spinning the whole time
@@ -1487,6 +1510,10 @@ internal static unsafe class Stage
         var nextFrame = 0.0;
         var lastPresent = 0.0;
         var frameTimes = new List<double>(100_000);
+        var screenTimes = new List<double>(100_000); // paceByScreen: from reading the keys to the picture on screen, ms
+        long presentCount = 0; // the presents' ids, rising across swapchains
+        nint waitFor = 0; // the last frame presented, which the next waits for on screen; 0 for none
+        var waitForInput = 0.0; // when that frame read the keys
         var frame = 0;
         var shot = 0;
         var last = clock.Elapsed.TotalSeconds;
@@ -1499,7 +1526,30 @@ internal static unsafe class Stage
             // The GPU done with this slot's last frame before the keys and the mouse are read, not after: the picture
             // then shows the input it was drawn from without a frame's wait in between.
             device.WaitForFences([fences[frame % FramesInFlight]], true, -1);
+            if (waitFor != 0)
+            {
+                // The last frame on screen before the keys and the mouse are read (paceByScreen); a tenth of a second
+                // at most, should the screen stop answering.
+                VkResult onScreen;
+                try
+                {
+                    onScreen = device.WaitForPresentKHR(swapchain, waitFor, 100_000_000);
+                }
+                catch (VkResultError e)
+                {
+                    onScreen = e.Result;
+                }
+
+                if (onScreen == VkResult.Success)
+                {
+                    screenTimes.Add((clock.Elapsed.TotalSeconds - waitForInput) * 1000.0);
+                }
+
+                waitFor = 0;
+            }
+
             Glfw.PollEvents();
+            var inputAt = clock.Elapsed.TotalSeconds;
             placement.Apply(window, tray);
             var now = clock.Elapsed.TotalSeconds;
             if (paceToScreen && now >= screenSeen + 2.0)
@@ -2160,6 +2210,8 @@ internal static unsafe class Stage
                 ],
                 fences[slot]);
             var presentIndex = imageIndex;
+            var presentId = (nint)(++presentCount);
+            var presentIdInfo = new VkPresentIdKHR { SwapchainCount = 1, PresentIds = &presentId };
             var presentSwapchain = swapchain; // Build reassigns swapchain, whose address cannot be taken
             try
             {
@@ -2170,6 +2222,7 @@ internal static unsafe class Stage
                     SwapchainCount = 1,
                     Swapchains = &presentSwapchain,
                     ImageIndices = &presentIndex,
+                    Next = paceByScreen ? &presentIdInfo : null,
                 });
             }
             catch (VkResultError e) when (e.Result == VkResult.ErrorOutOfDateKHR)
@@ -2180,6 +2233,11 @@ internal static unsafe class Stage
             if (result is VkResult.ErrorOutOfDateKHR or VkResult.SuboptimalKHR)
             {
                 stale = true;
+            }
+            else if (paceByScreen && result == VkResult.Success)
+            {
+                waitFor = presentId;
+                waitForInput = inputAt;
             }
 
             var presented = clock.Elapsed.TotalSeconds;
@@ -2350,6 +2408,13 @@ internal static unsafe class Stage
         frameTimes.Sort();
         double P(double q) => frameTimes.Count == 0 ? double.NaN : frameTimes[Math.Min(frameTimes.Count - 1, (int)(q * frameTimes.Count))];
         Console.WriteLine($"SCENE frames {frame} in {loopSeconds:F2} s ({frame / loopSeconds:F0} fps); frame ms p50 {P(0.5):F3} p95 {P(0.95):F3} p99 {P(0.99):F3} max {(frameTimes.Count > 0 ? frameTimes[^1] : double.NaN):F3}");
+        if (screenTimes.Count > 0)
+        {
+            screenTimes.Sort();
+            double Q(double q) => screenTimes[Math.Min(screenTimes.Count - 1, (int)(q * screenTimes.Count))];
+            Console.WriteLine($"SCENE keys to screen ms p50 {Q(0.5):F3} p95 {Q(0.95):F3} p99 {Q(0.99):F3} max {screenTimes[^1]:F3} over {screenTimes.Count} frames");
+        }
+
         Console.WriteLine($"SCENE CPU {cpu.TotalSeconds:F2} s over {loopSeconds:F2} s ({100 * cpu.TotalSeconds / loopSeconds / Environment.ProcessorCount:F1} % of {Environment.ProcessorCount} logical CPUs), peak working set {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024)} MB");
         Console.WriteLine($"SCENE closed by {reason} after {clock.Elapsed.TotalSeconds:F2} s");
         if (reason is "window closed" or "Esc")
@@ -2397,6 +2462,22 @@ internal static unsafe class Stage
     }
 
     // The value after the option name, if both are there.
+    // The device extensions the GPU offers.
+    private static HashSet<string> DeviceExtensions(PhysicalDevice physical)
+    {
+        var count = physical.EnumerateDeviceExtensionProperties_Count(default);
+        var properties = new VkExtensionProperties[count];
+        physical.EnumerateDeviceExtensionProperties_Write(default, properties);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in properties)
+        {
+            var copy = property;
+            names.Add(Marshal.PtrToStringUTF8((nint)copy.ExtensionName) ?? "");
+        }
+
+        return names;
+    }
+
     private static string? Option(string[] args, string name)
     {
         var at = Array.IndexOf(args, name);
