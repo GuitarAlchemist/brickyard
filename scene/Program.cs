@@ -1593,18 +1593,21 @@ internal static unsafe class Stage
         var clears = stackalloc VkClearValue[2];
         var cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
         var loopStart = clock.Elapsed;
-        // While the window is dragged or resized, Windows keeps PollEvents in its own loop until the button is let go; the
-        // window's callbacks then draw the frames, so the hall goes on moving instead of freezing (a frame of 2744 ms on
-        // 2026-10-31, as the window came back from maximised).
+        // While a hand holds the window's title bar or border, Windows keeps PollEvents in its own loop until it lets go,
+        // moving or not (a frame of 2744 ms on 2026-10-31, as the window came back from maximised; 1.5 s of a 1.5 s hold in
+        // --modal-drill). A timer's ticks and the window's move, size and refresh callbacks, all called from inside that
+        // loop, then draw the frames, once the pump has held the loop for a frame's time, so the hall goes on moving.
         var polling = false; // inside PollEvents
-        var drawingAside = false; // a callback's frame, which draws no other
+        var drawingAside = false; // a frame drawn from inside the pump, which draws no other
         var pumpedFrom = 0.0; // when the event pump started, or a frame drawn inside it ended
+        var drawnAside = 0;
         void DrawAside()
         {
-            if (polling && !drawingAside)
+            if (polling && !drawingAside && clock.Elapsed.TotalSeconds - pumpedFrom >= 0.015)
             {
                 drawingAside = true;
-                Guard("a frame while the window moves", () => Frame(false));
+                drawnAside++;
+                Guard("a frame while the window is held", () => Frame(false));
                 pumpedFrom = clock.Elapsed.TotalSeconds; // the pump's rest belongs to the next frame
                 drawingAside = false;
             }
@@ -1613,8 +1616,14 @@ internal static unsafe class Stage
         window.OnPosition += (_, _) => DrawAside();
         window.OnSize += (_, _) => DrawAside();
         window.OnRefresh += _ => DrawAside();
+        using var pumpTimer = new PumpTimer(OperatingSystem.IsWindows() ? ModalDrill.Own() : 0, 10, DrawAside);
         while (!window.ShouldClose && Frame(true))
         {
+        }
+
+        if (drawnAside > 0)
+        {
+            Console.WriteLine($"SCENE frames drawn while the window was held: {drawnAside}");
         }
 
         // One frame, its keys and mouse read when poll; false when the loop ends.

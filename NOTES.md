@@ -929,6 +929,13 @@ those loops, a 7 ms rebuild and no slow frame. Windows runs those loops inside t
 still as long as the hand holds. Dragging a maximised window by its title bar restores it (here to 1280x720) and holds
 that loop until let go, which matches the live line; the live log had no split to show it was that gesture.
 
+The hall now goes on moving in those loops: while the pump is held a frame's time (15 ms), a timer's ticks (`PumpTimer`,
+10 ms, which Windows calls from inside the modal loop) and the window's move, size and refresh callbacks draw a frame
+(`Frame(false)`), and each frame's split counts only the pump's time since the frame before it. The move and size
+callbacks alone were not enough: a hand held still, as the drill's, sends none. The drill again, hidden: no slow frame,
+120 frames drawn during the two holds, max 47 ms (1565 ms before); a run without the drill, none drawn aside, p95
+17 ms. Not yet tried by hand on the live window.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
