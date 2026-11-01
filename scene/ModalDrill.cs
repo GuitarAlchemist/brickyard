@@ -57,8 +57,8 @@ internal static class ModalDrill
         PostMessageW(hwnd, WmKeyUp, key, unchecked((nint)0xC0000001));
     }
 
-    // The GLFW window of this process (its class is GLFW30).
-    private static nint Own()
+    // The GLFW window of this process (its class is GLFW30), for the drill and for PumpTimer.
+    internal static nint Own()
     {
         nint found = 0;
         var pid = (uint)Environment.ProcessId;

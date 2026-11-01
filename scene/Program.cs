@@ -1596,8 +1596,8 @@ internal static unsafe class Stage
         var screenSeen = double.NegativeInfinity; // when paceToScreen last read the window's screen
         var nextFrame = 0.0;
         var lastPresent = 0.0;
-        var frameTimes = new List<double>(100_000);
-        var screenTimes = new List<double>(100_000); // paceByScreen: from reading the keys to the picture on screen, ms
+        var frameTimes = new FrameStats();
+        var screenTimes = new FrameStats(); // paceByScreen: from reading the keys to the picture on screen, ms
         long presentCount = 0; // the presents' ids, rising across swapchains
         nint waitFor = 0; // the last frame presented, which the next waits for on screen; 0 for none
         var waitForInput = 0.0; // when that frame read the keys
@@ -1608,7 +1608,43 @@ internal static unsafe class Stage
         var clears = stackalloc VkClearValue[2];
         var cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
         var loopStart = clock.Elapsed;
-        while (!window.ShouldClose)
+        // While a hand holds the window's title bar or border, Windows keeps PollEvents in its own loop until it lets go,
+        // moving or not (a frame of 2744 ms on 2026-10-31, as the window came back from maximised; 1.5 s of a 1.5 s hold in
+        // --modal-drill). A timer's ticks and the window's move, size and refresh callbacks, all called from inside that
+        // loop, then draw the frames, once the pump has held the loop for a frame's time, so the hall goes on moving.
+        var polling = false; // inside PollEvents
+        var drawingAside = false; // a frame drawn from inside the pump, which draws no other
+        var pumpedFrom = 0.0; // when the event pump started, or a frame drawn inside it ended
+        var heldFrom = 0.0; // when the event pump started, or a frame drawn inside it started: the frames' pace
+        var drawnAside = 0;
+        void DrawAside()
+        {
+            if (polling && !drawingAside && clock.Elapsed.TotalSeconds - heldFrom >= 0.015)
+            {
+                drawingAside = true;
+                drawnAside++;
+                heldFrom = clock.Elapsed.TotalSeconds;
+                Guard("a frame while the window is held", () => Frame(false));
+                pumpedFrom = clock.Elapsed.TotalSeconds; // the pump's rest belongs to the next frame
+                drawingAside = false;
+            }
+        }
+
+        window.OnPosition += (_, _) => DrawAside();
+        window.OnSize += (_, _) => DrawAside();
+        window.OnRefresh += _ => DrawAside();
+        using var pumpTimer = new PumpTimer(OperatingSystem.IsWindows() ? ModalDrill.Own() : 0, 10, DrawAside);
+        while (!window.ShouldClose && Frame(true))
+        {
+        }
+
+        if (drawnAside > 0)
+        {
+            Console.WriteLine($"SCENE frames drawn while the window was held: {drawnAside}");
+        }
+
+        // One frame, its keys and mouse read when poll; false when the loop ends.
+        bool Frame(bool poll)
         {
             // The GPU done with this slot's last frame before the keys and the mouse are read, not after: the picture
             // then shows the input it was drawn from without a frame's wait in between.
@@ -1635,11 +1671,20 @@ internal static unsafe class Stage
                 waitFor = 0;
             }
 
-            var pumping = clock.Elapsed.TotalSeconds;
-            Glfw.PollEvents();
+            if (poll)
+            {
+                pumpedFrom = heldFrom = clock.Elapsed.TotalSeconds;
+                polling = true;
+                Glfw.PollEvents();
+                polling = false;
+            }
+
             var inputAt = clock.Elapsed.TotalSeconds;
-            gap.Pumped(inputAt - pumping);
-            placement.Apply(window, tray);
+            gap.Pumped(inputAt - pumpedFrom); // a frame drawn aside counts the pump's time since the last one
+            if (poll)
+            {
+                placement.Apply(window, tray); // a minimise or a move asked for waits until the hand lets go
+            }
             var now = filmDir is null ? clock.Elapsed.TotalSeconds : frame / (double)FilmFps; // a film's time is its frames'
             if (paceToScreen && now >= screenSeen + 2.0)
             {
@@ -1656,7 +1701,7 @@ internal static unsafe class Stage
             if (now >= limit)
             {
                 reason = "time limit";
-                break;
+                return false;
             }
 
             var dt = (float)(now - last);
@@ -1753,14 +1798,14 @@ internal static unsafe class Stage
                 else if (!cabinet.Playing)
                 {
                     reason = "film: the game did not start";
-                    break;
+                    return false;
                 }
             }
 
             if (arcadeFilm is { Done: true })
             {
                 reason = "film done";
-                break;
+                return false;
             }
 
             if (!splashing && wheelAtStart)
@@ -1854,7 +1899,7 @@ internal static unsafe class Stage
                 var sleeping = clock.Elapsed.TotalSeconds;
                 Thread.Sleep(50);
                 gap.Slept(clock.Elapsed.TotalSeconds - sleeping);
-                continue;
+                return true;
             }
 
             if (stale)
@@ -1866,13 +1911,13 @@ internal static unsafe class Stage
                 {
                     Thread.Sleep(50);
                     gap.Rebuilt(rebuilding.Elapsed.TotalSeconds);
-                    continue;
+                    return true;
                 }
 
                 stale = false;
                 gap.Rebuilt(rebuilding.Elapsed.TotalSeconds);
                 Console.WriteLine($"SCENE swapchain rebuilt at {extent.Width}x{extent.Height} in {rebuilding.Elapsed.TotalMilliseconds:F0} ms");
-                continue; // the projection follows the new size
+                return true; // the projection follows the new size
             }
 
             var carding = Stopwatch.StartNew();
@@ -2079,7 +2124,7 @@ internal static unsafe class Stage
             if (result == VkResult.ErrorOutOfDateKHR)
             {
                 stale = true;
-                continue;
+                return true;
             }
 
             *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye);
@@ -2517,6 +2562,8 @@ internal static unsafe class Stage
                     Thread.SpinWait(20);
                 }
             }
+
+            return true;
         }
 
         var loopSeconds = (clock.Elapsed - loopStart).TotalSeconds;
@@ -2649,14 +2696,12 @@ internal static unsafe class Stage
         window.Dispose();
         Glfw.Terminate();
 
-        frameTimes.Sort();
-        double P(double q) => frameTimes.Count == 0 ? double.NaN : frameTimes[Math.Min(frameTimes.Count - 1, (int)(q * frameTimes.Count))];
-        Console.WriteLine($"SCENE frames {frame} in {loopSeconds:F2} s ({frame / loopSeconds:F0} fps); frame ms p50 {P(0.5):F3} p95 {P(0.95):F3} p99 {P(0.99):F3} max {(frameTimes.Count > 0 ? frameTimes[^1] : double.NaN):F3}");
+        double P(double q) => frameTimes.Percentile(q);
+        Console.WriteLine($"SCENE frames {frame} in {loopSeconds:F2} s ({frame / loopSeconds:F0} fps); frame ms p50 {P(0.5):F3} p95 {P(0.95):F3} p99 {P(0.99):F3} max {frameTimes.Max:F3}");
         if (screenTimes.Count > 0)
         {
-            screenTimes.Sort();
-            double Q(double q) => screenTimes[Math.Min(screenTimes.Count - 1, (int)(q * screenTimes.Count))];
-            Console.WriteLine($"SCENE keys to screen ms p50 {Q(0.5):F3} p95 {Q(0.95):F3} p99 {Q(0.99):F3} max {screenTimes[^1]:F3} over {screenTimes.Count} frames");
+            double Q(double q) => screenTimes.Percentile(q);
+            Console.WriteLine($"SCENE keys to screen ms p50 {Q(0.5):F3} p95 {Q(0.95):F3} p99 {Q(0.99):F3} max {screenTimes.Max:F3} over {screenTimes.Count} frames");
         }
 
         Console.WriteLine($"SCENE CPU {cpu.TotalSeconds:F2} s over {loopSeconds:F2} s ({100 * cpu.TotalSeconds / loopSeconds / Environment.ProcessorCount:F1} % of {Environment.ProcessorCount} logical CPUs), peak working set {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024)} MB");
