@@ -26,6 +26,7 @@ internal sealed class ScriptScreen : IDisposable
     private ScriptAudio? audio; // opened by the script's first sound or voice, on its thread
     private ScriptSpeech? speech;
     private readonly bool stepped;
+    private readonly bool muted; // a robot's game in the hall: its sound mixed and dropped, its voice timed, not spoken
     private Engine? engine;
     private double steppedTime;
     private long pulled; // stepped: the samples mixed so far
@@ -48,9 +49,10 @@ internal sealed class ScriptScreen : IDisposable
         public byte[] Pixels = new byte[Math.Max(0, width * height * 4)];
     }
 
-    private ScriptScreen(int width, int height, string? storagePath, bool stepped)
+    private ScriptScreen(int width, int height, string? storagePath, bool stepped, bool muted)
     {
         this.stepped = stepped;
+        this.muted = muted;
         Width = width;
         Height = height;
         received = new byte[width * height * 4];
@@ -60,16 +62,17 @@ internal sealed class ScriptScreen : IDisposable
     }
 
     // Fetches url, runs its inline script with the canvas selector names (#id), width by height, as the screen. A pilot,
-    // a script of ours run after the page's in its scope, may play it by keys; stepped, Step drives its frames.
-    public static ScriptScreen Start(string url, string? storagePath, string selector, int width, int height, TimeSpan wait, string? pilot = null, bool stepped = false)
+    // a script of ours run after the page's in its scope, may play it by keys; stepped, Step drives its frames; muted, it
+    // runs on its own thread without a sound.
+    public static ScriptScreen Start(string url, string? storagePath, string selector, int width, int height, TimeSpan wait, string? pilot = null, bool stepped = false, bool muted = false)
     {
         using var http = new HttpClient { Timeout = wait };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("DeltaArcade/1.0");
-        return Run(http.GetStringAsync(url).GetAwaiter().GetResult(), storagePath, selector, width, height, wait, pilot, stepped);
+        return Run(http.GetStringAsync(url).GetAwaiter().GetResult(), storagePath, selector, width, height, wait, pilot, stepped, muted);
     }
 
     // The same with the page in hand; without a storage path, its local storage lasts as long as it does.
-    public static ScriptScreen Run(string page, string? storagePath, string selector, int width, int height, TimeSpan wait, string? pilot = null, bool stepped = false)
+    public static ScriptScreen Run(string page, string? storagePath, string selector, int width, int height, TimeSpan wait, string? pilot = null, bool stepped = false, bool muted = false)
     {
         var scripts = Regex.Matches(page, @"<script(?:\s[^>]*)?>([\s\S]*?)</script>", RegexOptions.IgnoreCase)
             .Select(m => m.Groups[1].Value).Where(s => s.Trim().Length > 0).ToArray();
@@ -78,8 +81,13 @@ internal sealed class ScriptScreen : IDisposable
             throw new InvalidDataException("The page has no inline script.");
         }
 
-        var screen = new ScriptScreen(width, height, storagePath, stepped);
+        var screen = new ScriptScreen(width, height, storagePath, stepped, muted && !stepped);
         var script = string.Join("\n;\n", scripts);
+        if (screen.muted)
+        {
+            screen.audio = new ScriptAudio(offline: true); // its clock follows the loop's, its samples are dropped
+        }
+
         if (stepped)
         {
             screen.audio = new ScriptAudio(offline: true); // its clock starts with the page's
@@ -271,6 +279,17 @@ internal sealed class ScriptScreen : IDisposable
         var next = 0.0;
         while (!stopping && Tick(clock.Elapsed.TotalMilliseconds))
         {
+            if (muted)
+            {
+                // The sound's clock kept with the page's, its samples mixed and dropped.
+                var due = (long)Math.Round(clock.Elapsed.TotalMilliseconds * ScriptAudio.SampleRate / 1000.0) - pulled;
+                if (due > 0)
+                {
+                    audio!.Pull((int)due);
+                    pulled += due;
+                }
+            }
+
             // Sixty frames a second, as a screen's animation frames.
             next += 1000.0 / 60.0;
             var late = clock.Elapsed.TotalMilliseconds - next;
@@ -451,9 +470,11 @@ internal sealed class ScriptScreen : IDisposable
         });
         // Stepped, for a film, the page's sound is mixed offline as its frames go (Step), on their clock, and each
         // utterance is spoken into a file and mixed in; it ends when its samples have played.
+        // Muted, an utterance is not spoken: it ends after the time a voice would take to say it.
         var saying = new List<(int Id, int Voice, double End)>();
-        Function("audioNow", _ => (audio ??= new(stepped)).Now);
-        Function("sound", args => (audio ??= new(stepped)).Play(S(args, 0), args.Length > 1 ? args[1] : JsValue.Undefined));
+        var offline = stepped || muted;
+        Function("audioNow", _ => (audio ??= new(offline)).Now);
+        Function("sound", args => (audio ??= new(offline)).Play(S(args, 0), args.Length > 1 ? args[1] : JsValue.Undefined));
         Function("soundStop", args =>
         {
             audio?.Stop((int)N(args, 0), N(args, 1));
@@ -462,6 +483,13 @@ internal sealed class ScriptScreen : IDisposable
         Function("voices", _ => (speech ??= new()).Voices is { } known ? known : JsValue.Null);
         Function("speak", args =>
         {
+            if (muted)
+            {
+                var now = audio?.Now ?? 0;
+                saying.Add(((int)N(args, 0), -1, now + (0.07 * S(args, 1).Length / Math.Max(0.5, N(args, 3)))));
+                return JsValue.Undefined;
+            }
+
             if (stepped)
             {
                 var samples = (speech ??= new()).Render(S(args, 1), S(args, 2), N(args, 3), N(args, 4), N(args, 5));
@@ -475,7 +503,7 @@ internal sealed class ScriptScreen : IDisposable
         });
         Function("spoken", _ =>
         {
-            if (!stepped)
+            if (!offline)
             {
                 return speech?.Ended() ?? "";
             }
@@ -490,7 +518,7 @@ internal sealed class ScriptScreen : IDisposable
             var now = audio?.Now ?? 0;
             for (var i = 0; i < saying.Count; i++)
             {
-                audio?.Stop(saying[i].Voice, now);
+                if (saying[i].Voice >= 0) audio?.Stop(saying[i].Voice, now);
                 saying[i] = saying[i] with { End = now };
             }
 

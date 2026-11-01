@@ -929,6 +929,27 @@ those loops, a 7 ms rebuild and no slow frame. Windows runs those loops inside t
 still as long as the hand holds. Dragging a maximised window by its title bar restores it (here to 1280x720) and holds
 that loop until let go, which matches the live line; the live log had no split to show it was that gesture.
 
+## The hall on its own: a tour, a robot at the cabinet, the game on the wall (2026-10-31)
+
+The user asked that, while nobody moves the camera, the hall chain GTA's camera flights by itself (the camera's manner,
+not the film's bars), that a small robot play PARSEC at the cabinet and get far in it, and that the game be shown on the
+brick wall whenever someone, a person or the robot, plays.
+
+- `IdleTour`: 25 s after the last key, click, wheel or look, the camera flies by `FreeCamera.GoTo` from stop to stop,
+  8 s at each after the landing: Delta, the whole hall, the robot over its shoulder at the cabinet and the wall, those
+  two while anyone plays, Gaia, the agents' office. Any key, click or wheel gives the camera back where it is; the shelf,
+  a card, the wheel, a cinematic or a person's game hold it off. Under `--reduced-motion` the flights are cuts.
+- The robot (`ArcadePlayer`, taken out of `ArcadeFilm`, which still uses it) takes the cabinet after the splash while
+  nobody plays: `ArcadeStage.PlayRobot` runs the game live on its own thread, muted (`ScriptScreen`'s `muted`: the sound
+  mixed offline and dropped, the voice timed and not spoken, so nothing reaches the microphone), without the person's
+  stored scores, played by `ParsecPilot.js`. A click on the cabinet steps the robot down for the person's game; Esc
+  gives the cabinet back to the robot 15 s later. A game that ends or cannot start is tried again a minute later.
+- The wall: a 1.04 by 0.78 m screen in a dark frame between the clocks of Ottawa and Paris, fed the cabinet's frames,
+  shown only while a game runs, whole in the view in front of Delta.
+- `--no-tour` and `--no-arcade-robot` leave them out, as `--demo` and films do; `--tour-after S` starts the tour sooner;
+  `--peek DIR` with `--seconds` saves a PNG every 4 s of a plain run. Hidden, 1280x720, `--tour-after 6`, 52 s: the
+  robot's game ran from the splash, the tour went Delta, hall, cabinet, wall, Gaia; frame p95 17 ms, max 33 ms.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

@@ -318,7 +318,8 @@ internal static unsafe class Stage
             return 2;
         }
 
-        var shotsDir = Option(args, "--shots");
+        var peekDir = Option(args, "--peek"); // --peek DIR with --seconds: a PNG every 4 s of a plain run, the hall's own life (the tour, the robot)
+        var shotsDir = Option(args, "--shots") ?? peekDir;
         // --film-arcade DIR: the arcade's film (ArcadeFilm), 45 s at 30 frames a second of the scene's own time, encoded
         // by FFmpeg into DIR\parsec-film.mp4, without the window's buttons; --hidden and --size make it apart from the
         // live window. Each frame is drawn and read back however long it takes.
@@ -349,11 +350,12 @@ internal static unsafe class Stage
         const double S = Splash.Seconds;
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
         if (moduleClickTest) shots = [(S + 1.0, "module-v1"), (S + 4.0, "module-v11")];
+        if (peekDir is not null && double.IsFinite(limit)) shots = [.. Enumerable.Range(0, (int)Math.Max(0, (limit - S - 2.5) / 4)).Select(i => (S + 2 + (4.0 * i), $"peek-{i:D2}"))];
         var moduleTestClicked = false;
         var moduleTestCollected = false;
         var moduleTestGcChecked = false;
         var moduleTestSawSwap = false;
-        if (shots.Length > 0 && !demo)
+        if (shots.Length > 0 && !demo && peekDir is null)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
             return 2;
@@ -803,7 +805,7 @@ internal static unsafe class Stage
         var hall = new Mesh(device, physical, hallVertices);
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
-        var crate = filmDir is null ? null : new Mesh(device, physical, ArcadeFilm.CrateMesh()); // the film's robot stands on it
+        var crate = new Mesh(device, physical, ArcadePlayer.CrateMesh()); // the small robot at the cabinet stands on it
         var moduleRoot = Option(args, "--module-dir") ?? Path.Combine(AppContext.BaseDirectory, "modules", "gaia");
         // The author's last validation, kept on this machine across rebuilds; an isolated --module-dir keeps its own.
         var validatedStore = Option(args, "--module-dir") is null
@@ -1176,6 +1178,17 @@ internal static unsafe class Stage
         var arcadeFilm = filmDir is null ? null : new ArcadeFilm(camera, film);
         var filmAsked = false; // the film's game asked of the cabinet
         var hud = filmDir is null; // the window's buttons and cards; a film shows none
+        // While nobody moves the camera it tours the hall (IdleTour), and while nobody plays the small robot plays PARSEC
+        // at the cabinet, silent, the wall showing its game; --no-tour and --no-arcade-robot leave them out, as films and
+        // shots do. --tour-after S starts the tour after S seconds instead of 25, for captures.
+        var tour = new IdleTour(camera, () => cabinet.Broadcasting)
+        {
+            After = double.TryParse(Option(args, "--tour-after"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var tourAfter) ? tourAfter : IdleTour.IdleSeconds,
+        };
+        var touring = filmDir is null && !demo && !args.Contains("--no-tour");
+        var robotPlays = filmDir is null && !demo && !args.Contains("--no-arcade-robot");
+        var robotAt = 0.0; // when the robot may next take the cabinet
+        var arcadePlayer = new ArcadePlayer();
         var filmAtStart = args.Contains("--cinematic") || Option(args, "--cinematic-from") is not null;
         var filmFrom = int.TryParse(Option(args, "--cinematic-from"), out var filmFromValue) ? filmFromValue : 0; // a later shot first, for captures
         var filmView = int.TryParse(Option(args, "--film-view"), out var filmViewValue) ? filmViewValue : 0; // a view's shot alone, as Shift and its key, for captures
@@ -1223,12 +1236,17 @@ internal static unsafe class Stage
         window.OnKey += (w, key, scancode, action, mods) => Guard("a key", () =>
         {
             var at = clock.Elapsed.TotalSeconds;
+            tour.Touch(at);
             if (cabinet.Playing)
             {
-                // At the cabinet every key is the game's, but Esc, which leaves it.
+                // At the cabinet every key is the game's, but Esc, which leaves it; the robot comes back a while after.
                 if (key == GlfwKey.Escape)
                 {
-                    if (action == GlfwKeyAction.Press) cabinet.Leave();
+                    if (action == GlfwKeyAction.Press)
+                    {
+                        cabinet.Leave();
+                        robotAt = at + 15.0;
+                    }
                 }
                 else if (action != GlfwKeyAction.Repeat)
                 {
@@ -1450,6 +1468,7 @@ internal static unsafe class Stage
         window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
             ctrlAlone = false;
+            tour.Touch(clock.Elapsed.TotalSeconds);
             if (film.Playing)
             {
                 if (action == GlfwButtonAction.Press)
@@ -1547,6 +1566,7 @@ internal static unsafe class Stage
         });
         window.OnScroll += (w, offset) => Guard("a scroll", () =>
         {
+            tour.Touch(clock.Elapsed.TotalSeconds);
             if (shelf.Open && offset.Y != 0)
             {
                 shelf.Move(clock.Elapsed.TotalSeconds, offset.Y > 0 ? -1 : 1);
@@ -1680,10 +1700,23 @@ internal static unsafe class Stage
             shelf.Tick(now);
             robot.Presenting = shelf.Open;
             robot.Pose(time, sceneDt, moment, worlds, glows);
-            if (arcadeFilm is not null)
+            // The small robot takes the cabinet while nobody plays; its game, silent, is on the wall too.
+            if (robotPlays && !splashing && now >= robotAt && !cabinet.Playing && !cabinet.RobotPlaying)
+            {
+                robotAt = now + 60.0; // again a minute after its game ends or could not start
+                cabinet.PlayRobot(ArcadeFilm.Pilot());
+            }
+
+            var playerShown = arcadeFilm is not null || cabinet.RobotPlaying;
+            if (playerShown)
             {
                 player.Pose(time, sceneDt, moment, playerWorlds, playerGlows);
-                arcadeFilm.Pose(sceneDt, cabinet.Holding, playerWorlds);
+                arcadePlayer.Pose(sceneDt, cabinet.Holding, playerWorlds);
+            }
+
+            if (touring)
+            {
+                tour.Advance(now, !splashing && !shelf.Open && !film.Playing && !cabinet.Playing && !wheel.Open && !pairingShown && !invitationShown && !notesShown);
             }
 
             // Captures: the cinematic, a view's shot, the wheel or a view's flight, once the splash is over.
@@ -1775,6 +1808,10 @@ internal static unsafe class Stage
                 else if (!film.Playing)
                 {
                     camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
+                    if (cx != lookFrom.X || cy != lookFrom.Y)
+                    {
+                        tour.Touch(now);
+                    }
                 }
 
                 lookFrom = (cx, cy);
@@ -2091,7 +2128,7 @@ internal static unsafe class Stage
                     Draw(cb, layout, parts[i], new Push(worlds[i], viewProj, glows[i]));
                 }
 
-                if (arcadeFilm is not null && crate is not null)
+                if (playerShown)
                 {
                     Draw(cb, layout, crate, new Push(SN.Matrix4x4.Identity, viewProj, default));
                     for (var i = 0; i < parts.Length; i++)
@@ -2538,7 +2575,7 @@ internal static unsafe class Stage
             part.Dispose();
         }
 
-        crate?.Dispose();
+        crate.Dispose();
 
         gaiaModule?.Dispose();
         officeFeed?.Dispose();

@@ -31,6 +31,19 @@ internal static class ArcadeCabinet
     public static SN.Matrix4x4 ScreenFrame { get; } = Face(new(0.16f, 1.02f), new(0.04f, 1.52f));
     public static SN.Matrix4x4 MarqueeFrame { get; } = Face(new(0.16f, 1.58f), new(0.12f, 1.84f));
 
+    // The game's broadcast on the bricks, between the clocks of Ottawa and Paris, lit while anyone plays: a 4:3 screen
+    // in a dark frame, in the hall's own frame.
+    public const float WallWidth = 1.04f, WallHeight = 0.78f; // whole in the view in front of Delta, over its head
+    public const float WallMiddle = 1.96f;
+    public static SN.Matrix4x4 WallFrame { get; } = SN.Matrix4x4.CreateTranslation(0f, WallMiddle, WallClocks.Wall + 0.032f);
+
+    public static Vertex[] WallBezel()
+    {
+        var bezel = new List<Vertex>();
+        Boxes.Add(bezel, new(0f, WallMiddle, WallClocks.Wall + 0.015f), new(WallWidth + 0.09f, WallHeight + 0.09f, 0.03f), new Finish(new(0.03f, 0.03f, 0.035f), Material.Matte));
+        return [.. bezel];
+    }
+
     // Where the player stands, and the screen's middle, in the hall.
     public static (SN.Vector3 Eye, SN.Vector3 Target) View { get; } =
         (SN.Vector3.Transform(new(0f, 1.56f, 1.55f), World), SN.Vector3.Transform(new(0f, 1.4f, 0.10f), World));
@@ -312,8 +325,8 @@ internal sealed class ArcadeStage : IDisposable
 {
     public const string Url = "https://parsec.games.bu.app/";
     private const ulong Live = 1UL << 40; // the game's frames are shown as revisions above this, the cards' below
-    private readonly Mesh body, trim, lights;
-    private readonly ScreenGpuRenderer screen, marquee;
+    private readonly Mesh body, trim, lights, bezel;
+    private readonly ScreenGpuRenderer screen, marquee, wall;
     private readonly string url, storage;
     private readonly byte[] live = new byte[256 * 192 * 4];
     private readonly HashSet<string> held = [];
@@ -325,6 +338,7 @@ internal sealed class ArcadeStage : IDisposable
     private string? failure;
     private string? pilot; // a film's: the game stepped by the scene's time, silent, and played by this script
     private double owed; // a stepped game's time not yet stepped, ms
+    private bool robot; // the game starting or running is the small robot's (ArcadePlayer), silent, played by the pilot
 
     // surface makes a screen: its pixels, width, height and revision, its rectangle in its frame, and its scanlines.
     public ArcadeStage(Func<Vertex[], Mesh> mesh, Func<byte[], int, int, ulong, SN.Vector4, float, ScreenGpuRenderer> surface, string? url = null)
@@ -339,10 +353,19 @@ internal sealed class ArcadeStage : IDisposable
         screen = surface(Card(), 256, 192, card!.Value.Revision, new(-w, h, w, -h), 0.35f);
         var (mw, mh) = (ArcadeCabinet.MarqueeWidth / 2f, ArcadeCabinet.MarqueeHeight / 2f);
         marquee = surface(ArcadeCabinet.Marquee(), 336, 144, 1, new(-mw, mh, mw, -mh), 0f);
+        var (ww, wh) = (ArcadeCabinet.WallWidth / 2f, ArcadeCabinet.WallHeight / 2f);
+        wall = surface(card!.Value.Pixels, 256, 192, card.Value.Revision, new(-ww, wh, ww, -wh), 0.25f);
+        bezel = mesh(ArcadeCabinet.WallBezel());
     }
 
-    // The keys go to the game from the click that starts it until Esc.
-    public bool Playing => starting is not null || game is not null;
+    // The keys go to the game from the click that starts it until Esc: a person's game, or a film's.
+    public bool Playing => (starting is not null || game is not null) && !robot;
+
+    // The small robot plays, or its game is starting: it stands at the cabinet.
+    public bool RobotPlaying => (starting is not null || game is not null) && robot;
+
+    // Someone plays, a person or the robot: the wall shows the game.
+    public bool Broadcasting => game is not null;
 
     public ulong Frames => game?.Frames ?? 0;
 
@@ -365,6 +388,7 @@ internal sealed class ArcadeStage : IDisposable
         return x >= left && x <= right && y >= top && y <= bottom;
     }
 
+    // A person's game, or a film's: the robot, if it plays, steps down first.
     public void Play()
     {
         if (Playing)
@@ -372,10 +396,30 @@ internal sealed class ArcadeStage : IDisposable
             return;
         }
 
+        if (robot)
+        {
+            Leave();
+        }
+
         failure = null;
         var (address, file, script) = (url, storage, pilot);
         starting = Task.Run(() => ScriptScreen.Start(address, script is null ? file : null, "#cv", 256, 192, TimeSpan.FromSeconds(25), script, stepped: script is not null));
         Console.WriteLine($"ARCADE parsec fetching {url}");
+    }
+
+    // The small robot's game while nobody plays: live, silent, without the person's stored scores, played by the pilot.
+    public void PlayRobot(string pilotScript)
+    {
+        if (starting is not null || game is not null)
+        {
+            return;
+        }
+
+        robot = true;
+        failure = null;
+        var address = url;
+        starting = Task.Run(() => ScriptScreen.Start(address, null, "#cv", 256, 192, TimeSpan.FromSeconds(25), pilotScript, muted: true));
+        Console.WriteLine($"ARCADE parsec fetching {url} for the robot");
     }
 
     // For a film (ArcadeFilm): the game played by a pilot script, its frames stepped by the scene's time.
@@ -402,8 +446,10 @@ internal sealed class ArcadeStage : IDisposable
         (game, starting) = (null, null);
         if (running is not null)
         {
-            Console.WriteLine($"ARCADE parsec left after {running.Frames} frames");
+            Console.WriteLine($"ARCADE parsec left after {running.Frames} frames{(robot ? " by the robot" : "")}");
         }
+
+        robot = false;
 
         _ = Task.Run(() =>
         {
@@ -438,7 +484,7 @@ internal sealed class ArcadeStage : IDisposable
             {
                 game = done.Result;
                 game.ClickOn("#start"); // the page's own start, which also lets it play sound
-                Console.WriteLine("ARCADE parsec running, its script in Jint");
+                Console.WriteLine($"ARCADE parsec running, its script in Jint{(robot ? ", played by the robot" : "")}");
             }
             else
             {
@@ -474,6 +520,7 @@ internal sealed class ArcadeStage : IDisposable
             {
                 seen = revision;
                 screen.UploadAfterFence(commands, slot, live, Live + revision);
+                wall.UploadAfterFence(commands, slot, live, Live + revision);
                 return;
             }
         }
@@ -487,6 +534,10 @@ internal sealed class ArcadeStage : IDisposable
         draw(body, ArcadeCabinet.World, default);
         draw(trim, ArcadeCabinet.World, new(0.1f, 0.55f, 1f, 0.35f));
         draw(lights, ArcadeCabinet.World, new(1f, 0.25f, 0.05f, 0.9f));
+        if (Broadcasting)
+        {
+            draw(bezel, SN.Matrix4x4.Identity, default);
+        }
     }
 
     // After every mesh: the screens bind their own pipeline.
@@ -494,6 +545,10 @@ internal sealed class ArcadeStage : IDisposable
     {
         screen.Draw(commands, slot, ArcadeCabinet.ScreenFrame * ArcadeCabinet.World * viewProjection);
         marquee.Draw(commands, slot, ArcadeCabinet.MarqueeFrame * ArcadeCabinet.World * viewProjection);
+        if (Broadcasting)
+        {
+            wall.Draw(commands, slot, ArcadeCabinet.WallFrame * viewProjection);
+        }
     }
 
     public void Dispose()
@@ -502,6 +557,8 @@ internal sealed class ArcadeStage : IDisposable
         game?.Dispose();
         screen.Dispose();
         marquee.Dispose();
+        wall.Dispose();
+        bezel.Dispose();
         body.Dispose();
         trim.Dispose();
         lights.Dispose();
