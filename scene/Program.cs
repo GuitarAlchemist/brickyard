@@ -12,7 +12,7 @@
 // the refresh of the window's screen unless --cap says otherwise, and through plain FIFO with --fifo or when hidden;
 // --cap N limits it to N frames a second, 60 by
 // default when hidden (nothing paces a hidden window), so that it never takes the GPU from a live view beside it.
-// --size WxH sizes the window, to measure a hidden one at a live one's size. Esc closes it, as does --seconds.
+// --size WxH sizes the window, to measure a hidden one at a live one's size. --seconds closes it.
 // --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws. --view N starts
 // the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks). H hides or shows
 // the wall clocks of Ottawa and Paris (WallClocks), shown by default.
@@ -970,7 +970,7 @@ internal static unsafe class Stage
         window.OnRefresh += _ => gap.Saw(clock.Elapsed.TotalSeconds, "asked to redraw");
 
         // The shelf (Shelf.cs): M opens it (Tab, which did too, is the camera's wheel); the arrows, Enter, Backspace and the mouse move through it; Esc
-        // closes it, and the window when it is closed. Its card is drawn again when what it shows changes.
+        // closes it, never the window. Its card is drawn again when what it shows changes.
         var shelf = new Shelf();
         var cardSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         var uploadPool = device.CreateCommandPool(new VkCommandPoolCreateInfo { QueueFamilyIndex = family }, null);
@@ -1361,16 +1361,11 @@ internal static unsafe class Stage
             {
                 shelf.Show(at);
             }
-            else if (key == GlfwKey.Escape && (pairingShown || invitationShown || notesShown))
+            else if (key == GlfwKey.Escape) // never the window: one Esc too many, leaving the game or the shelf, closed it
             {
                 pairingShown = false;
                 invitationShown = false;
                 notesShown = false;
-            }
-            else if (key == GlfwKey.Escape)
-            {
-                reason = "Esc";
-                w.ShouldClose = true;
             }
         });
 
@@ -2629,7 +2624,7 @@ internal static unsafe class Stage
 
         Console.WriteLine($"SCENE CPU {cpu.TotalSeconds:F2} s over {loopSeconds:F2} s ({100 * cpu.TotalSeconds / loopSeconds / Environment.ProcessorCount:F1} % of {Environment.ProcessorCount} logical CPUs), peak working set {Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024)} MB");
         Console.WriteLine($"SCENE closed by {reason} after {clock.Elapsed.TotalSeconds:F2} s");
-        if (reason is "window closed" or "Esc")
+        if (reason is "window closed")
         {
             Closed(port, true);
         }
