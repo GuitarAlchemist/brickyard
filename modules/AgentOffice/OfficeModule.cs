@@ -4,18 +4,24 @@ using static Delta.SceneModules.Widgets;
 
 namespace Delta.AgentOffice;
 
-// The agents' office: a station per Claude Code session on the robot's left, each a desk with a small Delta at it.
-// Everything is widgets nested in widgets: a station holds a desk, a name plate and a robot fixed to the desk's seat;
-// the robot a torso, with the head and the arms fixed to its anchors; the torso Mac minis, each with its status light.
-// The robot types while its session works, lights a red beacon while the session waits for an answer and jumps, arms
-// up, when the session has finished: poses on the instances' paths, no mesh rebuilt. In flat quality it is a plain
-// board instead, a lamp and a name per session.
+// The agents' office: a station per Claude Code session on the robot's left, each a desk with a small Delta at it, in
+// an enclosure per wmux workspace (one more for the sessions outside wmux) that carries the workspace's name.
+// Everything is widgets nested in widgets: a station holds a desk, a name plate, a robot fixed to the desk's seat and
+// the selection's mark above it; the robot a torso, with the head and the arms fixed to its anchors; the torso Mac
+// minis, each with its status light. The robot types while its session works, lights a red beacon while the session
+// waits for an answer and jumps, arms up, when the session has finished; a stopped session's robot bows its head, dark,
+// a stale one glows amber and an unknown one grey: poses on the instances' paths, no mesh rebuilt, as is the mark over
+// the selected robot. Paths come from the sessions' and workspaces' IDs and places from the sessions' starts, so a
+// refresh in any order keeps both. Two sessions with one name show their IDs' first letters. In flat quality it is a
+// plain board instead, a lamp and a name per session.
 //
 // This assembly is loaded into a collectible context and replaced while the scene runs, so it keeps no static state.
 public sealed class OfficeModule : IOfficeModule
 {
     private const float Pitch = 0.38f; // between stations at full size, in metres
     private const float Left = -1.45f, Right = -0.69f, Front = 0.3f;
+    private const float RowDepth = 0.45f, Deep = 2.9f; // a row of stations; the depth the enclosures may take from the front
+    private const float PenFront = 0.17f, PenBack = 0.3f, PenSide = 0.2f, PenGap = 0.1f; // an enclosure's margins round its stations
     private const double DoneHop = 2.4; // seconds of jumping after a session finishes
 
     private OfficeState state = new("en", false, []);
@@ -37,7 +43,7 @@ public sealed class OfficeModule : IOfficeModule
         var layout = new HashCode();
         layout.Add(next.Language);
         layout.Add(next.Flat);
-        foreach (var s in next.Sessions) { layout.Add(s.Id); layout.Add(s.Name); }
+        foreach (var s in next.Sessions) { layout.Add(s.Id); layout.Add(s.Name); layout.Add(s.WorkspaceId); layout.Add(s.WorkspaceTitle); layout.Add(s.Started); }
         state = next;
         Revision = layout.ToHashCode();
     }
@@ -46,7 +52,8 @@ public sealed class OfficeModule : IOfficeModule
     {
         Ready();
         var roots = new List<UsePiece>();
-        var sessions = state.Sessions;
+        var sessions = Ordered(state.Sessions);
+        var shown = Shown(sessions);
         if (state.Flat)
         {
             var top = 0.48f + Math.Max(1, sessions.Count) * 0.085f;
@@ -57,7 +64,7 @@ public sealed class OfficeModule : IOfficeModule
             }));
             if (sessions.Count == 0) roots.Add(new("none", Row, Place(-1.05f, top - 0.135f, -0.288f), Name(Say("No session", "Aucune session"))));
             for (var i = 0; i < sessions.Count; i++)
-                roots.Add(new(Key(sessions[i]), Row, Place(-1.05f, top - 0.135f - 0.085f * i, -0.288f), Name(sessions[i].Name), sessions[i].Id));
+                roots.Add(new(Key(sessions[i]), Row, Place(-1.05f, top - 0.135f - 0.085f * i, -0.288f), Name(shown[sessions[i].Id]), sessions[i].Id));
             return new(Library, roots);
         }
 
@@ -67,14 +74,33 @@ public sealed class OfficeModule : IOfficeModule
             return new(Library, roots);
         }
 
-        // Rows going back from the robot's front, three across, closer and smaller when there are many.
+        // An enclosure per workspace, going back from the robot's front in the order the workspaces' first sessions
+        // started, the sessions outside wmux last; in each, rows of three across, closer and smaller when there are many.
+        var groups = sessions.GroupBy(s => s.WorkspaceId).OrderBy(g => g.Key.Length == 0 ? 1 : 0).ThenBy(g => g.Min(s => s.Started)).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
         var columns = Math.Max(3, (int)Math.Ceiling(sessions.Count / 4.0));
         var pitch = Math.Min(Pitch, (Right - Left) / (columns - 1));
-        var scale = pitch / Pitch;
-        for (var i = 0; i < sessions.Count; i++)
+        var rows = groups.Sum(g => (g.Count() + columns - 1) / columns);
+        var scale = Math.Min(pitch / Pitch, Deep / ((rows * RowDepth) + (groups.Count * (PenFront + PenBack + PenGap))));
+        pitch = Pitch * scale;
+        var front = Front + (PenFront * scale);
+        foreach (var group in groups)
         {
-            var at = Place(Right - (i % columns) * pitch, 0f, Front - (i / columns) * 0.45f * scale, scale: scale);
-            roots.Add(new(Key(sessions[i]), Station, at, Name(sessions[i].Name), sessions[i].Id));
+            var members = group.ToList();
+            var first = front - (PenFront * scale);
+            for (var i = 0; i < members.Count; i++)
+            {
+                var at = Place(Right - (i % columns) * pitch, 0f, first - (i / columns) * RowDepth * scale, scale: scale);
+                roots.Add(new(Key(members[i]), Station, at, Name(shown[members[i].Id]), members[i].Id));
+            }
+
+            var back = first - (((members.Count - 1) / columns) * RowDepth * scale) - (PenBack * scale);
+            var width = ((columns - 1) * pitch) + (2 * PenSide * scale);
+            var title = group.Key.Length == 0 ? Say("Outside wmux", "Hors de wmux") : group.First().WorkspaceTitle is { Length: > 0 } t ? t : group.Key;
+            roots.Add(new(PenKey(group.Key), Pen, Place(Right - ((columns - 1) * pitch / 2), 0f, (front + back) / 2), new Dictionary<string, WidgetValue>
+            {
+                ["w"] = width, ["d"] = front - back, ["title"] = title.Length > 40 ? title[..39] + "…" : title,
+            }));
+            front = back - (PenGap * scale);
         }
 
         return new(Library, roots);
@@ -89,6 +115,10 @@ public sealed class OfficeModule : IOfficeModule
             var age = (float)Math.Max(0, seconds - s.Since);
             var glow = Glow(s.Activity);
             var blink = (int)(t * 2.5f) % 2 == 0;
+            // The selection's mark, a small light turning slowly above the selected robot alone.
+            poses[Key(s) + "/mark"] = s.Id == state.Selected
+                ? new(SN.Matrix4x4.CreateRotationY(t * 1.6f) * SN.Matrix4x4.CreateTranslation(0f, 0.012f * MathF.Sin(t * 2.4f), 0f), new(1f, 0.85f, 0.35f, 1.4f))
+                : SceneModules.Pose.Off;
             if (state.Flat)
             {
                 var lamp = s.Activity switch
@@ -117,7 +147,11 @@ public sealed class OfficeModule : IOfficeModule
                 foreach (var side in new[] { "l", "r" }) poses[$"{torso}/m{k}{side}/led"] = SceneModules.Pose.Lit(glow * lit);
             }
 
-            if (s.Activity == OfficeActivity.Done && age < DoneHop)
+            if (s.Activity == OfficeActivity.Stopped)
+            {
+                poses[head] = new(SN.Matrix4x4.CreateRotationX(0.45f)); // its head bowed, its lights low
+            }
+            else if (s.Activity == OfficeActivity.Done && age < DoneHop)
             {
                 poses[robot] = SceneModules.Pose.Moved(new(0f, 0.07f * MathF.Abs(MathF.Sin(MathF.PI * age / 0.4f)), 0f));
                 foreach (var arm in new[] { "/arm-l", "/arm-r" }) poses[torso + arm] = new(SN.Matrix4x4.CreateRotationX(-2.6f));
@@ -146,6 +180,26 @@ public sealed class OfficeModule : IOfficeModule
     // A path name from the session's ID, the same whatever order the sessions come in.
     private static string Key(OfficeSession s) => "s-" + new string(s.Id.Where(char.IsAsciiLetterOrDigit).Take(12).ToArray());
 
+    // An enclosure's path name from its workspace's ID, which wmux keeps when the workspace is renamed.
+    private static string PenKey(string workspace) => workspace.Length == 0 ? "w-outside" : "w-" + new string(workspace.Where(char.IsAsciiLetterOrDigit).Take(12).ToArray());
+
+    // The sessions by start, then ID: the order desks keep, whatever order the host sends.
+    private static List<OfficeSession> Ordered(IReadOnlyList<OfficeSession> sessions) =>
+        [.. sessions.OrderBy(s => s.Started).ThenBy(s => s.Id, StringComparer.Ordinal)];
+
+    // Each session's shown name: two with one name add their IDs' first four letters, kept within a plate's 18.
+    private static Dictionary<string, string> Shown(IReadOnlyList<OfficeSession> sessions)
+    {
+        var shared = sessions.GroupBy(s => s.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+        return sessions.ToDictionary(s => s.Id, s =>
+        {
+            if (!shared.Contains(s.Name)) return s.Name;
+            var tag = " ·" + new string(s.Id.Where(char.IsAsciiLetterOrDigit).Take(4).ToArray());
+            var name = s.Name.Length > 18 - tag.Length ? s.Name[..(17 - tag.Length)] + "…" : s.Name;
+            return name + tag;
+        });
+    }
+
     private static Dictionary<string, WidgetValue> Name(string name) =>
         new() { ["name"] = name.Length > 40 ? name[..39] + "…" : name.Length == 0 ? "?" : name };
 
@@ -154,13 +208,16 @@ public sealed class OfficeModule : IOfficeModule
         OfficeActivity.Working => new(0.35f, 0.8f, 1f, 1f),
         OfficeActivity.Waiting => new(1f, 0.12f, 0.08f, 1f),
         OfficeActivity.Done => new(0.35f, 1f, 0.5f, 1f),
+        OfficeActivity.Stopped => new(0.1f, 0.1f, 0.11f, 0.3f),
+        OfficeActivity.Stale => new(1f, 0.55f, 0.1f, 0.6f),
+        OfficeActivity.Unknown => new(0.45f, 0.48f, 0.55f, 0.45f),
         _ => new(0.12f, 0.22f, 0.28f, 0.5f),
     };
 
     // The library. Sizes in metres; materials: 0 matte, 1 enamel, 2 aluminium, 3 steel, 4 rubber, 5 glass.
     private static readonly WidgetId Block = new("block", 1), MacMini = new("mac-mini", 1), Torso = new("torso", 1), Head = new("head", 1),
         Arm = new("arm", 1), Robot = new("robot", 1), Desk = new("desk", 1), Plate = new("plate", 1), Station = new("station", 1),
-        Board = new("board", 1), Row = new("row", 1);
+        Board = new("board", 1), Row = new("row", 1), Mark = new("mark", 1), Pen = new("pen", 1);
 
     private static readonly SN.Vector3 Steel = new(0.16f, 0.165f, 0.17f), Dark = new(0.04f, 0.04f, 0.045f), Aluminium = new(0.6f, 0.61f, 0.64f),
         Shell = new(0.7f, 0.68f, 0.62f), Orange = new(0.78f, 0.27f, 0.05f), Visor = new(0.012f, 0.014f, 0.018f), Wood = new(0.36f, 0.24f, 0.14f),
@@ -248,13 +305,37 @@ public sealed class OfficeModule : IOfficeModule
                 return new([new TextPiece(shown, SN.Vector3.Zero, Math.Min(0.26f, 0.0165f * shown.Length), Pale)]);
             }),
 
-        // A session's station: the desk, its name, and a robot on the desk's seat.
+        // A session's station: the desk, its name, a robot on the desk's seat, and the selection's mark above its head.
         new(Station, [Text("name")],
             a => new([
                 new UsePiece("desk", Desk, SN.Matrix4x4.Identity),
                 new UsePiece("plate", Plate, Place(0f, 0.2f, 0.0905f), new Dictionary<string, WidgetValue> { ["name"] = a.Text("name") }),
                 new AttachPiece("desk", "seat", new("robot", Robot, SN.Matrix4x4.Identity)),
+                new UsePiece("mark", Mark, Place(0f, 0.76f, -0.14f)),
             ])),
+
+        // The selection's mark: a small gem of two lit blocks turned on each other, hidden until posed.
+        new(Mark, [],
+            _ => new([
+                new UsePiece("a", Block, SN.Matrix4x4.CreateRotationX(MathF.PI / 4) * SN.Matrix4x4.CreateRotationZ(MathF.PI / 4), Size(0.03f, 0.03f, 0.03f)),
+                new UsePiece("b", Block, SN.Matrix4x4.CreateRotationY(MathF.PI / 4), Size(0.026f, 0.026f, 0.026f)),
+            ])),
+
+        // A workspace's enclosure, centred: low rails round w by d metres, a dark floor, and its name on a sign at the front.
+        new(Pen, [new("w", 1.0, 0.2, 4), new("d", 1.0, 0.2, 4), Text("title")],
+            a =>
+            {
+                var (w, d) = ((float)a.Number("w"), (float)a.Number("d"));
+                var title = a.Text("title");
+                var wide = Math.Min(0.42f, 0.02f * title.Length);
+                return new([
+                    B(0, 0.002f, 0, w, 0.004f, d, new(0.07f, 0.075f, 0.08f), 0),
+                    B(0, 0.02f, d / 2, w, 0.03f, 0.016f, Steel, 3), B(0, 0.02f, -d / 2, w, 0.03f, 0.016f, Steel, 3),
+                    B(-w / 2, 0.02f, 0, 0.016f, 0.03f, d, Steel, 3), B(w / 2, 0.02f, 0, 0.016f, 0.03f, d, Steel, 3),
+                    B(-w / 2 + 0.05f + wide / 2, 0.075f, d / 2 + 0.012f, wide + 0.04f, 0.07f, 0.008f, Dark, 3),
+                    new TextPiece(title, new(-w / 2 + 0.05f + wide / 2, 0.075f, d / 2 + 0.018f), wide, Pale),
+                ]);
+            }),
 
         // The flat view's board on its post, the rows in front of it.
         new(Board, [new("rows", 1.0, 1, 64), Text("title")],
@@ -271,7 +352,7 @@ public sealed class OfficeModule : IOfficeModule
                 var shown = name.Length > 28 ? name[..27] + "…" : name;
                 var w = Math.Min(0.7f, 0.022f * shown.Length);
                 return new([Lamp("lamp", new(-0.39f, 0f, 0.003f), 0.05f, 0.05f, 0.01f), new TextPiece(shown, new(-0.34f + w / 2, 0f, 0f), w, Pale),
-                    B(0, 0, -0.004f, 0.88f, 0.08f, 0.002f, Dark, 0)]);
+                    B(0, 0, -0.004f, 0.88f, 0.08f, 0.002f, Dark, 0), Lamp("mark", new(0.41f, 0f, 0.003f), 0.025f, 0.025f, 0.01f)]);
             }),
     ];
 }

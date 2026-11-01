@@ -1,17 +1,22 @@
 using Delta.SceneModules;
 
-// The agents' office's reading: the running Claude Code sessions (Shelf.RunningSessions) and what wmux says each one is
-// doing (Shelf.Wmux.AgentStates, one call), read every three seconds on the thread pool, a read skipped while the last
-// one still waits for wmux, never written. The shelf reads only when opened, so this is the only periodic wmux call. The render thread
-// turns the latest reading into activities (OfficeActivities). Under --demo it reads nothing: six made-up sessions go
-// through every activity in turn, for the screenshots.
+// The agents' office's reading: the Claude Code sessions' files (Shelf.SessionFiles, a crash's leftovers included) and
+// what wmux says each one is doing (Shelf.Wmux.AgentStates, one call), read every three seconds on the thread pool, a
+// read skipped while the last one still waits for wmux, never written; every tenth read also asks wmux each pane's
+// workspace (Shelf.Wmux.SurfaceWorkspaces). The shelf reads only when opened, so these are the only periodic wmux
+// calls. OfficeActivities merges them and turns the latest reading into activities on the render thread. Under --demo
+// it reads nothing: six made-up sessions in two workspaces go through every activity in turn, for the screenshots.
 internal sealed class OfficeFeed(bool demo) : IDisposable
 {
     private const int Every = 3000;
     private static readonly string[] DemoNames = ["gaia-2a", "ix", "delta-live", "tars-21", "music-90", "brickyard-remote"];
     private static readonly string[] DemoStates = ["working", "idle", "blocked", "working", "idle", "idle"];
 
-    private readonly Dictionary<string, (OfficeActivity Activity, double Since)> last = new(StringComparer.Ordinal);
+    private const int WorkspacesEvery = 10; // reads between two of the workspaces, which take a wmux call each
+
+    private readonly Dictionary<string, OfficeSession> last = new(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, (string Id, string Title)> workspaces = new Dictionary<string, (string, string)>();
+    private int reads;
     private volatile IReadOnlyList<OfficeActivities.Seen>? reading;
     private IReadOnlyList<OfficeActivities.Seen>? used;
     private Timer? timer;
@@ -37,7 +42,8 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
             if (reading is null || step != demoStep)
             {
                 demoStep = step;
-                reading = [.. DemoNames.Select((name, i) => new OfficeActivities.Seen($"demo-{i:x2}-{name}", name, i, "idle", DemoStates[(step + i) % DemoStates.Length], ""))];
+                reading = [.. DemoNames.Select((name, i) => new OfficeActivities.Seen($"demo-{i:x2}-{name}", name, i, "idle", DemoStates[(step + i) % DemoStates.Length], "",
+                    WorkspaceId: i < 3 ? "demo-ws-1" : "demo-ws-2", WorkspaceTitle: i < 3 ? "gaia" : "brickyard"))];
             }
         }
 
@@ -80,11 +86,13 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
         try
         {
             var states = Shelf.Wmux.AgentStates();
-            reading = Shelf.RunningSessions().Select(s =>
+            if (reads++ % WorkspacesEvery == 0)
             {
-                var (surface, state) = states.TryGetValue(s.Id, out var w) ? w : ("", "");
-                return new OfficeActivities.Seen(s.Id, s.Name, s.Started, s.Status, state, surface);
-            }).ToList();
+                workspaces = Shelf.Wmux.SurfaceWorkspaces();
+            }
+
+            var files = Shelf.SessionFiles().Select(s => new OfficeActivities.SessionFile(s.Id, s.Name, s.Started, s.Status, s.Alive)).ToList();
+            reading = OfficeActivities.Merge(files, states, workspaces);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
         {

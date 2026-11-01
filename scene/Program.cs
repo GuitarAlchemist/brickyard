@@ -833,6 +833,7 @@ internal static unsafe class Stage
         WidgetModuleSession<Delta.SceneModules.IOfficeModule>? office = null;
         WidgetStage<Mesh>? officeStage = null;
         OfficeFeed? officeFeed = null;
+        var officeSelection = new OfficeSelection();
         SN.Matrix4x4? officeView = null; // the frame's camera for clicks; none during the splash
         int? officeLogged = null;
         var officeFailed = false; // set by the module's first exception, cleared when new code replaces it
@@ -1430,13 +1431,28 @@ internal static unsafe class Stage
             return true;
         }
 
-        // A click on a session's desk shows its pane in wmux; the module only names the session.
+        // A click on a session's robot selects it, the scene's alone, with no command; a second click soon after shows its
+        // pane in wmux; a click beside the desks lets the selection go and passes on. The module only names the session.
         bool TryOfficeClick(double x, double y)
         {
             if (shelf.Open || pairingShown || invitationShown || notesShown || officeFailed || officeStage is null || officeFeed is null || officeView is not { } view) return false;
-            if (WidgetPicking.Pick(officeStage.Hits, view, extent.Width, extent.Height, x, y) is not { } session) return false;
+            var now = clock.Elapsed.TotalSeconds;
+            if (WidgetPicking.Pick(officeStage.Hits, view, extent.Width, extent.Height, x, y) is not { } session)
+            {
+                if (officeSelection.Click(null, 0, now) == OfficeSelection.Outcome.Cleared) Console.WriteLine("WIDGETS agent-office selection cleared");
+                return false;
+            }
+
+            var started = officeFeed.Sessions.FirstOrDefault(s => s.Id == session)?.Started ?? 0;
+            var outcome = officeSelection.Click(session, started, now);
+            if (outcome != OfficeSelection.Outcome.Open)
+            {
+                Console.WriteLine($"WIDGETS agent-office {(outcome == OfficeSelection.Outcome.Selected ? "selected" : "let go of")} session {session}");
+                return true;
+            }
+
             var surface = officeFeed.Surface(session);
-            Console.WriteLine($"WIDGETS agent-office click on session {session}: {(surface is null ? "no wmux pane" : "showing its pane")}");
+            Console.WriteLine($"WIDGETS agent-office double click on session {session}: {(surface is null ? "no wmux pane" : "showing its pane")}");
             if (surface is not null)
             {
                 ThreadPool.QueueUserWorkItem(_ =>
@@ -2091,7 +2107,8 @@ internal static unsafe class Stage
                 try
                 {
                     officeFeed.Advance(now);
-                    office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions));
+                    if (officeSelection.Validate(officeFeed.Sessions)) Console.WriteLine("WIDGETS agent-office selection let go: its session went or runs again");
+                    office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions, officeSelection.Selected));
                     if (officeStage.Sync(office.Module)) Console.WriteLine($"WIDGETS agent-office tree: {officeStage.Instances} instances, {officeStage.Meshes} meshes; native mesh buffers live {Mesh.LiveCount}");
                     else if (officeStage.Problems.Count > 0 && officeLogged != officeStage.Revision)
                     {

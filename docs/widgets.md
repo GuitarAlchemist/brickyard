@@ -55,8 +55,14 @@ The model follows GA's Lego demo (ga-brutal, `Experiments/Brutal/Lego`, MIT). On
 
 ## The agents' office
 
-- **Stations:** one per running Claude Code session, on the robot's left (x from -1.45 to -0.69, rows from z = 0.3 going
-  back). Above 12 sessions the stations come closer and smaller.
+- **Stations:** one per Claude Code session, on the robot's left (x from -1.45 to -0.69, from z = 0.3 going back), in
+  an enclosure per wmux workspace that shows the workspace's title, and one more, "Outside wmux", for the sessions
+  without a pane. Enclosures go back in the order their first sessions started; stations come closer and smaller when
+  the rows and enclosures would not fit in 2.9 m. Paths come from IDs (`s-<12 letters of the session's ID>`,
+  `w-<12 letters of the workspace's ID>`, `w-outside`) and desks are ordered by start, so a refresh in another order or
+  a renamed workspace moves nothing. Two sessions with one name show their IDs' first four letters on their plates.
+- **What counts as a session:** a session file in Claude Code's sessions folder, or a pane wmux names with a Claude
+  session ID (provider `claude`) that has no file. A pane without one, or another provider's, is not a session.
 - **Activities:**
 
   | Activity | Source | What the robot does |
@@ -65,10 +71,18 @@ The model follows GA's Lego demo (ga-brutal, `Experiments/Brutal/Lego`, MIT). On
   | waiting | wmux `blocked` | a red beacon blinks on its head |
   | done | working, then no longer | it jumps, arms up, for 2.4 s, then shows green until 6 s |
   | idle | otherwise | dim |
+  | stopped | shown in this run, gone since (the latest 8 kept) | dark, its head bowed |
+  | stale | its file is there, its process is not | amber |
+  | unknown | neither its file nor wmux says what it does | grey |
 
-- **Data:** read every three seconds on the thread pool: `Shelf.RunningSessions()` and one `wmux agent-state` call
-  (`Shelf.Wmux.AgentStates`, about 0.6 s). A read is skipped while the last one still waits. Nothing is written.
-- **Click:** a click on a station calls `Shelf.Wmux.Focus(surface)` for that session.
+- **Data:** read every three seconds on the thread pool: `Shelf.SessionFiles()` and one `wmux agent-state` call
+  (`Shelf.Wmux.AgentStates`, about 0.6 s); every tenth read, the workspaces too (`Shelf.Wmux.SurfaceWorkspaces`, a
+  `list-workspaces` call and a `list-surfaces` call per workspace). A read is skipped while the last one still waits.
+  Nothing is written.
+- **Selection:** a click on a robot selects it (`OfficeSelection`): a small gem turns above its head, and nothing is
+  sent anywhere. A second click within 0.45 s shows its pane (`Shelf.Wmux.Focus(surface)`), the only click that leads
+  to a command; a later click on it, or a click beside the desks, lets it go. The selection follows its session while
+  it stops, and goes when the session runs again in another process (its start changes) or leaves the office.
 - **Flat quality:** a board on a post instead, a lamp and a name per session.
 - **`--demo`:** six made-up sessions go through every activity; nothing is read.
 
@@ -87,7 +101,10 @@ Rebuilding the module into the same `<dir>` while the scene runs reloads it.
 - expansion: fractal nesting, cycles, limits, arguments, anchors;
 - the stage: shared meshes, poses carried down the tree, hidden subtrees, inherited clicks, deferred release, refused
   trees, reset;
-- the activities;
+- the activities: what counts as a session (a mixed five-pane fixture), stale, unknown, stopped kept and bounded;
+- the selection: select, let go, double click, no command, a new process;
+- the office's layout: distinct plates for one name, enclosures with names, no overlap, places kept on refresh, the
+  selection's mark;
 - picking through the scene's camera;
 - the office: every path it poses exists in its tree, in 3D and flat, and 24 sessions fit;
 - hot reload: v0.1 to v0.2, the old context collected, a broken image refused.

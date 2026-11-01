@@ -959,6 +959,22 @@ brick wall whenever someone, a person or the robot, plays.
   `--peek DIR` with `--seconds` saves a PNG every 4 s of a plain run. Hidden, 1280x720, `--tour-after 6`, 52 s: the
   robot's game ran from the splash, the tour went Delta, hall, cabinet, wall, Gaia; frame p95 17 ms, max 33 ms.
 
+## The agents' office by workspace, and a selection (2026-10-31)
+
+Gaia's UX handoff (BRICKYARD-UX-HANDOFF-REFERENCE.md) asked for a first slice: one desk per session, never per pane;
+a stopped session kept in view; distinct names; desks grouped by workspace; a selection that stays in the scene. The
+contract grew in place: `OfficeActivity` gained Stopped, Stale and Unknown after Done, `OfficeSession` a workspace and a
+start, `OfficeState` the selected session, all with defaults so that the v0.1 test image still loads.
+
+- `OfficeActivities.Merge` reads the session files (dead processes included) with wmux's agent states and providers,
+  and the workspaces of their panes; `Derive` keeps each session as last shown and turns those that went into Stopped.
+- `OfficeSelection` holds the selection; Program.cs passes it in `OfficeState.Selected` and checks it each frame.
+- The module draws an enclosure per workspace and the selection's mark, both from poses and IDs.
+
+Checked: widget tests (seven mutations each fail them) and the scene's selftest. Not checked live: the office module
+was not reloaded in the running window. `SurfaceWorkspaces` costs a wmux call per workspace, about 5 s with nine
+workspaces, once every 30 s, during which the activities wait. Report: docs/office-ux-slice1-report.md.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
