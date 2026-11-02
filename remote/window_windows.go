@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -20,27 +21,39 @@ var (
 
 const processQueryLimitedInformation = 0x1000
 
+// search is the one search for a window under way, which the one callback reads: Go never frees a callback, and stops
+// the process after about 2000, while the capture looks for a closed window again and again.
+var search struct {
+	sync.Mutex
+	title, exe string
+	found      []uintptr
+}
+
+var enumWindow = syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+	if v, _, _ := procIsWindowVisible.Call(hwnd); v == 0 {
+		return 1
+	}
+	buf := make([]uint16, 256)
+	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if syscall.UTF16ToString(buf[:n]) != search.title {
+		return 1
+	}
+	var pid uint32
+	procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if strings.EqualFold(filepath.Base(imagePath(pid)), search.exe) {
+		search.found = append(search.found, hwnd)
+	}
+	return 1
+})
+
 // findWindow is the one visible top-level window titled exactly title whose process runs an executable named exe.
 // None, or more than one, is an error: the capture shows that window or nothing.
 func findWindow(title, exe string) (uintptr, error) {
-	var found []uintptr
-	cb := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
-		if v, _, _ := procIsWindowVisible.Call(hwnd); v == 0 {
-			return 1
-		}
-		buf := make([]uint16, 256)
-		n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-		if syscall.UTF16ToString(buf[:n]) != title {
-			return 1
-		}
-		var pid uint32
-		procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-		if strings.EqualFold(filepath.Base(imagePath(pid)), exe) {
-			found = append(found, hwnd)
-		}
-		return 1
-	})
-	procEnumWindows.Call(cb, 0)
+	search.Lock()
+	search.title, search.exe, search.found = title, exe, nil
+	procEnumWindows.Call(enumWindow, 0)
+	found := search.found
+	search.Unlock()
 	switch len(found) {
 	case 1:
 		return found[0], nil
