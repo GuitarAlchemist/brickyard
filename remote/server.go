@@ -52,6 +52,7 @@ type server struct {
 	guestAPI  *webrtc.API                     // WebRTC for guests, who are not on this network
 	book      *guestBook                      // their invitations and cookies
 	ice       func() ([]iceServer, error)     // the relay's addresses and credentials for one guest
+	window    func() error                    // nil while Delta's window is open, or why it is not
 	watching  chan int                        // the number of guests who watch, for announce; nil: nobody is told
 	pending   int                             // under mu: guests' offers being answered
 	guests    map[*webrtc.PeerConnection]bool // under mu: each guest's connection, true once connected
@@ -105,6 +106,10 @@ func newServerWith(home string, se webrtc.SettingEngine) (*server, error) {
 	if err != nil {
 		return nil, err
 	}
+	book, err := loadGuestBook(home)
+	if err != nil {
+		return nil, err
+	}
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
 	return &server{
 		pair:     p,
@@ -112,8 +117,9 @@ func newServerWith(home string, se webrtc.SettingEngine) (*server, error) {
 		video:    v,
 		now:      time.Now,
 		guestAPI: api,
-		book:     newGuestBook(),
+		book:     book,
 		ice:      func() ([]iceServer, error) { return nil, nil },
+		window:   func() error { return nil },
 		guests:   map[*webrtc.PeerConnection]bool{},
 		life:     renewEvery,
 		onPeer:   func(bool) {},

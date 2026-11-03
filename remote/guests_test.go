@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -271,9 +272,7 @@ func TestTwoGuestsWatchBesideTheDevice(t *testing.T) {
 	_, third := join(t, guests, invite(t, g, device))
 	cookies = append(cookies, third)
 	_, tbody := offer(t)
-	if resp := request(t, http.MethodPost, guests.URL+"/offer", tbody, third); resp.StatusCode != http.StatusConflict {
-		t.Errorf("a third guest: status %d, want 409", resp.StatusCode)
-	}
+	refused(t, "a third guest", request(t, http.MethodPost, guests.URL+"/offer", tbody, third), http.StatusConflict, "full")
 
 	deadline := time.After(10 * time.Second)
 	for seq := uint16(0); len(waiting) > 0; seq++ {
@@ -300,9 +299,115 @@ func TestTwoGuestsWatchBesideTheDevice(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	for _, c := range cookies {
-		if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, c); resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("a guest's cookie after the end: status %d, want 401", resp.StatusCode)
+		refused(t, "a guest's cookie after the end", request(t, http.MethodGet, guests.URL+"/ice", nil, c), http.StatusUnauthorized, "revoked")
+	}
+}
+
+// refused checks that resp is the gateway's answer, and a refusal with status for the reason why.
+func refused(t *testing.T, what string, resp *http.Response, status int, why string) {
+	t.Helper()
+	if resp.StatusCode != status || resp.Header.Get("X-Delta-Refusal") != why || resp.Header.Get("X-Delta-Gateway") != "1" {
+		t.Errorf("%s: status %d, reason %q, gateway %q; want %d, %q and the gateway's", what, resp.StatusCode,
+			resp.Header.Get("X-Delta-Refusal"), resp.Header.Get("X-Delta-Gateway"), status, why)
+	}
+}
+
+// A guest's page says why the guest cannot watch, and tries again by itself only for what passes: X-Delta-Refusal
+// tells a closed window from a time that is up and from an invitation the person who invited ended. Every answer of
+// the guests' entry says it is the gateway's, so that the page knows the tunnel's own answer while the gateway is away.
+func TestTheGuestsEntrySaysWhyAGuestCannotWatch(t *testing.T) {
+	g := newTestGateway(t, t.TempDir())
+	guests := withGuests(t, g)
+	_, device := g.pair(t, g.s.issueCode())
+	code := invite(t, g, device)
+	_, guest := join(t, guests, code)
+	_, body := offer(t)
+	for _, path := range []string{"/", "/guest.js", "/page.css"} {
+		if resp := request(t, http.MethodGet, guests.URL+path, nil, ""); resp.Header.Get("X-Delta-Gateway") != "1" {
+			t.Errorf("%s does not say it is the gateway's", path)
 		}
+	}
+
+	g.s.window = func() error { return errors.New(`no window "Delta" of scene.exe is open`) }
+	resp := request(t, http.MethodGet, guests.URL+"/ice", nil, guest)
+	refused(t, "/ice, the window closed", resp, http.StatusServiceUnavailable, "window")
+	if text, _ := io.ReadAll(resp.Body); strings.Contains(string(text), "scene.exe") {
+		t.Errorf("the guest learns what runs on this machine: %q", text)
+	}
+	refused(t, "/offer, the window closed", request(t, http.MethodPost, guests.URL+"/offer", body, guest), http.StatusServiceUnavailable, "window")
+	refused(t, "/ice, no cookie and the window closed", request(t, http.MethodGet, guests.URL+"/ice", nil, ""), http.StatusUnauthorized, "ended")
+
+	g.s.window = func() error { return nil }
+	g.s.ice = func() ([]iceServer, error) { return nil, errors.New("Cloudflare's TURN service is out of reach") }
+	refused(t, "/ice, the relay away", request(t, http.MethodGet, guests.URL+"/ice", nil, guest), http.StatusBadGateway, "relay")
+	g.s.ice = func() ([]iceServer, error) { return nil, nil }
+	if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, guest); resp.StatusCode != http.StatusOK || resp.Header.Get("X-Delta-Refusal") != "" {
+		t.Errorf("/ice, the window open: status %d, reason %q, want 200 and none", resp.StatusCode, resp.Header.Get("X-Delta-Refusal"))
+	}
+
+	if resp := g.do(t, "/guests/end", nil, device, g.ts.URL); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("ending the guests: status %d, want 204", resp.StatusCode)
+	}
+	refused(t, "the cookie of a guest ended", request(t, http.MethodGet, guests.URL+"/ice", nil, guest), http.StatusUnauthorized, "revoked")
+	resp, _ = join(t, guests, code)
+	refused(t, "the invitation ended", resp, http.StatusUnauthorized, "revoked")
+
+	g.now = g.now.Add(guestLife + time.Second)
+	refused(t, "the cookie of a guest ended, once its time would be up", request(t, http.MethodGet, guests.URL+"/ice", nil, guest), http.StatusUnauthorized, "ended")
+	resp, _ = join(t, guests, code)
+	refused(t, "the invitation ended, once its hour would be up", resp, http.StatusUnauthorized, "ended")
+}
+
+// The gateway that stops, or crashes as it did on 2026-10-31, comes back with its guests: the invitations still open
+// and the guests' cookies serve until their own time is up, the guests ended stay ended, and the guests file holds no
+// invitation or cookie anyone could present.
+func TestGuestsOutliveARestartOfTheGateway(t *testing.T) {
+	home := t.TempDir()
+	g := newTestGateway(t, home)
+	guests := withGuests(t, g)
+	_, device := g.pair(t, g.s.issueCode())
+	endedCode := invite(t, g, device)
+	_, ended := join(t, guests, endedCode)
+	if resp := g.do(t, "/guests/end", nil, device, g.ts.URL); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("ending the guests: status %d, want 204", resp.StatusCode)
+	}
+	code := invite(t, g, device)
+	_, guest := join(t, guests, code)
+
+	again := newTestGateway(t, home)
+	again.now = g.now.Add(time.Minute)
+	guests = withGuests(t, again)
+	if resp := request(t, http.MethodGet, guests.URL+"/ice", nil, guest); resp.StatusCode != http.StatusOK {
+		t.Errorf("a guest's cookie after a restart: status %d, want 200", resp.StatusCode)
+	}
+	if resp, cookie := join(t, guests, code); resp.StatusCode != http.StatusOK || cookie == "" {
+		t.Errorf("an invitation after a restart: status %d, want 200 and a cookie", resp.StatusCode)
+	}
+	refused(t, "a guest ended, after a restart", request(t, http.MethodGet, guests.URL+"/ice", nil, ended), http.StatusUnauthorized, "revoked")
+	resp, _ := join(t, guests, endedCode)
+	refused(t, "an invitation ended, after a restart", resp, http.StatusUnauthorized, "revoked")
+	again.now = g.now.Add(guestLife + time.Second)
+	refused(t, "a guest's cookie after a restart, once its time is up", request(t, http.MethodGet, guests.URL+"/ice", nil, guest), http.StatusUnauthorized, "ended")
+
+	raw, err := os.ReadFile(filepath.Join(home, "guests.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, presented := range []string{endedCode, code, strings.TrimPrefix(ended, guestCookie+"="), strings.TrimPrefix(guest, guestCookie+"=")} {
+		if strings.Contains(string(raw), presented) {
+			t.Error("the guests file holds an invitation or a cookie as a guest presents it")
+		}
+	}
+}
+
+// A guests file the gateway cannot read stops it at the start, rather than forgetting the guests ended.
+func TestAGuestsFileThatDoesNotParseStopsTheStart(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "guests.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newServer(home); err == nil {
+		t.Error("the gateway starts on a guests file that does not parse")
 	}
 }
 

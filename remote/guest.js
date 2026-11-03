@@ -16,6 +16,9 @@ const words = {
     used: 'Cette invitation a expiré : demande un nouveau lien.',
     noInvite: 'Pas d’invitation valable : demande un lien à la personne qui t’invite.',
     ended: 'Cette invitation est terminée.',
+    revoked: 'La personne qui t’invite a mis fin à l’invitation.',
+    window: 'La fenêtre de Delta est fermée : l’image revient dès qu’elle se rouvre.',
+    away: 'Delta ne répond pas pour l’instant : nouvel essai dans quelques secondes.',
     full: 'Deux invités regardent déjà : réessaie plus tard.',
     relay: 'Le relais vidéo ne répond pas : réessaie dans un moment.',
     refused: 'Refusé : ',
@@ -29,6 +32,9 @@ const words = {
     used: 'This invitation has expired: ask for a new link.',
     noInvite: 'No valid invitation: ask the person who invited you for a link.',
     ended: 'This invitation has ended.',
+    revoked: 'The person who invited you has ended the invitation.',
+    window: 'Delta’s window is closed: the picture comes back once it opens again.',
+    away: 'Delta is not answering right now: trying again in a few seconds.',
     full: 'Two guests are watching already: try again later.',
     relay: 'The video relay is not answering: try again in a moment.',
     refused: 'Refused: ',
@@ -44,6 +50,20 @@ function language(preferred) {
   return 'en';
 }
 
+// reason is the key of what the page says when it cannot watch, from the headers of the answer: none, or none of the
+// gateway's, while the gateway is away (stopped, or this device offline), else the gateway's X-Delta-Refusal. ended is
+// what to say when the guest's time or invitation is up, which depends on the request.
+function reason(headers, ended) {
+  if (!headers || headers.get('X-Delta-Gateway') !== '1') return 'away';
+  const why = { ended, revoked: 'revoked', window: 'window', full: 'full', relay: 'relay' };
+  return why[headers.get('X-Delta-Refusal')] || 'refused';
+}
+
+// again holds the reasons that pass by themselves, for which the page tries again every retryEvery; for the others,
+// the guest decides.
+const again = new Set(['away', 'window']);
+const retryEvery = 10000;
+
 function guest() {
   const lang = language(navigator.languages || [navigator.language]);
   const w = words[lang];
@@ -53,7 +73,20 @@ function guest() {
   const video = document.getElementById('scene');
   const sound = document.getElementById('sound');
   const say = (text) => { state.textContent = text; };
-  const refusal = (status, reasons) => new Error(reasons[status] || (w.refused + status));
+  // refused is the error for an answer r that does not let the guest watch, or for no answer at all.
+  const refused = (r, ended) => {
+    const key = reason(r && r.headers, ended);
+    const e = new Error(key === 'refused' ? w.refused + r.status : w[key]);
+    e.again = again.has(key);
+    return e;
+  };
+  // ask fetches from the gateway, and throws when the answer is not the gateway's.
+  const ask = async (url, init) => {
+    const r = await fetch(url, init).catch(() => null);
+    if (!r || r.headers.get('X-Delta-Gateway') !== '1') throw refused(r);
+    return r;
+  };
+  let retry = null;
   go.textContent = w.again;
   sound.textContent = w.soundOn;
   let ctx = null; // Delta's voice plays in it, once a touch has turned the sound on: browsers ask for one
@@ -90,21 +123,24 @@ function guest() {
   async function join() {
     const m = location.hash.match(/invite=([0-9a-f]{32})/);
     if (!m) return;
-    history.replaceState(null, '', location.pathname);
-    const r = await fetch('/join', {
+    const r = await ask('/join', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite: m[1] }),
     });
+    // The fragment leaves the address bar once the gateway has had it: while the gateway is away, the next try needs it.
+    history.replaceState(null, '', location.pathname);
+    if (r.headers.get('X-Delta-Refusal') === 'revoked') throw refused(r);
     // A guest who opened the link before holds a cookie still: the relay's addresses tell whether it is valid.
     return r.ok;
   }
 
   async function watch() {
+    clearTimeout(retry);
     go.hidden = true;
     say(w.connecting);
     try {
       const joined = await join();
-      const ice = await fetch('/ice');
-      if (!ice.ok) throw refusal(ice.status, { 401: joined === false ? w.used : w.noInvite, 502: w.relay });
+      const ice = await ask('/ice');
+      if (!ice.ok) throw refused(ice, joined === false ? 'used' : 'noInvite');
       const { iceServers } = await ice.json();
       const pc = new RTCPeerConnection({ iceServers });
       pc.addTransceiver('video', { direction: 'recvonly' });
@@ -117,24 +153,30 @@ function guest() {
           listen();
           sound.hidden = ctx !== null;
         }
-        if (pc.connectionState === 'failed') { say(w.lost); pc.close(); go.hidden = false; }
+        if (pc.connectionState === 'failed') {
+          say(w.lost);
+          pc.close();
+          go.hidden = false;
+          retry = setTimeout(watch, retryEvery); // the gateway may be coming back; the next try says if not
+        }
       };
       await pc.setLocalDescription(await pc.createOffer());
       await new Promise((done) => {
         if (pc.iceGatheringState === 'complete') return done();
         pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && done();
       });
-      const r = await fetch('/offer', {
+      const r = await ask('/offer', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pc.localDescription),
-      });
+      }).catch((e) => { pc.close(); throw e; });
       if (!r.ok) {
         pc.close();
-        throw refusal(r.status, { 401: w.ended, 409: w.full, 502: w.relay });
+        throw refused(r, 'ended');
       }
       await pc.setRemoteDescription(await r.json());
     } catch (e) {
       say(e.message);
       go.hidden = false;
+      if (e.again) retry = setTimeout(watch, retryEvery);
     }
   }
 
@@ -143,4 +185,4 @@ function guest() {
 }
 
 if (typeof document === 'object') guest();
-else if (typeof module === 'object' && module.exports) module.exports = { words, language };
+else if (typeof module === 'object' && module.exports) module.exports = { words, language, reason, again };

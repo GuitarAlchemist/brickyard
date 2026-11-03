@@ -148,6 +148,7 @@ func run(o options) error {
 		s.guestAPI = webrtc.NewAPI(webrtc.WithSettingEngine(gse))
 		s.guestHost = o.guestHost
 		s.ice = cloudflareRelay(o.turnFile)
+		s.window = func() error { _, err := findWindow(o.title, o.exe); return err }
 		s.watching = make(chan int, 1)
 		if o.mic != "" {
 			voice, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{

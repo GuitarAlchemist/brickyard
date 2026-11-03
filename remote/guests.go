@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -39,15 +40,81 @@ const (
 // guestBook holds the open invitations and the guests who traded one. An invitation serves for its whole hour, as
 // often as it is opened: a guest who opens the link again, in another browser or after a reload, still gets in, and so
 // does anyone the link is passed on to, within the two guests at a time. A guest's cookie lives two hours from its
-// own trade. Only their SHA-256 is kept, in memory, so a restart of the gateway ends them all.
+// own trade. Only their SHA-256 is kept, in the guests file, so that they outlive a restart of the gateway and the
+// file holds nothing a guest could present. Ending the guests revokes them all, and the book remembers which until
+// their time would have been up, to tell those guests why.
 type guestBook struct {
+	path string // the guests file
+
 	mu      sync.Mutex
 	invites map[string]time.Time // when each open invitation expires
 	guests  map[string]time.Time // when each guest's cookie expires
+	revoked map[string]time.Time // the invitations and cookies ended before their time, until it is up
 }
 
-func newGuestBook() *guestBook {
-	return &guestBook{invites: map[string]time.Time{}, guests: map[string]time.Time{}}
+// guestFile is the guests file's JSON.
+type guestFile struct {
+	Invites, Guests, Revoked map[string]time.Time
+}
+
+func loadGuestBook(home string) (*guestBook, error) {
+	g := &guestBook{path: filepath.Join(home, "guests.json")}
+	var f guestFile
+	raw, err := os.ReadFile(g.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err == nil {
+		if err := json.Unmarshal(raw, &f); err != nil {
+			return nil, fmt.Errorf("%s: %w", g.path, err)
+		}
+	}
+	g.invites, g.guests, g.revoked = orEmpty(f.Invites), orEmpty(f.Guests), orEmpty(f.Revoked)
+	return g, nil
+}
+
+func orEmpty(m map[string]time.Time) map[string]time.Time {
+	if m == nil {
+		return map[string]time.Time{}
+	}
+	return m
+}
+
+// save writes the book under g.mu, whole, in place of the last: a gateway stopped halfway leaves one or the other.
+// A book not written still serves until the gateway stops, so the failure is said and not returned.
+func (g *guestBook) save() {
+	raw, _ := json.Marshal(guestFile{Invites: g.invites, Guests: g.guests, Revoked: g.revoked})
+	err := os.WriteFile(g.path+".new", raw, 0o600)
+	if err == nil {
+		err = os.Rename(g.path+".new", g.path)
+	}
+	if err != nil {
+		logf("the guests file: %v", err)
+	}
+}
+
+// refusal is why the guests' entry turns a guest away. The page reads it in X-Delta-Refusal, to say so and to know
+// whether to try again by itself: ended, revoked, window, full or relay.
+type refusal struct{ why, text string }
+
+func (r refusal) Error() string { return r.text }
+
+var (
+	errEnded   = refusal{"ended", "this invitation has ended"}
+	errExpired = refusal{"ended", "this invitation has expired: ask for a new link"}
+	errRevoked = refusal{"revoked", "the person who invited you has ended this invitation"}
+	errWindow  = refusal{"window", "Delta's window is closed: the picture comes back once it is open again"}
+	errFull    = refusal{"full", "two guests watch already"}
+	errRelay   = refusal{"relay", "the relay is unavailable"}
+)
+
+// refuse answers err with status, and with err's reason when it is a refusal.
+func refuse(w http.ResponseWriter, status int, err error) {
+	var r refusal
+	if errors.As(err, &r) {
+		w.Header().Set("X-Delta-Refusal", r.why)
+	}
+	http.Error(w, err.Error(), status)
 }
 
 // token is 128 random bits, as 32 hex digits.
@@ -61,10 +128,11 @@ func (g *guestBook) invite(now time.Time) string {
 	code := token()
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	for _, m := range []map[string]time.Time{g.invites, g.guests} {
+	for _, m := range []map[string]time.Time{g.invites, g.guests, g.revoked} {
 		maps.DeleteFunc(m, func(_ string, expires time.Time) bool { return now.After(expires) })
 	}
 	g.invites[digest(code)] = now.Add(inviteLife)
+	g.save()
 	return code
 }
 
@@ -72,45 +140,60 @@ func (g *guestBook) invite(now time.Time) string {
 func (g *guestBook) join(code string, now time.Time) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if expires, ok := g.revoked[digest(code)]; ok && now.Before(expires) {
+		return "", errRevoked
+	}
 	if expires, ok := g.invites[digest(code)]; !ok || now.After(expires) {
-		return "", errors.New("this invitation has expired: ask for a new link")
+		return "", errExpired
 	}
 	cookie := token()
 	g.guests[digest(cookie)] = now.Add(guestLife)
+	g.save()
 	return cookie, nil
 }
 
-// left is how long the guest holding cookie may still watch: 0 if not at all.
-func (g *guestBook) left(cookie string, now time.Time) time.Duration {
+// left is how long the guest holding cookie may still watch, or why not at all.
+func (g *guestBook) left(cookie string, now time.Time) (time.Duration, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if expires, ok := g.guests[digest(cookie)]; ok && now.Before(expires) {
-		return expires.Sub(now)
+		return expires.Sub(now), nil
 	}
-	return 0
+	if expires, ok := g.revoked[digest(cookie)]; ok && now.Before(expires) {
+		return 0, errRevoked
+	}
+	return 0, errEnded
 }
 
-// end voids every invitation and every guest's cookie.
+// end revokes every invitation and every guest's cookie.
 func (g *guestBook) end() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	maps.Copy(g.revoked, g.invites)
+	maps.Copy(g.revoked, g.guests)
 	clear(g.invites)
 	clear(g.guests)
+	g.save()
 }
 
 // guestHandler is what the tunnel reaches, on 127.0.0.1 only: the guest's page, the trade of an invitation for a
 // cookie, the relay's addresses and the guest's WebRTC offer. Nothing else is there: no speech, none of Delta's
-// sentences and no pairing, so that a guest only ever watches.
+// sentences and no pairing, so that a guest only ever watches. Every answer says it is the gateway's, in
+// X-Delta-Gateway: the page knows by its absence the tunnel's own answer while the gateway is away.
 func (s *server) guestHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", static("text/html; charset=utf-8", guestHTML))
 	mux.HandleFunc("GET /guest.js", static("text/javascript; charset=utf-8", guestJS))
 	mux.HandleFunc("GET /page.css", static("text/css; charset=utf-8", pageCSS))
 	mux.HandleFunc("POST /join", s.join)
-	mux.HandleFunc("GET /ice", s.guest(s.relay))
-	mux.HandleFunc("POST /offer", s.guest(s.guestOffer))
+	mux.HandleFunc("GET /ice", s.guest(s.picture(s.relay)))
+	mux.HandleFunc("POST /offer", s.guest(s.picture(s.guestOffer)))
 	mux.HandleFunc("GET /said", s.guest(s.guestSaid))
-	return checked(s.guestHost, mux)
+	h := checked(s.guestHost, mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Delta-Gateway", "1")
+		h.ServeHTTP(w, r)
+	})
 }
 
 // localHandler is Delta's window's own entry, on 127.0.0.1 only and never behind the tunnel: the brain asks it for an
@@ -213,7 +296,7 @@ func (s *server) join(w http.ResponseWriter, r *http.Request) {
 	cookie, err := s.book.join(req.Invite, s.now())
 	if err != nil {
 		logf("guests: an invitation refused: %v", err)
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		refuse(w, http.StatusUnauthorized, err)
 		return
 	}
 	logf("guests: an invitation traded for two hours")
@@ -224,11 +307,28 @@ func (s *server) join(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// guest lets only a guest whose time is not up through to h.
+// guest lets only a guest whose time is not up through to h, and tells the others whether it is up or was ended.
 func (s *server) guest(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie(guestCookie); err != nil || s.book.left(c.Value, s.now()) == 0 {
-			http.Error(w, "this invitation has ended", http.StatusUnauthorized)
+		c, err := r.Cookie(guestCookie)
+		if err != nil {
+			refuse(w, http.StatusUnauthorized, errEnded)
+			return
+		}
+		if _, err := s.book.left(c.Value, s.now()); err != nil {
+			refuse(w, http.StatusUnauthorized, err)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// picture lets a guest through to h only while Delta's window is open, so that the page says the window is closed
+// instead of showing nothing, and asks the relay for nothing until it opens: it tries again by itself meanwhile.
+func (s *server) picture(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.window() != nil {
+			refuse(w, http.StatusServiceUnavailable, errWindow)
 			return
 		}
 		h(w, r)
@@ -240,7 +340,7 @@ func (s *server) relay(w http.ResponseWriter, r *http.Request) {
 	servers, err := s.ice()
 	if err != nil {
 		logf("the relay: %v", err)
-		http.Error(w, "the relay is unavailable", http.StatusBadGateway)
+		refuse(w, http.StatusBadGateway, errRelay)
 		return
 	}
 	logf("guests: the relay's addresses for a browser, %d servers", len(forBrowser(servers)))
@@ -261,7 +361,7 @@ func (s *server) guestOffer(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if len(s.guests)+s.pending >= maxGuests {
 		s.mu.Unlock()
-		http.Error(w, "two guests watch already", http.StatusConflict)
+		refuse(w, http.StatusConflict, errFull)
 		return
 	}
 	s.pending++ // answering waits for the relay, which s.mu must not
@@ -275,7 +375,7 @@ func (s *server) guestOffer(w http.ResponseWriter, r *http.Request) {
 	servers, err := s.ice()
 	if err != nil {
 		logf("the relay: %v", err)
-		http.Error(w, "the relay is unavailable", http.StatusBadGateway)
+		refuse(w, http.StatusBadGateway, errRelay)
 		return
 	}
 	n := s.guestN.Add(1)
@@ -305,7 +405,8 @@ func (s *server) guestOffer(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.guests[pc] = false
 	s.mu.Unlock()
-	time.AfterFunc(s.book.left(c.Value, s.now()), func() { pc.Close() })
+	left, _ := s.book.left(c.Value, s.now())
+	time.AfterFunc(left, func() { pc.Close() })
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(answer)
 }
