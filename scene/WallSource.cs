@@ -61,7 +61,9 @@ internal sealed class WallSource
             say("read only", "lecture seule")];
         foreach (var (text, at) in transcript?.Requests.TakeLast(4) ?? [])
         {
-            lines.Add($"{at.ToLocalTime():HH:mm}  {Hidden.Replace(text, "[hidden]")}");
+            // The request's own date and time from the transcript, in UTC: never a bare time, which reads as today's.
+            var when = at == default ? say("date unknown", "date inconnue") : at.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture);
+            lines.Add($"{when}  {Hidden.Replace(text, "[hidden]")}");
         }
 
         return lines;
@@ -112,6 +114,11 @@ internal sealed class WallSource
         check(unread.Contains("not read yet") && !unread.Contains(" live"), "nothing read yet is not live");
         var paneless = string.Join("\n", Card(id, [working with { WorkspaceId = "", WorkspaceTitle = "" }], 2, transcript, now, En));
         check(paneless.Contains("no wmux pane") && !paneless.Contains("outside"), "a session with no pane says so, not outside");
+        check(live.Contains("2026-11-04 13:59 UTC  show the robot's session"), "a request carries its own date and time, in UTC");
+        var aged = string.Join("\n", Card(id, [working], 2, new("t", [("hier soir", new DateTimeOffset(2026, 11, 3, 15, 9, 0, TimeSpan.FromHours(-5)))], now), now, En));
+        check(aged.Contains("2026-11-03 20:09 UTC  hier soir") && !aged.Contains("\n15:09"), "a request from another day says that day, never only a time that looks like today's");
+        var undated = string.Join("\n", Card(id, [working], 2, new("t", [("sans heure", default)], now), now, En));
+        check(undated.Contains("date unknown  sans heure") && !undated.Contains("0001") && !undated.Contains(":00  sans"), "a request without a readable date says so");
         var keyed = new Transcript("t", [("use sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 now", now)], now);
         var redacted = string.Join("\n", Card(id, [working], 2, keyed, now, En));
         check(!redacted.Contains("AbCdEfGhIjKlMnOp") && redacted.Contains("use") && redacted.Contains("[hidden]"), "a token in a request is hidden");
