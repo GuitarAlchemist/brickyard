@@ -23,6 +23,7 @@ public sealed class OfficeModule : IOfficeModule
     private const float RowDepth = 0.45f, Deep = 2.9f; // a row of stations; the depth the enclosures may take from the front
     private const float PenFront = 0.17f, PenBack = 0.3f, PenSide = 0.2f, PenGap = 0.2f; // an enclosure's margins round its stations, and the aisle between two
     private const double DoneHop = 2.4; // seconds of jumping after a session finishes
+    private const int MaxDrawn = 48; // stations drawn at most: about 37 instances each with its enclosure, within the scene's 2048
 
     private OfficeState state = new("en", false, []);
     private bool initialized;
@@ -44,6 +45,7 @@ public sealed class OfficeModule : IOfficeModule
         layout.Add(next.Language);
         layout.Add(next.Flat);
         foreach (var s in next.Sessions) { layout.Add(s.Id); layout.Add(s.Name); layout.Add(s.WorkspaceId); layout.Add(s.WorkspaceTitle); layout.Add(s.Started); }
+        if (next.Sessions.Count > MaxDrawn) layout.Add(next.Selected); // beyond MaxDrawn, the selection chooses who is drawn
         state = next;
         Revision = layout.ToHashCode();
     }
@@ -52,20 +54,29 @@ public sealed class OfficeModule : IOfficeModule
     {
         Ready();
         var roots = new List<UsePiece>();
-        var sessions = Ordered(state.Sessions);
+        var sessions = Ordered(Kept(state));
         var shown = Shown(sessions);
+        var hidden = state.Sessions.Count - sessions.Count;
+        var more = Say($"+{hidden} not shown", $"+{hidden} non montrées");
         if (state.Flat)
         {
-            var top = 0.48f + Math.Max(1, sessions.Count) * 0.085f;
+            var lines = Math.Max(1, sessions.Count) + (hidden > 0 ? 1 : 0);
+            var top = 0.48f + lines * 0.085f;
             roots.Add(new("board", Board, Place(-1.05f, 0f, -0.3f), new Dictionary<string, WidgetValue>
             {
-                ["rows"] = Math.Max(1, sessions.Count),
+                ["rows"] = lines,
                 ["title"] = Say("Agents' office", "Bureau des agents"),
             }));
             if (sessions.Count == 0) roots.Add(new("none", Row, Place(-1.05f, top - 0.135f, -0.288f), Name(Say("No session", "Aucune session"))));
             for (var i = 0; i < sessions.Count; i++)
                 roots.Add(new(Key(sessions[i]), Row, Place(-1.05f, top - 0.135f - 0.085f * i, -0.288f), Name(shown[sessions[i].Id]), sessions[i].Id));
+            if (hidden > 0) roots.Add(new("more", Row, Place(-1.05f, top - 0.135f - 0.085f * sessions.Count, -0.288f), Name(more)));
             return new(Library, roots);
+        }
+
+        if (hidden > 0)
+        {
+            roots.Add(new("more", Plate, Place(-1.07f, 0.02f, Front + 0.12f), Name(more))); // on the floor before the first enclosure
         }
 
         if (sessions.Count == 0)
@@ -110,7 +121,7 @@ public sealed class OfficeModule : IOfficeModule
     {
         Ready();
         var t = (float)seconds;
-        foreach (var s in state.Sessions)
+        foreach (var s in Kept(state))
         {
             var age = (float)Math.Max(0, seconds - s.Since);
             var glow = Glow(s.Activity);
@@ -182,6 +193,10 @@ public sealed class OfficeModule : IOfficeModule
 
     // An enclosure's path name from its workspace's ID, which wmux keeps when the workspace is renamed.
     private static string PenKey(string workspace) => workspace.Length == 0 ? "w-outside" : "w-" + new string(workspace.Where(char.IsAsciiLetterOrDigit).Take(12).ToArray());
+
+    // The sessions drawn: all up to MaxDrawn; beyond, the selected one and the latest started, the rest only counted.
+    private static List<OfficeSession> Kept(OfficeState s) => s.Sessions.Count <= MaxDrawn ? [.. s.Sessions]
+        : [.. s.Sessions.OrderByDescending(x => x.Id == s.Selected).ThenByDescending(x => x.Started).ThenBy(x => x.Id, StringComparer.Ordinal).Take(MaxDrawn)];
 
     // The sessions by start, then ID: the order desks keep, whatever order the host sends.
     private static List<OfficeSession> Ordered(IReadOnlyList<OfficeSession> sessions) =>

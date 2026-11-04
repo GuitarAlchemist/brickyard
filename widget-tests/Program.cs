@@ -272,6 +272,34 @@ static void Office(Action<bool, string> check, string image)
     var back = spread.Roots.Where(r => r.Path.StartsWith("w-")).Min(r => r.Local.Translation.Z + All([r]).SelectMany(i => i.Boxes).Min(b => b.Centre.Z - (b.Size.Z / 2)));
     var station = spread.Roots.Where(r => r.Path.StartsWith("s-")).Max(r => r.Local.M11);
     check(back > -3.1f && station > 0.45f, $"they stay 0.2 m clear of the bricks (back at {back:F2} m), their stations near half size, the depth spent on them ({station:F2})");
+    // Many sessions: a bounded office, the selected session and the latest started shown, the rest counted, never refused.
+    foreach (var n in new[] { 56, 57, 60, 100 })
+    {
+        foreach (var (apart, what) in new[] { (true, "a workspace each"), (false, "one workspace") })
+        {
+            var many = Enumerable.Range(1, n).Select(i => S(i, OfficeActivity.Working) with { WorkspaceId = apart ? $"ws-{i}" : "ws", WorkspaceTitle = apart ? $"w{i}" : "w", Started = i }).ToList();
+            var oldest = many[0].Id;
+            var problems = "";
+            var ok = true;
+            foreach (var flat in new[] { false, true })
+            {
+                office.Update(new("en", flat, many, oldest));
+                var tree = Widgets.Expand(office.Scene());
+                var clicks = All(tree.Roots).Select(i => i.Click).OfType<string>().ToHashSet();
+                var shown = Math.Min(n, 48);
+                var counted = n <= 48 || All(tree.Roots).Any(i => i.Text.Any(t => t.Text.Contains($"+{n - shown}", StringComparison.Ordinal)));
+                var latest = many.Skip(n - (shown - 1)).All(s => clicks.Contains(s.Id));
+                var poses = new Dictionary<string, Pose>();
+                office.Pose(1.0, poses);
+                var paths = new HashSet<string>(All(tree.Roots).Select(i => i.Path));
+                ok &= tree.Valid && clicks.Count == shown && clicks.Contains(oldest) && latest && counted && poses.Keys.All(paths.Contains);
+                problems += string.Concat(tree.Problems.Take(1).Select(p => $"; {(flat ? "flat" : "3D")} {p}"));
+            }
+
+            check(ok, $"{n} sessions in {what}: at most 48 drawn, the selected one and the latest started, the rest counted, nothing refused{problems}");
+        }
+    }
+
     office.Update(new("en", false, []));
     check(Widgets.Expand(office.Scene()).Valid, "an office without sessions still shows its empty desk");
 }
