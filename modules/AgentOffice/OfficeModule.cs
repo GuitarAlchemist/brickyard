@@ -21,7 +21,7 @@ public sealed class OfficeModule : IOfficeModule
     private const float Pitch = 0.38f; // between stations at full size, in metres
     private const float Left = -1.45f, Right = -0.69f, Front = 0.3f;
     private const float RowDepth = 0.45f, Deep = 2.9f; // a row of stations; the depth the enclosures may take from the front
-    private const float PenFront = 0.17f, PenBack = 0.3f, PenSide = 0.2f, PenGap = 0.1f; // an enclosure's margins round its stations
+    private const float PenFront = 0.17f, PenBack = 0.3f, PenSide = 0.2f, PenGap = 0.2f; // an enclosure's margins round its stations, and the aisle between two
     private const double DoneHop = 2.4; // seconds of jumping after a session finishes
 
     private OfficeState state = new("en", false, []);
@@ -80,7 +80,7 @@ public sealed class OfficeModule : IOfficeModule
         var columns = Math.Max(3, (int)Math.Ceiling(sessions.Count / 4.0));
         var pitch = Math.Min(Pitch, (Right - Left) / (columns - 1));
         var rows = groups.Sum(g => (g.Count() + columns - 1) / columns);
-        var scale = Math.Min(pitch / Pitch, Deep / ((rows * RowDepth) + (groups.Count * (PenFront + PenBack + PenGap))));
+        var scale = Math.Min(pitch / Pitch, Deep / (((rows - groups.Count) * RowDepth) + (groups.Count * (PenFront + PenBack + PenGap)))); // an enclosure's first row lies in its margins
         pitch = Pitch * scale;
         var front = Front + (PenFront * scale);
         foreach (var group in groups)

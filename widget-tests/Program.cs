@@ -269,6 +269,9 @@ static void Office(Action<bool, string> check, string image)
     office.Update(new("en", false, [.. Enumerable.Range(1, 9).Select(i => S(i, OfficeActivity.Working) with { WorkspaceId = $"ws-{i}", WorkspaceTitle = $"w{i}", Started = i })]));
     var spread = Widgets.Expand(office.Scene());
     check(spread.Valid, $"9 sessions in 9 workspaces still fit, every enclosure within its widget's sizes{string.Concat(spread.Problems.Take(2).Select(p => "; " + p))}");
+    var back = spread.Roots.Where(r => r.Path.StartsWith("w-")).Min(r => r.Local.Translation.Z + All([r]).SelectMany(i => i.Boxes).Min(b => b.Centre.Z - (b.Size.Z / 2)));
+    var station = spread.Roots.Where(r => r.Path.StartsWith("s-")).Max(r => r.Local.M11);
+    check(back > -3.1f && station > 0.45f, $"they stay 0.2 m clear of the bricks (back at {back:F2} m), their stations near half size, the depth spent on them ({station:F2})");
     office.Update(new("en", false, []));
     check(Widgets.Expand(office.Scene()).Valid, "an office without sessions still shows its empty desk");
 }
@@ -311,6 +314,8 @@ static void Enclosures(Action<bool, string> check, string image)
     var list = rects.Values.ToList();
     var apart = list.SelectMany((a, i) => list.Skip(i + 1).Select(b => Apart(a, b))).All(x => x);
     check(pens.Count == 3 && housed && apart, $"an enclosure per workspace and one for the sessions outside wmux, each station in its own, none overlapping ({pens.Count})");
+    var gap = list.SelectMany((a, i) => list.Skip(i + 1).Select(b => Math.Max(Math.Max(b.Min.X - a.Max.X, a.Min.X - b.Max.X), Math.Max(b.Min.Y - a.Max.Y, a.Min.Y - b.Max.Y)))).Min();
+    check(gap >= 0.15f, $"the enclosures stand a little apart, 0.15 m at least between their rails and signs ({gap:F3} m)");
     check(pens.All(p => All([p]).Any(i => i.Text.Count > 0)), "each enclosure carries its workspace's name");
 
     // A refresh in another order, a workspace renamed: the same paths, the stations where they were.
