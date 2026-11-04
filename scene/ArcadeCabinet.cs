@@ -33,8 +33,8 @@ internal static class ArcadeCabinet
 
     // The game's broadcast on the bricks, between the clocks of Ottawa and Paris, lit while anyone plays: a 4:3 screen
     // in a dark frame, in the hall's own frame.
-    public const float WallWidth = 1.04f, WallHeight = 0.78f; // whole in the view in front of Delta, over its head
-    public const float WallMiddle = 1.96f;
+    public const float WallWidth = WallSource.Width, WallHeight = WallSource.Height; // between the clocks, over Delta's head
+    public const float WallMiddle = WallSource.Middle;
     public static SN.Matrix4x4 WallFrame { get; } = SN.Matrix4x4.CreateTranslation(0f, WallMiddle, WallClocks.Wall + 0.032f);
 
     public static Vertex[] WallBezel()
@@ -364,8 +364,11 @@ internal sealed class ArcadeStage : IDisposable
     // The small robot plays, or its game is starting: it stands at the cabinet.
     public bool RobotPlaying => (starting is not null || game is not null) && robot;
 
-    // Someone plays, a person or the robot: the wall shows the game.
+    // Someone plays, a person or the robot: the wall shows the game, unless it shows another source (WallSource).
     public bool Broadcasting => game is not null;
+
+    // False while the wall shows Pong or a session: the scene draws that one, in the same bezel.
+    public bool WallParsec { get; set; } = true;
 
     public ulong Frames => game?.Frames ?? 0;
 
@@ -534,7 +537,7 @@ internal sealed class ArcadeStage : IDisposable
         draw(body, ArcadeCabinet.World, default);
         draw(trim, ArcadeCabinet.World, new(0.1f, 0.55f, 1f, 0.35f));
         draw(lights, ArcadeCabinet.World, new(1f, 0.25f, 0.05f, 0.9f));
-        if (Broadcasting)
+        if (Broadcasting || !WallParsec)
         {
             draw(bezel, SN.Matrix4x4.Identity, default);
         }
@@ -545,7 +548,7 @@ internal sealed class ArcadeStage : IDisposable
     {
         screen.Draw(commands, slot, ArcadeCabinet.ScreenFrame * ArcadeCabinet.World * viewProjection);
         marquee.Draw(commands, slot, ArcadeCabinet.MarqueeFrame * ArcadeCabinet.World * viewProjection);
-        if (Broadcasting)
+        if (Broadcasting && WallParsec)
         {
             wall.Draw(commands, slot, ArcadeCabinet.WallFrame * viewProjection);
         }

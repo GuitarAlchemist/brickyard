@@ -344,6 +344,15 @@ internal static unsafe class Stage
             Console.Error.WriteLine("SCENE refused: --module-click-test requires --demo and --shots; never allowed on the live listener");
             return 2;
         }
+
+        // --wall-test: what the wall screen shows, through the window's own clicks: a demo robot (the office's pick),
+        // Delta's chest (its screen's hit test) and the cabinet (its hit test), each checked and shot. Demo and shots only.
+        var wallTest = args.Contains("--wall-test");
+        if (wallTest && (!demo || shotsDir is null))
+        {
+            Console.Error.WriteLine("SCENE refused: --wall-test requires --demo and --shots; never allowed on the live listener");
+            return 2;
+        }
         var shelfAtStart = Option(args, "--shelf");
         Words.Speak(Option(args, "--lang") ?? "en");
         // Without their option, the Pong screen and the agents' office load from beside the scene when their image is
@@ -364,6 +373,7 @@ internal static unsafe class Stage
         const double S = Splash.Seconds;
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
         if (moduleClickTest) shots = [(S + 1.0, "module-v1"), (S + 4.0, "module-v11")];
+        if (wallTest) shots = [(S + 2.6, "wall-session"), (S + 4.6, "wall-pong"), (S + 6.6, "wall-parsec")];
         if (peekDir is not null && double.IsFinite(limit)) shots = [.. Enumerable.Range(0, (int)Math.Max(0, (limit - S - 2.5) / 4)).Select(i => (S + 2 + (4.0 * i), $"peek-{i:D2}"))];
         var moduleTestClicked = false;
         var moduleTestCollected = false;
@@ -849,6 +859,9 @@ internal static unsafe class Stage
         OfficeFeed? officeFeed = null;
         var officeSelection = new OfficeSelection();
         SN.Matrix4x4? officeView = null; // the frame's camera for clicks; none during the splash
+        SN.Matrix4x4? chestView = null; // the last frame's torso transform and camera, for a click on Delta's chest screen
+        var wallTestStep = 0; // --wall-test: the checks made
+        var wallTestFailures = 0;
         int? officeLogged = null;
         var officeFailed = false; // set by the module's first exception, cleared when new code replaces it
         if (officePath is not null)
@@ -941,6 +954,23 @@ internal static unsafe class Stage
         var cabinet = new ArcadeStage(vertices => new Mesh(device, physical, vertices),
             (pixels, width, height, revision, rect, scanlines) => new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight, pixels, width, height, revision, rect, 0f, scanlines),
             Option(args, "--arcade-url"));
+        // What the wall screen shows (WallSource): Parsec through the cabinet, or Pong's frames, or a session's card, the
+        // last two in surfaces of their own at the wall's frame, Pong letterboxed to its 5:3.
+        var wall = new WallSource();
+        var (wallW, wallH) = (WallSource.Width / 2f, WallSource.Height / 2f);
+        var sessionWall = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
+            WallCard.Render([], ""), WallCard.Width, WallCard.Height, 1, new(-wallW, wallH, wallW, -wallH), 0f, 0f);
+        var pongWall = arcade is { Frame: { Stride: var stride, Width: var pw, Height: var ph } pong } && stride == pw * 4
+            ? new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight, pong.Rgba.ToArray(), pw, ph,
+                pong.Revision, new(-wallW, wallW * ph / pw, wallW, -wallW * ph / pw), 0f, 0.2f)
+            : null;
+        var wallLines = new List<string>();
+        var wallCardRevision = 1UL;
+        var wallCardAt = double.NegativeInfinity;
+        var wallReadAt = double.NegativeInfinity;
+        var wallPixels = WallCard.Render([], "");
+        WallSource.Transcript? wallTranscript = null;
+        var wallReading = 0; // a transcript read in flight
         upload.End();
         var uploadHandle = upload.Handle;
         queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploadHandle }], default);
@@ -1459,16 +1489,33 @@ internal static unsafe class Stage
             var now = clock.Elapsed.TotalSeconds;
             if (WidgetPicking.Pick(officeStage.Hits, view, extent.Width, extent.Height, x, y) is not { } session)
             {
-                if (officeSelection.Click(null, 0, now) == OfficeSelection.Outcome.Cleared) Console.WriteLine("WIDGETS agent-office selection cleared");
+                var had = officeSelection.Selected;
+                if (officeSelection.Click(null, 0, now) == OfficeSelection.Outcome.Cleared)
+                {
+                    Console.WriteLine("WIDGETS agent-office selection cleared");
+                    wall.Released(had);
+                }
+
                 return false;
             }
 
+            OfficeClicked(session);
+            return true;
+        }
+
+        // A click on a session's robot, picked by the office.
+        void OfficeClicked(string session)
+        {
+            if (officeFeed is null) return;
+            var now = clock.Elapsed.TotalSeconds;
             var started = officeFeed.Sessions.FirstOrDefault(s => s.Id == session)?.Started ?? 0;
             var outcome = officeSelection.Click(session, started, now);
             if (outcome != OfficeSelection.Outcome.Open)
             {
                 Console.WriteLine($"WIDGETS agent-office {(outcome == OfficeSelection.Outcome.Selected ? "selected" : "let go of")} session {session}");
-                return true;
+                if (outcome == OfficeSelection.Outcome.Selected) ShowOnWall(WallSource.Kind.Session, session);
+                else wall.Released(session);
+                return;
             }
 
             var surface = officeFeed.Surface(session);
@@ -1481,16 +1528,118 @@ internal static unsafe class Stage
                     catch (Exception e) { Console.Error.WriteLine($"WIDGETS agent-office could not show the pane ({e.GetType().Name}: {e.Message})"); }
                 });
             }
-
-            return true;
         }
 
         // A click on the arcade cabinet walks up to it and starts its game; the keys are the game's until Esc.
-        bool TryCabinetClick(double x, double y)
+        bool TryCabinetClick(double x, double y, bool simulated = false)
         {
             if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view || !cabinet.Hit(view, extent.Width, extent.Height, x, y)) return false;
-            PlayArcade();
+            ShowOnWall(WallSource.Kind.Parsec, null);
+            if (!simulated) PlayArcade();
             return true;
+        }
+
+        // A click on Delta's chest screen, where Pong runs: the wall shows Pong. The screen's rectangle in the torso's
+        // frame is ScreenGpuRenderer's for a module frame, at its depth.
+        bool TryChestClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || arcade is null || pongWall is null || chestView is not { } chest) return false;
+            var corners = new[] { new SN.Vector3(-0.15f, 0.63f, 0.218f), new(0.15f, 0.63f, 0.218f), new(-0.15f, 0.45f, 0.218f), new(0.15f, 0.45f, 0.218f) }
+                .Select(p => OnScreen(p, chest)).ToList();
+            if (corners.Any(c => c is null)) return false;
+            var (xs, ys) = (corners.Select(c => c!.Value.X).ToList(), corners.Select(c => c!.Value.Y).ToList());
+            if (x < xs.Min() || x > xs.Max() || y < ys.Min() || y > ys.Max()) return false;
+            ShowOnWall(WallSource.Kind.Pong, null);
+            return true;
+        }
+
+        // Once a frame while the wall shows a session: its transcript read again every 3 s on the thread pool (the shelf's
+        // reader, its ends only), its card drawn again when a line changed, checked once a second.
+        void RefreshWallCard(string id)
+        {
+            var now = clock.Elapsed.TotalSeconds;
+            if (now - wallReadAt >= 3.0 && Interlocked.CompareExchange(ref wallReading, 1, 0) == 0)
+            {
+                wallReadAt = now;
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try
+                    {
+                        var projects = Path.Combine(Shelf.ClaudeDir(), "projects");
+                        var path = Directory.Exists(projects) ? Directory.EnumerateFiles(projects, id + ".jsonl", SearchOption.AllDirectories).FirstOrDefault() : null;
+                        var ends = path is null ? null : Conversations.Read(path);
+                        wallTranscript = ends is null ? null : new(ends.Title, ends.Requests, File.GetLastWriteTimeUtc(path!));
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { wallTranscript = null; }
+                    finally { Volatile.Write(ref wallReading, 0); }
+                });
+            }
+
+            if (now - wallCardAt < 1.0) return;
+            wallCardAt = now;
+            var lines = WallSource.Card(id, officeFeed?.Sessions ?? [], officeFeed?.ReadAgo(DateTimeOffset.UtcNow), wallTranscript, DateTimeOffset.UtcNow, Words.Say);
+            if (lines.SequenceEqual(wallLines)) return;
+            wallLines = lines;
+            wallPixels = WallCard.Render(lines, Words.Say("The cabinet: Parsec   Delta's chest: Pong", "Le cabinet : Parsec   La poitrine de Delta : Pong"));
+            wallCardRevision++;
+        }
+
+        void ShowOnWall(WallSource.Kind kind, string? session)
+        {
+            var before = (wall.Showing, wall.Session);
+            if (kind == WallSource.Kind.Session && session is not null) wall.ShowSession(session);
+            else if (kind == WallSource.Kind.Pong) wall.ShowPong();
+            else wall.ShowParsec();
+            if (before != (wall.Showing, wall.Session))
+            {
+                (wallTranscript, wallCardAt) = (null, double.NegativeInfinity);
+                Console.WriteLine($"WALL shows {wall.Showing}{(wall.Session is { } s ? " " + s : "")}");
+            }
+        }
+
+        // A click in the window, at x, y in the swapchain's pixels: the first of Gaia's module, the chest, the office and
+        // the cabinet that it falls on takes it.
+        void Click(double x, double y, bool simulated = false)
+        {
+            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y)) TryCabinetClick(x, y, simulated);
+        }
+
+        // Where a point in a frame falls in the window's pixels, null behind the eye.
+        (double X, double Y)? OnScreen(SN.Vector3 p, SN.Matrix4x4 frameViewProjection)
+        {
+            var c = SN.Vector4.Transform(new SN.Vector4(p, 1f), frameViewProjection);
+            return float.IsFinite(c.W) && c.W > 0 ? (((c.X / c.W) + 1f) * extent.Width * 0.5, ((c.Y / c.W) + 1f) * extent.Height * 0.5) : null;
+        }
+
+        // --wall-test, once a frame after the splash: a robot at 2 s, the chest at 4 s, the cabinet at 6 s, each through
+        // the window's own handlers, checked against what the wall then shows.
+        void WallTest(double at)
+        {
+            void Check(bool ok, string what)
+            {
+                Console.WriteLine($"WALLTEST {(ok ? "ok" : "FAIL")} {what} (wall shows {wall.Showing}{(wall.Session is { } s ? " " + s : "")})");
+                if (!ok) wallTestFailures++;
+                wallTestStep++;
+            }
+
+            if (wallTestStep == 0 && at >= 2.0 && officeFeed?.Sessions is [{ } first, ..])
+            {
+                OfficeClicked(first.Id);
+                Check(wall is { Showing: WallSource.Kind.Session } && wall.Session == first.Id, $"a click on robot {first.Name} shows its session");
+            }
+            else if (wallTestStep == 1 && at >= 4.0)
+            {
+                var centre = chestView is { } chest ? OnScreen(new(0f, 0.54f, 0.218f), chest) : null;
+                if (centre is { } c) Click(c.X, c.Y, true);
+                Check(centre is not null && wall.Showing == WallSource.Kind.Pong, "a click on Delta's chest screen shows Pong");
+            }
+            else if (wallTestStep == 2 && at >= 6.0)
+            {
+                var (min, max) = ArcadeCabinet.Bounds;
+                var centre = officeView is { } view ? OnScreen((min + max) / 2f, view) : null;
+                if (centre is { } c) Click(c.X, c.Y, true);
+                Check(centre is not null && wall.Showing == WallSource.Kind.Parsec, "a click on the cabinet brings Parsec back");
+            }
         }
 
         void PlayArcade()
@@ -1549,7 +1698,7 @@ internal static unsafe class Stage
             if (action == GlfwButtonAction.Press && button == 0 && locked)
             {
                 // Locked, a click is at the screen's centre, where the view aims.
-                if (!TryModuleClick(extent.Width / 2.0, extent.Height / 2.0, false) && !TryOfficeClick(extent.Width / 2.0, extent.Height / 2.0)) TryCabinetClick(extent.Width / 2.0, extent.Height / 2.0);
+                Click(extent.Width / 2.0, extent.Height / 2.0);
                 return;
             }
 
@@ -1597,7 +1746,7 @@ internal static unsafe class Stage
             else if (action == GlfwButtonAction.Press && button == 0)
             {
                 var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
-                if (!TryModuleClick(cx, cy, false) && !TryOfficeClick(cx, cy)) TryCabinetClick(cx, cy);
+                Click(cx, cy);
             }
         });
         window.OnScroll += (w, offset) => Guard("a scroll", () =>
@@ -1928,6 +2077,7 @@ internal static unsafe class Stage
             officeView = splashing ? null : viewProj;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
+            if (wallTest && !splashing) WallTest(linkNow);
 
             // A window hidden by the clock or minimised draws nothing; one whose size changed gets a new swapchain first.
             if (placement.Hidden || window.IsIconified)
@@ -2127,7 +2277,12 @@ internal static unsafe class Stage
                 try
                 {
                     officeFeed.Advance(now);
-                    if (officeSelection.Validate(officeFeed.Sessions)) Console.WriteLine("WIDGETS agent-office selection let go: its session went or runs again");
+                    var picked = officeSelection.Selected;
+                    if (officeSelection.Validate(officeFeed.Sessions))
+                    {
+                        Console.WriteLine("WIDGETS agent-office selection let go: its session went or runs again");
+                        wall.Released(picked);
+                    }
                     office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions, officeSelection.Selected));
                     if (officeStage.Sync(office.Module)) Console.WriteLine($"WIDGETS agent-office tree: {officeStage.Instances} instances, {officeStage.Meshes} meshes; native mesh buffers live {Mesh.LiveCount}");
                     else if (officeStage.Problems.Count > 0 && officeLogged != officeStage.Revision)
@@ -2171,6 +2326,13 @@ internal static unsafe class Stage
             var cb = commands[slot];
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
             if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
+            cabinet.WallParsec = wall.Showing == WallSource.Kind.Parsec;
+            if (wall.Showing == WallSource.Kind.Pong && arcade is not null) pongWall?.UploadAfterFence(cb, slot, arcade.Frame);
+            if (wall.Showing == WallSource.Kind.Session && wall.Session is { } shownSession)
+            {
+                RefreshWallCard(shownSession);
+                sessionWall.UploadAfterFence(cb, slot, wallPixels, wallCardRevision);
+            }
             cabinet.UploadAfterFence(cb, slot);
             clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
@@ -2227,8 +2389,11 @@ internal static unsafe class Stage
                 }
 
                 // The Pong screen binds its own pipeline and descriptor set, so it comes after every mesh drawn with ours.
+                chestView = worlds[Robot.Torso] * viewProj;
                 arcadeGpu?.Draw(cb, slot, worlds[Robot.Torso] * viewProj);
                 cabinet.DrawScreens(cb, slot, viewProj);
+                if (wall.Showing == WallSource.Kind.Pong) pongWall?.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
+                else if (wall.Showing == WallSource.Kind.Session) sessionWall.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
 
                 if (shelf.Open && card is not null && cardTexture is not null)
                 {
@@ -2702,6 +2867,8 @@ internal static unsafe class Stage
         wheelTexture?.Dispose();
         keysTexture?.Dispose();
         arcadeGpu?.Dispose();
+        pongWall?.Dispose();
+        sessionWall.Dispose();
         cabinet.Dispose();
         arcade?.Dispose();
         Console.WriteLine($"ARCADE shutdown: uploads {arcadeGpu?.Uploads ?? 0}; native texture images remaining {Texture.LiveCount}; pid {Environment.ProcessId}");
@@ -2748,7 +2915,8 @@ internal static unsafe class Stage
             Closed(port, true);
         }
 
-        return moduleClickTest && (!moduleTestClicked || !moduleTestSawSwap || !moduleTestCollected || Mesh.LiveCount != 0) ? 1 : 0;
+        if (wallTest) Console.WriteLine(wallTestStep == 3 && wallTestFailures == 0 ? "WALLTEST PASSED" : $"WALLTEST FAILED {wallTestFailures} of {wallTestStep} checks made, 3 expected");
+        return (moduleClickTest && (!moduleTestClicked || !moduleTestSawSwap || !moduleTestCollected || Mesh.LiveCount != 0)) || (wallTest && (wallTestStep != 3 || wallTestFailures > 0)) ? 1 : 0;
     }
 
     // %LOCALAPPDATA%\delta\scene-<port>.closed says that the user closed the window listening on that port, so that a

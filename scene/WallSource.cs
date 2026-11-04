@@ -9,7 +9,7 @@ using Delta.SceneModules;
 // be tested alone.
 internal sealed class WallSource
 {
-    internal const float Width = 1.76f, Height = 1.32f, Middle = 2.1f; // the screen on the bricks, 4:3, between the clocks
+    internal const float Width = 1.76f, Height = 1.32f, Middle = 1.78f; // the screen on the bricks, 4:3, between the clocks, its top in the first view
     internal const double Fresh = 10.0; // seconds after which the office's reading is old (it reads every 3 s)
 
     internal enum Kind { Parsec, Pong, Session }
@@ -61,11 +61,14 @@ internal sealed class WallSource
             say("read only", "lecture seule")];
         foreach (var (text, at) in transcript?.Requests.TakeLast(4) ?? [])
         {
-            lines.Add($"{at.ToLocalTime():HH:mm}  {text}");
+            lines.Add($"{at.ToLocalTime():HH:mm}  {Hidden.Replace(text, "[hidden]")}");
         }
 
         return lines;
     }
+
+    // What looks like a key or a token: 24 or more letters, digits, dashes or underscores in a row, with a digit in them.
+    private static readonly System.Text.RegularExpressions.Regex Hidden = new(@"(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{24,}");
 
     private static int Seconds(double s) => (int)Math.Round(s);
 
@@ -109,6 +112,9 @@ internal sealed class WallSource
         check(unread.Contains("not read yet") && !unread.Contains(" live"), "nothing read yet is not live");
         var paneless = string.Join("\n", Card(id, [working with { WorkspaceId = "", WorkspaceTitle = "" }], 2, transcript, now, En));
         check(paneless.Contains("no wmux pane") && !paneless.Contains("outside"), "a session with no pane says so, not outside");
+        var keyed = new Transcript("t", [("use sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 now", now)], now);
+        var redacted = string.Join("\n", Card(id, [working], 2, keyed, now, En));
+        check(!redacted.Contains("AbCdEfGhIjKlMnOp") && redacted.Contains("use") && redacted.Contains("[hidden]"), "a token in a request is hidden");
         check(Width >= 1.6f && Math.Abs((Width / Height) - (4f / 3f)) < 0.01f && (Width / 2f) + 0.045f < 1.45f - 0.36f,
             "the wall screen is much larger, 4:3, and clear of the clocks");
     }
