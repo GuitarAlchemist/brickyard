@@ -24,9 +24,12 @@ internal static class WallCard
                 _ => (15, false, ((byte)180, (byte)190, (byte)205)),
             };
             y += Write(rgba, lines[k], size, bold, 20, y, color) + (k == 0 || k == 4 ? 12 : 6);
+            if (k == 4 || (k == lines.Count - 1 && k < 4))
+            {
+                y += Write(rgba, hint, 12, false, 20, y - 6, (110, 120, 140)) + 10; // up here, not at the bottom: Delta's head hides the screen's lower middle from the first view
+            }
         }
 
-        Write(rgba, hint, 12, false, 20, Height - 26, (110, 120, 140));
         return rgba;
     }
 

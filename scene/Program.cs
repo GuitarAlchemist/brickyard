@@ -353,6 +353,16 @@ internal static unsafe class Stage
             Console.Error.WriteLine("SCENE refused: --wall-test requires --demo and --shots; never allowed on the live listener");
             return 2;
         }
+
+        // --wall-real ID: the same wall on this computer's real sessions, read only: once the office has read them, the
+        // session ID is picked as a click on its robot would (no command), and its card is printed and shot. Hidden, with
+        // shots, off the live listener's port, never with --demo.
+        var wallReal = Option(args, "--wall-real");
+        if (wallReal is not null && (demo || shotsDir is null || !hidden || port == 8805))
+        {
+            Console.Error.WriteLine("SCENE refused: --wall-real requires --hidden, --shots and another --listen than 8805, without --demo");
+            return 2;
+        }
         var shelfAtStart = Option(args, "--shelf");
         Words.Speak(Option(args, "--lang") ?? "en");
         // Without their option, the Pong screen and the agents' office load from beside the scene when their image is
@@ -374,12 +384,13 @@ internal static unsafe class Stage
         (double At, string Name)[] shots = shotsDir is null ? [] : [(1.3, "splash"), (S + 1.0, "idle"), (S + 2.6, "listening"), (S + 4.2, "thinking"), (S + 6.2, "speaking"), (S + 8.3, "full"), (S + 10.0, "compacting"), .. Link.Moods.Skip(1).Select((m, i) => (S + 11.8 + i, m)), (S + 19.6, "ignored"), (S + 20.5, "pairing")];
         if (moduleClickTest) shots = [(S + 1.0, "module-v1"), (S + 4.0, "module-v11")];
         if (wallTest) shots = [(S + 2.6, "wall-session"), (S + 4.6, "wall-pong"), (S + 6.6, "wall-parsec")];
+        if (wallReal is not null) shots = [(S + 7.0, "wall-real")];
         if (peekDir is not null && double.IsFinite(limit)) shots = [.. Enumerable.Range(0, (int)Math.Max(0, (limit - S - 2.5) / 4)).Select(i => (S + 2 + (4.0 * i), $"peek-{i:D2}"))];
         var moduleTestClicked = false;
         var moduleTestCollected = false;
         var moduleTestGcChecked = false;
         var moduleTestSawSwap = false;
-        if (shots.Length > 0 && !demo && peekDir is null)
+        if (shots.Length > 0 && !demo && peekDir is null && wallReal is null)
         {
             Console.Error.WriteLine("SCENE refused: --shots needs --demo, whose states come at known times");
             return 2;
@@ -1604,6 +1615,28 @@ internal static unsafe class Stage
             if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y)) TryCabinetClick(x, y, simulated);
         }
 
+        // --wall-real, once a frame after the splash: the session picked once the office's first reading names it, then at
+        // 6.5 s its card printed and checked: shown, its ID, a fresh reading, its transcript found.
+        void WallReal(string id, double at)
+        {
+            if (wallTestStep == 0 && officeFeed?.ReadAgo(DateTimeOffset.UtcNow) is not null && officeFeed.Sessions.Any(s => s.Id == id))
+            {
+                OfficeClicked(id);
+                wallTestStep = 1;
+            }
+            else if (wallTestStep == 1 && at >= 6.5)
+            {
+                wallTestStep = 2;
+                foreach (var line in wallLines) Console.WriteLine($"WALLREAL card: {line}");
+                var text = string.Join("\n", wallLines);
+                void Check(bool ok, string what) { Console.WriteLine($"WALLREAL {(ok ? "ok" : "FAIL")} {what}"); if (!ok) wallTestFailures++; }
+                Check(wall.Showing == WallSource.Kind.Session && wall.Session == id, "the wall shows the picked session");
+                Check(wallLines.Count > 1 && wallLines[1].StartsWith(id[..Math.Min(8, id.Length)], StringComparison.Ordinal), "its card carries its ID");
+                Check(text.Contains(Words.Say("read ", "lue il y a "), StringComparison.Ordinal), $"the office's reading is fresh ({officeFeed?.ReadAgo(DateTimeOffset.UtcNow):F1} s)");
+                Check(!text.Contains(Words.Say("no transcript found", "aucun transcript trouvé"), StringComparison.Ordinal), "its transcript was found and read");
+            }
+        }
+
         // Where a point in a frame falls in the window's pixels, null behind the eye.
         (double X, double Y)? OnScreen(SN.Vector3 p, SN.Matrix4x4 frameViewProjection)
         {
@@ -2078,6 +2111,7 @@ internal static unsafe class Stage
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
             if (wallTest && !splashing) WallTest(linkNow);
+            if (wallReal is not null && !splashing) WallReal(wallReal, shown - S);
 
             // A window hidden by the clock or minimised draws nothing; one whose size changed gets a new swapchain first.
             if (placement.Hidden || window.IsIconified)
@@ -2916,7 +2950,9 @@ internal static unsafe class Stage
         }
 
         if (wallTest) Console.WriteLine(wallTestStep == 3 && wallTestFailures == 0 ? "WALLTEST PASSED" : $"WALLTEST FAILED {wallTestFailures} of {wallTestStep} checks made, 3 expected");
-        return (moduleClickTest && (!moduleTestClicked || !moduleTestSawSwap || !moduleTestCollected || Mesh.LiveCount != 0)) || (wallTest && (wallTestStep != 3 || wallTestFailures > 0)) ? 1 : 0;
+        if (wallReal is not null) Console.WriteLine(wallTestStep == 2 && wallTestFailures == 0 ? "WALLREAL PASSED" : $"WALLREAL FAILED {wallTestFailures}, step {wallTestStep} of 2");
+        return (moduleClickTest && (!moduleTestClicked || !moduleTestSawSwap || !moduleTestCollected || Mesh.LiveCount != 0)) || (wallTest && (wallTestStep != 3 || wallTestFailures > 0))
+            || (wallReal is not null && (wallTestStep != 2 || wallTestFailures > 0)) ? 1 : 0;
     }
 
     // %LOCALAPPDATA%\delta\scene-<port>.closed says that the user closed the window listening on that port, so that a
