@@ -975,6 +975,16 @@ Checked: widget tests (seven mutations each fail them) and the scene's selftest.
 was not reloaded in the running window. `SurfaceWorkspaces` costs a wmux call per workspace, about 5 s with nine
 workspaces, once every 30 s, during which the activities wait. Report: docs/office-ux-slice1-report.md.
 
+## A haze in the hall (2026-11-03)
+
+After the RTX proposal, the user chose its cheapest first step: the reference picture he sent, a city in a cold blue
+haze, owes its depth to aerial perspective far more than to traced rays. The Low lighting now draws a haze: none in the
+first 3 m from the eye, then 0.12 per metre, half as thick 2 m up, towards a dim steel blue (0.075, 0.09, 0.115), which
+is also the clear colour beyond the hall, so that the hall's open side dissolves into it instead of ending in black. B
+turns it off and on, --no-fog starts without it; Flat is unchanged. In captures at 1920x1080, view 1 (Delta) keeps the
+robot as it was and cools the far wall; view 4 sends the far floor and the open side into the haze. Hidden, capped at
+60 fps, the frame times did not move (p95 17.0 ms); its GPU cost was not measured on its own. Not yet seen live.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

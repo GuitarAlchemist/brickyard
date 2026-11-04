@@ -13,7 +13,8 @@
 // --cap N limits it to N frames a second, 60 by
 // default when hidden (nothing paces a hidden window), so that it never takes the GPU from a live view beside it.
 // --size WxH sizes the window, to measure a hidden one at a live one's size. --seconds closes it.
-// --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws. --view N starts
+// --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws; Low draws a cool
+// haze that thickens with distance and thins with height, which B or --no-fog turns off. --view N starts
 // the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks). H hides or shows
 // the wall clocks of Ottawa and Paris (WallClocks), shown by default.
 //
@@ -65,11 +66,11 @@ internal struct Vertex(SN.Vector3 pos, SN.Vector3 normal, SN.Vector3 color, Mate
     public SN.Vector4 Edge = edge;
 }
 
-// What the Low shader reads once a frame, 16 bytes: the camera's position.
+// What the Low shader reads once a frame, 16 bytes: the camera's position, and the haze's density per metre (0: none).
 [StructLayout(LayoutKind.Sequential)]
-internal struct Frame(SN.Vector3 eye)
+internal struct Frame(SN.Vector3 eye, float haze)
 {
-    public SN.Vector4 Eye = new(eye, 1f);
+    public SN.Vector4 Eye = new(eye, haze);
 }
 
 // What each draw pushes, 128 bytes: the part's clip transform, the three rows of its world transform (for the light)
@@ -194,6 +195,16 @@ internal static unsafe class Stage
             return c * (r.z < 0.0 ? 1.0 : 0.7);
         }
 
+        // The haze between the eye and p: none in the first 3 m, then thicker with distance and thinner with height
+        // (half as thick 2 m up), a cool steel blue, dim, so that the far brick and the roof recede into it while what
+        // is near stays clear. Its colour is HazeColor's, the clear colour beyond the hall.
+        vec3 haze(vec3 c, vec3 p)
+        {
+            float density = frame.eye.w * exp(-0.35 * max(0.5 * (p.y + frame.eye.y), 0.0));
+            float through = exp(-density * max(length(p - frame.eye.xyz) - 3.0, 0.0));
+            return mix(vec3(0.075, 0.09, 0.115), c, through);
+        }
+
         // Below 0.6 as it is; above, rolling off towards 1 instead of clipping.
         vec3 shoulder(vec3 x)
         {
@@ -258,9 +269,12 @@ internal static unsafe class Stage
             // A pool of light around the robot; the hall falls into the dark beyond it and above it.
             float pool = 1.0 - smoothstep(0.8, 6.0, length(vWorld.xz - vec2(0.0, -0.3)));
             float high = 1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y);
-            outColor = vec4(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, 1.0);
+            outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
         }
         """;
+
+    private const float Haze = 0.12f; // the haze's density per metre past its first 3 m: about half the light through at 9 m
+    private static readonly float4 HazeColor = new(0.075f, 0.09f, 0.115f, 1f); // the shader's haze() colour
 
     // How the scene is lit (--quality): Flat as it was first drawn, or Low (LowFragmentShader).
     private enum Quality
@@ -1204,6 +1218,7 @@ internal static unsafe class Stage
             : default(int2?);
         var modalDrill = args.Contains("--modal-drill"); // the window's measuring run of a held title bar and a dragged border (ModalDrill.cs)
         var keysShown = args.Contains("--keys"); // F1: the camera's keys
+        var hazy = !args.Contains("--no-fog"); // B: the Low lighting's haze
         var looking = false; // the right button is held
         var locked = false; // Ctrl and a click lock the view to the mouse, the Observatory's click; again, or the right button, frees it
         var ctrlAlone = false; // Ctrl down with nothing else since: let go, it crouches
@@ -1349,6 +1364,11 @@ internal static unsafe class Stage
             else if (key == GlfwKey.H)
             {
                 clocks.Shown = !clocks.Shown;
+            }
+            else if (key == GlfwKey.B)
+            {
+                hazy = !hazy;
+                Console.WriteLine($"SCENE haze {(hazy ? "on" : "off")}");
             }
             else if (key == GlfwKey.Home)
             {
@@ -2144,7 +2164,7 @@ internal static unsafe class Stage
                 return true;
             }
 
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye);
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
 
@@ -2152,7 +2172,7 @@ internal static unsafe class Stage
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
             if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
             cabinet.UploadAfterFence(cb, slot);
-            clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = new float4(0.006f, 0.005f, 0.005f, 1f) } };
+            clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
             cb.BeginRenderPass(new VkRenderPassBeginInfo
             {

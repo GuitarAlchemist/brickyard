@@ -489,7 +489,7 @@ internal static class Panel
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var look = Words.Say("Right button held, or Ctrl + click: look   Home: back to Delta   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine : revenir à Delta   F1 : masquer");
+        var look = Words.Say("Right button held, or Ctrl + click: look   Home: back to Delta   B: haze   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine : revenir à Delta   B : brume   F1 : masquer");
         string[] lines = flying
             ? [Words.Say("FLYING", "EN VOL"),
                Words.Say("ZQSD, WASD or arrows: move   Space or E: rise   C: descend   Shift: faster", "ZQSD, WASD ou flèches : avancer   Espace ou E : monter   C : descendre   Maj : plus vite"),
