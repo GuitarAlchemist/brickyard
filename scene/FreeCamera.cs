@@ -74,6 +74,7 @@ internal sealed class FreeCamera
     private float eye = WalkHeight;
     private float dip, dipSpeed, lean, peek, kick, roll, slide, jumpAsked;
     private bool crouchAsked;
+    private bool framed; // at a view's eye off the floor, kept until the next step, jump or crouch walks from it
 
     private Pose drawn;
     private bool haveDrawn;
@@ -166,6 +167,7 @@ internal sealed class FreeCamera
         }
 
         Take(time);
+        framed = false;
         jumpAsked = JumpBuffer;
     }
 
@@ -178,6 +180,7 @@ internal sealed class FreeCamera
         }
 
         Take(time);
+        framed = false;
         crouchAsked = true;
     }
 
@@ -203,6 +206,11 @@ internal sealed class FreeCamera
         if (!quiet)
         {
             Take(time);
+            framed = false;
+        }
+        else if (framed)
+        {
+            return;
         }
 
         if (Flying)
@@ -225,6 +233,7 @@ internal sealed class FreeCamera
     public void ToggleFlying(float time)
     {
         Take(time);
+        framed = false;
         Flying = !Flying;
         if (!Flying)
         {
@@ -244,12 +253,15 @@ internal sealed class FreeCamera
         StartFlight(cut);
         Free = false;
         Flying = false;
+        framed = false;
         Settle();
     }
 
     internal const int ArcadeView = 6; // the arcade cabinet's, where a click on it walks to
 
-    // The views the keys 2 to 6 go to, as the Observatory's presets; 1 is the drift. Above eye height, the camera flies.
+    // The views the keys 2 to 6 go to, as the Observatory's presets; 1 is the drift. A view frames from its own eye, even
+    // above eye height, without flying: the first step walks from there, its eye easing down to the floor's, as
+    // fly_camera.gd's presets and walk_physics.gd's first step do. Only F flies.
     internal static readonly (SN.Vector3 Eye, SN.Vector3 Target)[] Views =
     [
         (new(-0.95f, 1.35f, 1.75f), new(-1.1f, 0.45f, -0.1f)), // the agents' office
@@ -287,7 +299,7 @@ internal sealed class FreeCamera
         yaw = MathF.Atan2(d.X, -d.Z);
         pitch = MathF.Asin(d.Y);
         position = SN.Vector3.Clamp(eye, Min, Max);
-        Flying = MathF.Abs(position.Y - WalkHeight) > 0.01f;
+        framed = !Flying && MathF.Abs(position.Y - WalkHeight) > 0.01f; // a view frames; it never takes off (F does)
         Free = true;
         Settle();
     }
@@ -336,7 +348,7 @@ internal sealed class FreeCamera
         velocity = SN.Vector2.Zero;
         feet = 0f;
         rise = 0f;
-        eye = WalkHeight;
+        eye = framed ? position.Y : WalkHeight; // from a view's eye, the first step eases down to the floor's
         dip = dipSpeed = lean = peek = kick = roll = slide = jumpAsked = 0f;
         crouchAsked = false;
         Crouched = false;
@@ -772,7 +784,19 @@ internal sealed class FreeCamera
             views &= eye.X >= Min.X && eye.X <= Max.X && eye.Y >= Min.Y && eye.Y <= Max.Y && eye.Z >= Min.Z && eye.Z <= Max.Z;
         }
 
-        Check(views && camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(7) && !camera.GoTo(0), "the views stand where they say, inside the hall; 1 is the drift");
+        Check(views && !camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(7) && !camera.GoTo(0), "the views stand where they say, inside the hall, without flying; 1 is the drift");
+
+        // From the whole hall's view, 3.1 m up, looking down: the first steps walk, down to the floor's eye, level.
+        camera.GoTo(4, cut: true);
+        camera.Look(0f, 0, 300);
+        for (var i = 0; i < 60; i++)
+        {
+            camera.Move(0f, new(1, 0, 0, false), 1f / 60f);
+        }
+
+        (eye, _) = camera.View(0f);
+        Check(!camera.Flying && MathF.Abs(eye.Y - WalkHeight) < 1e-3f, $"walking from a view above eye height walks on the floor, though looking down (eye at {eye.Y:F3} m)");
+        camera.Reset(cut: true);
 
         SelfTestBody(Check);
         SelfTestObstacles(Check);

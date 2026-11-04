@@ -363,6 +363,15 @@ internal static unsafe class Stage
             Console.Error.WriteLine("SCENE refused: --wall-real requires --hidden, --shots and another --listen than 8805, without --demo");
             return 2;
         }
+        // --walk-test: the views' keys and the walking keys, through the window's key handler and its camera loop: each of
+        // the views 2, 3, 5 and 6 reached, then W and D held a second with the view turned down, which must walk on the
+        // floor at eye height; then from the drift, W into Delta, which stops the body, and W and D past it. Demo, shots.
+        var walkTest = args.Contains("--walk-test");
+        if (walkTest && (!demo || shotsDir is null))
+        {
+            Console.Error.WriteLine("SCENE refused: --walk-test requires --demo and --shots");
+            return 2;
+        }
         var shelfAtStart = Option(args, "--shelf");
         Words.Speak(Option(args, "--lang") ?? "en");
         // Without their option, the Pong screen and the agents' office load from beside the scene when their image is
@@ -385,6 +394,7 @@ internal static unsafe class Stage
         if (moduleClickTest) shots = [(S + 1.0, "module-v1"), (S + 4.0, "module-v11")];
         if (wallTest) shots = [(S + 2.6, "wall-session"), (S + 4.6, "wall-pong"), (S + 6.6, "wall-parsec")];
         if (wallReal is not null) shots = [(S + 7.0, "wall-real")];
+        if (walkTest) shots = [(S + 3.7, "walk-office-view"), (S + 4.9, "walk-office-walked"), (S + 21.2, "walk-delta")];
         if (peekDir is not null && double.IsFinite(limit)) shots = [.. Enumerable.Range(0, (int)Math.Max(0, (limit - S - 2.5) / 4)).Select(i => (S + 2 + (4.0 * i), $"peek-{i:D2}"))];
         var moduleTestClicked = false;
         var moduleTestCollected = false;
@@ -873,6 +883,9 @@ internal static unsafe class Stage
         SN.Matrix4x4? chestView = null; // the last frame's torso transform and camera, for a click on Delta's chest screen
         var wallTestStep = 0; // --wall-test: the checks made
         var wallTestFailures = 0;
+        var walkHeld = new HashSet<GlfwKey>(); // --walk-test: the keys it holds, read as the window's own
+        var (walkStep, walkChecks, walkFailures) = (0, 0, 0);
+        var walkFrom = SN.Vector3.Zero;
         int? officeLogged = null;
         var officeFailed = false; // set by the module's first exception, cleared when new code replaces it
         if (officePath is not null)
@@ -1290,7 +1303,7 @@ internal static unsafe class Stage
         Panel.Card? keysCard = null;
         var keysDrawn = (Flying: false, Width: 0, Height: 0, Language: "");
 
-        window.OnKey += (w, key, scancode, action, mods) => Guard("a key", () =>
+        GlfwKeyCallback onKey = (w, key, scancode, action, mods) => Guard("a key", () =>
         {
             var at = clock.Elapsed.TotalSeconds;
             tour.Touch(at);
@@ -1448,6 +1461,7 @@ internal static unsafe class Stage
                 notesShown = false;
             }
         });
+        window.OnKey += onKey;
 
         // A row under the cursor, in the card's pixels, from the window's coordinates.
         int RowAt(GlfwWindow w)
@@ -1652,6 +1666,72 @@ internal static unsafe class Stage
         {
             var c = SN.Vector4.Transform(new SN.Vector4(p, 1f), frameViewProjection);
             return float.IsFinite(c.W) && c.W > 0 ? (((c.X / c.W) + 1f) * extent.Width * 0.5, ((c.Y / c.W) + 1f) * extent.Height * 0.5) : null;
+        }
+
+        // --walk-test, once a frame after the splash: a view's key every 4.2 s from 1 s, checked at its view 2.8 s later,
+        // then W and D held a second with the view turned down; at 18 s the drift, W into Delta, then W and D past it.
+        void WalkTest(double at, float time)
+        {
+            void Check(bool ok, string what) { Console.WriteLine($"WALKTEST {(ok ? "ok" : "FAIL")} {what}"); walkChecks++; if (!ok) walkFailures++; }
+            void Press(GlfwKey key) { onKey(window, key, 0, GlfwKeyAction.Press, default); onKey(window, key, 0, GlfwKeyAction.Release, default); }
+            int[] views = [2, 3, 5, FreeCamera.ArcadeView];
+            var eye = camera.View(time).Eye;
+            tour.Touch(clock.Elapsed.TotalSeconds);
+            var k = walkStep / 3;
+            if (k < views.Length)
+            {
+                var start = 1.0 + (4.2 * k);
+                if (walkStep % 3 == 0 && at >= start)
+                {
+                    Press((GlfwKey)('0' + views[k]));
+                    walkStep++;
+                }
+                else if (walkStep % 3 == 1 && at >= start + 2.8)
+                {
+                    var want = FreeCamera.Views[views[k] - 2].Eye;
+                    Check(SN.Vector3.Distance(eye, want) < 0.02f, $"key {views[k]} reaches its view ({eye.X:F2}, {eye.Y:F2}, {eye.Z:F2})");
+                    camera.Look(time, 0, 300); // the view turned down, as the mouse turns it
+                    walkFrom = eye;
+                    walkHeld.UnionWith([GlfwKey.W, GlfwKey.D]);
+                    walkStep++;
+                }
+                else if (walkStep % 3 == 2 && at >= start + 3.8)
+                {
+                    walkHeld.Clear();
+                    var moved = new SN.Vector2(eye.X - walkFrom.X, eye.Z - walkFrom.Z).Length();
+                    Check(!camera.Flying && MathF.Abs(eye.Y - FreeCamera.WalkHeight) < 0.02f && moved > 0.3f,
+                        $"from view {views[k]}, W and D looking down walk on the floor ({(camera.Flying ? "flying" : "walking")}, eye at {eye.Y:F2} m, {moved:F2} m across)");
+                    walkStep++;
+                }
+
+                return;
+            }
+
+            switch (walkStep - (3 * views.Length))
+            {
+                case 0 when at >= 18.0:
+                    Press((GlfwKey)'1');
+                    walkStep++;
+                    break;
+                case 1 when at >= 18.4:
+                    walkHeld.Add(GlfwKey.W);
+                    walkStep++;
+                    break;
+                case 2 when at >= 20.9:
+                    walkHeld.Clear();
+                    Check(!camera.Flying && eye.Z > 0.3f + FreeCamera.Radius - 0.01f && eye.Z < 0.8f && MathF.Abs(eye.X) < 0.3f, $"from the drift, W into Delta stops in front of it (eye at {eye.X:F2}, {eye.Z:F2})");
+                    walkStep++;
+                    break;
+                case 3 when at >= 21.3:
+                    walkHeld.UnionWith([GlfwKey.W, GlfwKey.D]);
+                    walkStep++;
+                    break;
+                case 4 when at >= 22.8:
+                    walkHeld.Clear();
+                    Check(eye.X > 0.42f + FreeCamera.Radius && eye.Z > 0.3f + FreeCamera.Radius - 0.01f, $"W and D slide along the fronts of Delta and of Gaia's placard beside it, into neither (eye at {eye.X:F2}, {eye.Z:F2})");
+                    walkStep++;
+                    break;
+            }
         }
 
         // --wall-test, once a frame after the splash: a robot at 2 s, the chest at 4 s, the cabinet at 6 s, each through
@@ -2096,9 +2176,9 @@ internal static unsafe class Stage
                     (float)((window.CursorY * extent.Height / Math.Max(1, window.Height)) - (extent.Height / 2.0)), inner);
             }
 
-            if (!shelf.Open && !film.Playing && !cabinet.Playing && window.IsFocused)
+            if (!shelf.Open && !film.Playing && !cabinet.Playing && (window.IsFocused || walkHeld.Count > 0))
             {
-                bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press;
+                bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press || walkHeld.Contains(key);
                 float Axis(GlfwKey a, GlfwKey b, GlfwKey back, GlfwKey back2) => (Held(a) || Held(b) ? 1f : 0f) - (Held(back) || Held(back2) ? 1f : 0f);
                 var alt = Held(GlfwKey.LeftAlt) || Held(GlfwKey.RightAlt);
                 camera.Move(time, new(Axis(GlfwKey.W, GlfwKey.Up, GlfwKey.S, GlfwKey.Down), Axis(GlfwKey.D, GlfwKey.Right, GlfwKey.A, GlfwKey.Left),
@@ -2122,6 +2202,7 @@ internal static unsafe class Stage
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
             if (wallTest && !splashing) WallTest(linkNow);
             if (wallReal is not null && !splashing) WallReal(wallReal, shown - S);
+            if (walkTest && !splashing) WalkTest(shown - S, time);
 
             // A window hidden by the clock or minimised draws nothing; one whose size changed gets a new swapchain first.
             if (placement.Hidden || window.IsIconified)
@@ -2961,7 +3042,9 @@ internal static unsafe class Stage
 
         if (wallTest) Console.WriteLine(wallTestStep == 3 && wallTestFailures == 0 ? "WALLTEST PASSED" : $"WALLTEST FAILED {wallTestFailures} of {wallTestStep} checks made, 3 expected");
         if (wallReal is not null) Console.WriteLine(wallTestStep == 2 && wallTestFailures == 0 ? "WALLREAL PASSED" : $"WALLREAL FAILED {wallTestFailures}, step {wallTestStep} of 2");
+        if (walkTest) Console.WriteLine(walkChecks == 10 && walkFailures == 0 ? "WALKTEST PASSED" : $"WALKTEST FAILED {walkFailures} of {walkChecks} checks made, 10 expected");
         return (moduleClickTest && (!moduleTestClicked || !moduleTestSawSwap || !moduleTestCollected || Mesh.LiveCount != 0)) || (wallTest && (wallTestStep != 3 || wallTestFailures > 0))
+            || (walkTest && (walkChecks != 10 || walkFailures > 0))
             || (wallReal is not null && (wallTestStep != 2 || wallTestFailures > 0)) ? 1 : 0;
     }
 
