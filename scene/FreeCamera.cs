@@ -19,6 +19,21 @@ internal sealed class FreeCamera
     internal static readonly SN.Vector3 DriftTarget = new(0f, 0.7f, 0f);
     internal static readonly SN.Vector3 Min = new(-6f, 0.25f, -3.1f);
     internal static readonly SN.Vector3 Max = new(6f, 4.2f, 5.5f);
+    internal const float Radius = 0.3f * Scale; // the walking body's, against what stands on the floor
+
+    // What stands on the hall's floor, as walk_physics.gd's boxes: a centre, a turn about the vertical and half sizes
+    // across and deep, the walking body kept Radius out of each. The office's desks and rails are low, stepped over.
+    internal static readonly (SN.Vector2 Centre, float Turn, SN.Vector2 Half)[] Obstacles =
+    [
+        (new(0f, 0f), 0f, new(0.42f, 0.3f)), // Delta: its tracks, its torso and its arms (Robot)
+        (new(0.88f, 0.16f), 0f, new(0.43f, 0.17f)), // Gaia's placard on its stand (modules/GaiaPresence)
+        (new(-2.1f, -1.5f), 0f, new(0.5f, 0.4f)), // the pallet of bricks (Brickwork)
+        (new(2.2f, -1.9f), 0f, new(0.45f, 0.25f)), // the steel cabinet
+        (new(-3.3f, -3f), 0f, new(0.35f, 0.35f)), // the pillars
+        (new(3.3f, -3f), 0f, new(0.35f, 0.35f)),
+        (new(ArcadeCabinet.Position.X, ArcadeCabinet.Position.Z), ArcadeCabinet.Yaw, new(0.335f, 0.4f)), // the arcade cabinet, turned to the room
+    ];
+
     private const float Sensitivity = 0.0025f; // radians a pixel, the Observatory's
     private const float Run = 3f; // flying
 
@@ -339,6 +354,57 @@ internal sealed class FreeCamera
         position = SN.Vector3.Clamp(position + step, Min, Max);
     }
 
+    // The body, a circle of Radius at p, out of what stands on the floor by the nearest way, its speed into it lost so that
+    // it slides along: walk_physics.gd's _push_box and _block, twice over for corners.
+    private SN.Vector2 Collide(SN.Vector2 p)
+    {
+        for (var pass = 0; pass < 2; pass++)
+        {
+            foreach (var (centre, turn, half) in Obstacles)
+            {
+                var (u, v) = (new SN.Vector2(MathF.Cos(turn), -MathF.Sin(turn)), new SN.Vector2(MathF.Sin(turn), MathF.Cos(turn)));
+                var d = p - centre;
+                var local = new SN.Vector2(SN.Vector2.Dot(d, u), SN.Vector2.Dot(d, v));
+                if (MathF.Abs(local.X) > half.X + Radius || MathF.Abs(local.Y) > half.Y + Radius)
+                {
+                    continue;
+                }
+
+                var q = SN.Vector2.Clamp(local, -half, half);
+                var outward = local - q;
+                var distance = outward.Length();
+                if (distance >= Radius)
+                {
+                    continue;
+                }
+
+                if (distance > 1e-5f)
+                {
+                    local = q + (outward / distance * Radius);
+                }
+                else if (half.X - MathF.Abs(local.X) < half.Y - MathF.Abs(local.Y))
+                {
+                    local.X = (half.X + Radius) * (local.X >= 0f ? 1f : -1f); // the centre inside: out by the nearest side
+                }
+                else
+                {
+                    local.Y = (half.Y + Radius) * (local.Y >= 0f ? 1f : -1f);
+                }
+
+                var pushed = centre + (u * local.X) + (v * local.Y);
+                if (pushed != p)
+                {
+                    var n = SN.Vector2.Normalize(pushed - p);
+                    velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
+                }
+
+                p = pushed;
+            }
+        }
+
+        return p;
+    }
+
     private void Walk(Held held, float dt)
     {
         var walk = Speed;
@@ -421,7 +487,7 @@ internal sealed class FreeCamera
             velocity = Toward(velocity, target, AirAccel * walk * dt);
         }
 
-        var next = body + (velocity * dt);
+        var next = Collide(body + (velocity * dt));
         var inside = SN.Vector2.Clamp(next, new(Min.X, Min.Z), new(Max.X, Max.Z));
         if (inside.X != next.X)
         {
@@ -709,7 +775,68 @@ internal sealed class FreeCamera
         Check(views && camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(7) && !camera.GoTo(0), "the views stand where they say, inside the hall; 1 is the drift");
 
         SelfTestBody(Check);
+        SelfTestObstacles(Check);
         SelfTestFlight(Check);
+    }
+
+    // What stands on the floor stops the walking body, which slides along it, and lets a flight pass over.
+    private static void SelfTestObstacles(Action<bool, string> Check)
+    {
+        static float Clearance(SN.Vector2 p) => Obstacles.Min(o =>
+        {
+            var (u, v) = (new SN.Vector2(MathF.Cos(o.Turn), -MathF.Sin(o.Turn)), new SN.Vector2(MathF.Sin(o.Turn), MathF.Cos(o.Turn)));
+            var d = p - o.Centre;
+            var local = new SN.Vector2(SN.Vector2.Dot(d, u), SN.Vector2.Dot(d, v));
+            return (local - SN.Vector2.Clamp(local, -o.Half, o.Half)).Length();
+        });
+
+        var camera = new FreeCamera();
+        camera.Look(0f, 1e-9, 0); // from the drift's eye, straight at Delta
+        var closest = float.MaxValue;
+        for (var i = 0; i < 240; i++)
+        {
+            camera.Move(0f, new(1, 0, 0, true), 1f / 60f);
+            closest = Math.Min(closest, Clearance(camera.body));
+        }
+
+        Check(camera.body.Y > 0.3f && closest > Radius - 0.005f, $"walking at Delta stops in front of it, the body {Radius:F2} m off ({camera.body.Y:F2} m, {closest:F3} m)");
+        for (var i = 0; i < 120; i++)
+        {
+            camera.Move(0f, new(1, 1, 0, false), 1f / 60f);
+            closest = Math.Min(closest, Clearance(camera.body));
+        }
+
+        Check(camera.body.X > 0.42f + Radius && camera.body.Y < 0.3f && closest > Radius - 0.005f, $"forward and right slides along it and past it ({camera.body.X:F2}, {camera.body.Y:F2})");
+
+        // Every way from four places in the hall, for 4 s at a sprint: never into anything.
+        var into = 0;
+        foreach (var start in new SN.Vector2[] { new(0f, 2.5f), new(-2.1f, 0f), new(2.2f, -0.8f), new(1.6f, -2.6f) })
+        {
+            for (var way = 0; way < 16; way++)
+            {
+                camera = new FreeCamera();
+                camera.Look(0f, 1e-9, 0);
+                camera.Move(0f, default, 1f / 60f);
+                camera.body = start;
+                camera.Look(0f, way * MathF.PI / 8f / Sensitivity, 0);
+                for (var i = 0; i < 240; i++)
+                {
+                    camera.Move(0f, new(1, 0, 0, true), 1f / 60f);
+                    into += Clearance(camera.body) < Radius - 0.005f ? 1 : 0;
+                }
+            }
+        }
+
+        Check(into == 0, $"walked every way at a sprint, the body never enters the pallet, the cabinets, the pillars, Gaia or Delta ({into} frames in)");
+        camera = new FreeCamera();
+        camera.Look(0f, 1e-9, 0);
+        camera.ToggleFlying(0f);
+        for (var i = 0; i < 240; i++)
+        {
+            camera.Move(0f, new(1, 0, 0, false), 1f / 60f);
+        }
+
+        Check(camera.View(0f).Eye.Z < -0.5f, "free flight is left as it was, through them (walk_physics.gd's)");
     }
 
     private static void SelfTestBody(Action<bool, string> Check)
@@ -764,9 +891,10 @@ internal sealed class FreeCamera
             camera.Move(0f, default, 1f / 60f);
         }
 
-        // A slide: C while sprinting rushes on, lower, rolled and wider, then ends crouched. Back from the wall first.
+        // A slide: C while sprinting rushes on, lower, rolled and wider, then ends crouched. Back from the wall first, and
+        // across the hall, clear of Delta.
         camera.GoTo(1);
-        camera.Look(0f, 1e-9, 0);
+        camera.Look(0f, MathF.PI / 2f / Sensitivity, 0);
         for (var i = 0; i < 30; i++)
         {
             camera.Move(0f, new(1, 0, 0, true), 1f / 60f);
