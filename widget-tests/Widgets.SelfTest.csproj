@@ -13,5 +13,6 @@
     <Compile Include="../scene/OfficeActivities.cs" Link="OfficeActivities.cs" />
     <Compile Include="../scene/OfficeSelection.cs" Link="OfficeSelection.cs" />
     <Compile Include="../scene/WidgetPicking.cs" Link="WidgetPicking.cs" />
+    <Compile Include="../scene/WallSource.cs" Link="WallSource.cs" />
   </ItemGroup>
 </Project>

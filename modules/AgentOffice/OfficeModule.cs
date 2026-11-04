@@ -95,7 +95,7 @@ public sealed class OfficeModule : IOfficeModule
 
             var back = first - (((members.Count - 1) / columns) * RowDepth * scale) - (PenBack * scale);
             var width = ((columns - 1) * pitch) + (2 * PenSide * scale);
-            var title = group.Key.Length == 0 ? Say("Outside wmux", "Hors de wmux") : group.First().WorkspaceTitle is { Length: > 0 } t ? t : group.Key;
+            var title = group.Key.Length == 0 ? Say("No wmux pane", "Sans volet wmux") : group.First().WorkspaceTitle is { Length: > 0 } t ? t : group.Key;
             roots.Add(new(PenKey(group.Key), Pen, Place(Right - ((columns - 1) * pitch / 2), 0f, (front + back) / 2), new Dictionary<string, WidgetValue>
             {
                 ["w"] = width, ["d"] = front - back, ["title"] = title.Length > 40 ? title[..39] + "…" : title,

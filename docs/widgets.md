@@ -56,8 +56,8 @@ The model follows GA's Lego demo (ga-brutal, `Experiments/Brutal/Lego`, MIT). On
 ## The agents' office
 
 - **Stations:** one per Claude Code session, on the robot's left (x from -1.45 to -0.69, from z = 0.3 going back), in
-  an enclosure per wmux workspace that shows the workspace's title, and one more, "Outside wmux", for the sessions
-  without a pane. Enclosures go back in the order their first sessions started; stations come closer and smaller when
+  an enclosure per wmux workspace that shows the workspace's title, and one more, "No wmux pane", for the sessions
+  that wmux does not name, such as a background session (kind bg), which has no pane anywhere. Enclosures go back in the order their first sessions started; stations come closer and smaller when
   the rows and enclosures would not fit in 2.9 m. Paths come from IDs (`s-<12 letters of the session's ID>`,
   `w-<12 letters of the workspace's ID>`, `w-outside`) and desks are ordered by start, so a refresh in another order or
   a renamed workspace moves nothing. Two sessions with one name show their IDs' first four letters on their plates.

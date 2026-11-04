@@ -3,7 +3,8 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 
 // CPU checks of the widget system and the agents' office, on the real office module images (v0.1 and v0.2); only the
-// mesh port is simulated. Arguments: the two AgentOffice.Module.dll images.
+// mesh port is simulated. Arguments: the two AgentOffice.Module.dll images. --wall runs only the wall screen's checks
+// (WallSource), which need no image.
 var failures = 0;
 void Check(bool ok, string message)
 {
@@ -13,6 +14,13 @@ void Check(bool ok, string message)
 
 try
 {
+    if (args is ["--wall"])
+    {
+        WallSource.SelfTest(Check);
+        Console.WriteLine(failures == 0 ? "WIDGET TESTS PASSED" : $"WIDGET TESTS FAILED {failures}");
+        return failures == 0 ? 0 : 1;
+    }
+
     if (args.Length != 2) throw new ArgumentException("Expected the paths to the v0.1 and v0.2 office module images.");
     Expansion(Check);
     Stage(Check);

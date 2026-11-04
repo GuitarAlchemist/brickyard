@@ -265,7 +265,7 @@ internal sealed class Shelf
     {
         var sessions = RunningSessions();
         var wmux = Wmux.Read();
-        var outside = Words.Say("Outside wmux", "Hors de wmux");
+        var outside = Words.Say("No wmux pane", "Sans volet wmux"); // a background session (kind bg) has no pane anywhere
         var groups = sessions
             .GroupBy(s => wmux.Workspaces.TryGetValue(s.Id, out var w) ? w : outside)
             .OrderBy(g => g.Key == outside ? 1 : 0).ThenBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase);
