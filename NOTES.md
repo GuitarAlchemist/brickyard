@@ -983,7 +983,14 @@ first 3 m from the eye, then 0.12 per metre, half as thick 2 m up, towards a dim
 is also the clear colour beyond the hall, so that the hall's open side dissolves into it instead of ending in black. B
 turns it off and on, --no-fog starts without it; Flat is unchanged. In captures at 1920x1080, view 1 (Delta) keeps the
 robot as it was and cools the far wall; view 4 sends the far floor and the open side into the haze. Hidden, capped at
-60 fps, the frame times did not move (p95 17.0 ms); its GPU cost was not measured on its own. Not yet seen live.
+60 fps, the frame times did not move (p95 17.0 ms); its GPU cost was not measured on its own. Seen live on 2026-11-04,
+the user found it too thick: halved to 0.06 per metre, about half the light through at 15 m instead of 9 m.
+
+The same day the agents' office was missing from the live window: since the third build of 2026-11-01 the scene had
+refused it (TargetInvocationException), because the installed image in `bin/…/modules/office` was built on 2026-10-29,
+before 9c42440 changed the contract's `OfficeSession` and `OfficeState` constructors. Rebuilt from the source with
+`dotnet build modules/AgentOffice/AgentOffice.Module.csproj -c Release -o <that dir>` (widget tests 62 ok on it).
+Nothing rebuilds that image when the contract changes: a stale image shows only as a refused line in scene.log.
 
 ## Known problems
 

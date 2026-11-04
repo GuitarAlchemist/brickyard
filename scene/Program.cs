@@ -273,7 +273,7 @@ internal static unsafe class Stage
         }
         """;
 
-    private const float Haze = 0.12f; // the haze's density per metre past its first 3 m: about half the light through at 9 m
+    private const float Haze = 0.06f; // the haze's density per metre past its first 3 m: about half the light through at 15 m
     private static readonly float4 HazeColor = new(0.075f, 0.09f, 0.115f, 1f); // the shader's haze() colour
 
     // How the scene is lit (--quality): Flat as it was first drawn, or Low (LowFragmentShader).
