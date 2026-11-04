@@ -1592,8 +1592,8 @@ internal static unsafe class Stage
                     {
                         var projects = Path.Combine(Shelf.ClaudeDir(), "projects");
                         var path = Directory.Exists(projects) ? Directory.EnumerateFiles(projects, id + ".jsonl", SearchOption.AllDirectories).FirstOrDefault() : null;
-                        var ends = path is null ? null : Conversations.Read(path);
-                        wallTranscript = ends is null ? null : new(ends.Title, ends.Requests, File.GetLastWriteTimeUtc(path!));
+                        var ends = path is null ? null : Conversations.Read(path, Conversations.Search);
+                        wallTranscript = ends is null ? null : new(ends.Title, ends.Requests, File.GetLastWriteTimeUtc(path!), ends.Unfound);
                     }
                     catch (Exception e) when (e is IOException or UnauthorizedAccessException) { wallTranscript = null; }
                     finally { Volatile.Write(ref wallReading, 0); }

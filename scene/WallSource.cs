@@ -15,7 +15,8 @@ internal sealed class WallSource
     internal enum Kind { Parsec, Pong, Session }
 
     // A session's transcript as read: its title and its last requests, oldest first, and when the file was last written.
-    internal sealed record Transcript(string Title, IReadOnlyList<(string Text, DateTimeOffset At)> Requests, DateTimeOffset Written);
+    // Unfound: the bytes read from its end without a request, when its latest requests are unknown (Conversations).
+    internal sealed record Transcript(string Title, IReadOnlyList<(string Text, DateTimeOffset At)> Requests, DateTimeOffset Written, long Unfound = 0);
 
     public Kind Showing { get; private set; } = Kind.Parsec;
 
@@ -64,6 +65,11 @@ internal sealed class WallSource
             // The request's own date and time from the transcript, in UTC: never a bare time, which reads as today's.
             var when = at == default ? say("date unknown", "date inconnue") : at.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'", System.Globalization.CultureInfo.InvariantCulture);
             lines.Add($"{when}  {Hidden.Replace(text, "[hidden]")}");
+        }
+
+        if (transcript is { Requests.Count: 0, Unfound: > 0 } t)
+        {
+            lines.Add(say($"latest requests unknown: none in its last {t.Unfound >> 20} MiB", $"dernières demandes inconnues : aucune dans ses derniers {t.Unfound >> 20} Mio"));
         }
 
         return lines;
@@ -119,6 +125,8 @@ internal sealed class WallSource
         check(aged.Contains("2026-11-03 20:09 UTC  hier soir") && !aged.Contains("\n15:09"), "a request from another day says that day, never only a time that looks like today's");
         var undated = string.Join("\n", Card(id, [working], 2, new("t", [("sans heure", default)], now), now, En));
         check(undated.Contains("date unknown  sans heure") && !undated.Contains("0001") && !undated.Contains(":00  sans"), "a request without a readable date says so");
+        var lost = string.Join("\n", Card(id, [working], 2, new("t", [], now, 16L << 20), now, En));
+        check(lost.Contains("latest requests unknown: none in its last 16 MiB") && lost.Contains("working · live"), "a long session whose latest requests lie beyond the search says they are unknown");
         var keyed = new Transcript("t", [("use sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 now", now)], now);
         var redacted = string.Join("\n", Card(id, [working], 2, keyed, now, En));
         check(!redacted.Contains("AbCdEfGhIjKlMnOp") && redacted.Contains("use") && redacted.Contains("[hidden]"), "a token in a request is hidden");
