@@ -266,6 +266,9 @@ static void Office(Action<bool, string> check, string image)
     office.Update(new("en", false, [.. Enumerable.Range(1, 24).Select(i => S(i, OfficeActivity.Working))]));
     var crowd = Widgets.Expand(office.Scene());
     check(crowd.Valid && office.Revision != revision, $"24 sessions still fit ({crowd.Instances} instances)");
+    office.Update(new("en", false, [.. Enumerable.Range(1, 9).Select(i => S(i, OfficeActivity.Working) with { WorkspaceId = $"ws-{i}", WorkspaceTitle = $"w{i}", Started = i })]));
+    var spread = Widgets.Expand(office.Scene());
+    check(spread.Valid, $"9 sessions in 9 workspaces still fit, every enclosure within its widget's sizes{string.Concat(spread.Problems.Take(2).Select(p => "; " + p))}");
     office.Update(new("en", false, []));
     check(Widgets.Expand(office.Scene()).Valid, "an office without sessions still shows its empty desk");
 }

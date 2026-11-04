@@ -322,7 +322,9 @@ public sealed class OfficeModule : IOfficeModule
             ])),
 
         // A workspace's enclosure, centred: low rails round w by d metres, a dark floor, and its name on a sign at the front.
-        new(Pen, [new("w", 1.0, 0.2, 4), new("d", 1.0, 0.2, 4), Text("title")],
+        // As small as the layout makes it when many workspaces share the depth (a station's margins at a third of full size
+        // or less), else the scene refuses the whole office and keeps the tree it showed before.
+        new(Pen, [new("w", 1.0, 0.02, 4), new("d", 1.0, 0.02, 4), Text("title")],
             a =>
             {
                 var (w, d) = ((float)a.Number("w"), (float)a.Number("d"));

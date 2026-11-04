@@ -1615,21 +1615,31 @@ internal static unsafe class Stage
             if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y)) TryCabinetClick(x, y, simulated);
         }
 
-        // --wall-real, once a frame after the splash: the session picked once the office's first reading names it, then at
+        // --wall-real, once a frame after the splash: once the office's reading names the session and its robot is drawn
+        // (4 s at most), a click on a point of that robot that the window's picking gives to it, through Click; then at
         // 6.5 s its card printed and checked: shown, its ID, a fresh reading, its transcript found.
         void WallReal(string id, double at)
         {
-            if (wallTestStep == 0 && officeFeed?.ReadAgo(DateTimeOffset.UtcNow) is not null && officeFeed.Sessions.Any(s => s.Id == id))
+            void Check(bool ok, string what) { Console.WriteLine($"WALLREAL {(ok ? "ok" : "FAIL")} {what}"); if (!ok) wallTestFailures++; }
+            if (wallTestStep == 0 && officeFeed?.ReadAgo(DateTimeOffset.UtcNow) is not null && officeFeed.Sessions.Any(s => s.Id == id)
+                && (officeStage?.Hits.Any(h => h.Click == id) == true || at >= 4.0))
             {
-                OfficeClicked(id);
                 wallTestStep = 1;
+                var robot = officeStage?.Hits.Where(h => h.Click == id).ToList() ?? [];
+                var point = officeView is { } view
+                    ? robot.Select(h => OnScreen((h.Min + h.Max) / 2f, view))
+                        .FirstOrDefault(c => c is { } p && WidgetPicking.Pick(officeStage!.Hits, view, extent.Width, extent.Height, p.X, p.Y) == id)
+                    : null;
+                var tree = officeStage?.Problems is [{ } problem, ..] ? $"its tree refused: {problem}" : "its tree accepted";
+                Check(point is not null, $"session {id[..Math.Min(8, id.Length)]} has a robot the window can click ({robot.Count} instances, {officeFeed.Sessions.Count} sessions read, {tree})");
+                if (point is { } c) Click(c.X, c.Y, true);
+                Check(officeSelection.Selected == id, $"a click on its robot selects its session (selected: {officeSelection.Selected ?? "none"})");
             }
             else if (wallTestStep == 1 && at >= 6.5)
             {
                 wallTestStep = 2;
                 foreach (var line in wallLines) Console.WriteLine($"WALLREAL card: {line}");
                 var text = string.Join("\n", wallLines);
-                void Check(bool ok, string what) { Console.WriteLine($"WALLREAL {(ok ? "ok" : "FAIL")} {what}"); if (!ok) wallTestFailures++; }
                 Check(wall.Showing == WallSource.Kind.Session && wall.Session == id, "the wall shows the picked session");
                 Check(wallLines.Count > 1 && wallLines[1].StartsWith(id[..Math.Min(8, id.Length)], StringComparison.Ordinal), "its card carries its ID");
                 Check(text.Contains(Words.Say("read ", "lue il y a "), StringComparison.Ordinal), $"the office's reading is fresh ({officeFeed?.ReadAgo(DateTimeOffset.UtcNow):F1} s)");
