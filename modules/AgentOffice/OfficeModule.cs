@@ -20,8 +20,9 @@ public sealed class OfficeModule : IOfficeModule
 {
     private const float Pitch = 0.38f; // between stations at full size, in metres
     private const float Left = -1.45f, Right = -0.69f, Front = 0.3f;
-    private const float RowDepth = 0.45f, Deep = 2.9f; // a row of stations; the depth the enclosures may take from the front
-    private const float PenFront = 0.17f, PenBack = 0.3f, PenSide = 0.2f, PenGap = 0.2f; // an enclosure's margins round its stations, and the aisle between two
+    private const float RowDepth = 0.45f, Deep = 3.3f; // a row of stations; the depth the enclosures may take from the front, to 0.3 m off the bricks
+    private const float PenFront = 0.17f, PenBack = 0.3f, PenSide = 0.2f; // an enclosure's margins round its stations, scaled with them
+    private const float Aisle = 0.17f; // between two enclosures' rails, whatever their scale, while the aisles take half the depth at most
     private const double DoneHop = 2.4; // seconds of jumping after a session finishes
     private const int MaxDrawn = 48; // stations drawn at most: about 37 instances each with its enclosure, within the scene's 2048
 
@@ -91,7 +92,8 @@ public sealed class OfficeModule : IOfficeModule
         var columns = Math.Max(3, (int)Math.Ceiling(sessions.Count / 4.0));
         var pitch = Math.Min(Pitch, (Right - Left) / (columns - 1));
         var rows = groups.Sum(g => (g.Count() + columns - 1) / columns);
-        var scale = Math.Min(pitch / Pitch, Deep / (((rows - groups.Count) * RowDepth) + (groups.Count * (PenFront + PenBack + PenGap)))); // an enclosure's first row lies in its margins
+        var aisle = groups.Count > 1 ? Math.Min(Aisle, Deep / 2 / (groups.Count - 1)) : 0f; // 0.17 m up to 10 enclosures, narrower beyond, never none
+        var scale = Math.Min(pitch / Pitch, (Deep - (aisle * (groups.Count - 1))) / (((rows - groups.Count) * RowDepth) + (groups.Count * (PenFront + PenBack)))); // an enclosure's first row lies in its margins
         pitch = Pitch * scale;
         var front = Front + (PenFront * scale);
         foreach (var group in groups)
@@ -109,9 +111,9 @@ public sealed class OfficeModule : IOfficeModule
             var title = group.Key.Length == 0 ? Say("No wmux pane", "Sans volet wmux") : group.First().WorkspaceTitle is { Length: > 0 } t ? t : group.Key;
             roots.Add(new(PenKey(group.Key), Pen, Place(Right - ((columns - 1) * pitch / 2), 0f, (front + back) / 2), new Dictionary<string, WidgetValue>
             {
-                ["w"] = width, ["d"] = front - back, ["title"] = title.Length > 40 ? title[..39] + "…" : title,
+                ["w"] = width, ["d"] = front - back, ["s"] = scale, ["title"] = title.Length > 40 ? title[..39] + "…" : title,
             }));
-            front = back - (PenGap * scale);
+            front = back - aisle;
         }
 
         return new(Library, roots);
@@ -339,18 +341,20 @@ public sealed class OfficeModule : IOfficeModule
         // A workspace's enclosure, centred: low rails round w by d metres, a dark floor, and its name on a sign at the front.
         // As small as the layout makes it when many workspaces share the depth (a station's margins at a third of full size
         // or less), else the scene refuses the whole office and keeps the tree it showed before.
-        new(Pen, [new("w", 1.0, 0.02, 4), new("d", 1.0, 0.02, 4), Text("title")],
+        // The sign stands just inside the front rail, at the stations' scale s, and never wider than the rails.
+        new(Pen, [new("w", 1.0, 0.02, 4), new("d", 1.0, 0.02, 4), new("s", 1.0, 0.02, 1), Text("title")],
             a =>
             {
-                var (w, d) = ((float)a.Number("w"), (float)a.Number("d"));
+                var (w, d, s) = ((float)a.Number("w"), (float)a.Number("d"), (float)a.Number("s"));
                 var title = a.Text("title");
-                var wide = Math.Min(0.42f, 0.02f * title.Length);
+                var wide = Math.Max(0.01f, Math.Min(Math.Min(0.42f, 0.02f * title.Length) * s, w - (0.08f * s) - 0.016f));
+                var (x, y, z) = (-w / 2 + 0.008f + (0.02f * s) + (wide / 2) + (0.02f * s), 0.04f + (0.035f * s), (d / 2) - 0.016f); // its foot above the rail
                 return new([
                     B(0, 0.002f, 0, w, 0.004f, d, new(0.07f, 0.075f, 0.08f), 0),
                     B(0, 0.02f, d / 2, w, 0.03f, 0.016f, Steel, 3), B(0, 0.02f, -d / 2, w, 0.03f, 0.016f, Steel, 3),
                     B(-w / 2, 0.02f, 0, 0.016f, 0.03f, d, Steel, 3), B(w / 2, 0.02f, 0, 0.016f, 0.03f, d, Steel, 3),
-                    B(-w / 2 + 0.05f + wide / 2, 0.075f, d / 2 + 0.012f, wide + 0.04f, 0.07f, 0.008f, Dark, 3),
-                    new TextPiece(title, new(-w / 2 + 0.05f + wide / 2, 0.075f, d / 2 + 0.018f), wide, Pale),
+                    B(x, y, z, wide + (0.04f * s), 0.07f * s, 0.008f, Dark, 3),
+                    new TextPiece(title, new(x, y, z + 0.006f), wide, Pale),
                 ]);
             }),
 

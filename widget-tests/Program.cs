@@ -30,6 +30,7 @@ try
     WidgetPicking.SelfTest(Check);
     Office(Check, args[0]);
     Enclosures(Check, args[0]);
+    Aisles(Check, args[0]);
     Reload(Check, args[0], args[1]);
 }
 catch (Exception e)
@@ -302,6 +303,36 @@ static void Office(Action<bool, string> check, string image)
 
     office.Update(new("en", false, []));
     check(Widgets.Expand(office.Scene()).Valid, "an office without sessions still shows its empty desk");
+}
+
+// The aisles between enclosures and their signs, from 3 to 48 workspaces with long titles: footprints apart, a useful
+// aisle up to 12, each sign within its rails, the office clear of the bricks.
+static void Aisles(Action<bool, string> check, string image)
+{
+    using var session = new WidgetModuleSession<IOfficeModule>(image, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
+    var office = session.Module;
+    foreach (var n in new[] { 3, 6, 9, 12, 24, 48 })
+    {
+        office.Update(new("en", false, [.. Enumerable.Range(1, n).Select(i => new OfficeSession($"{i:x8}-aaaa", $"s{i}", OfficeActivity.Idle, 1, $"ws-{i}", $"Workspace {i} with a long forty-two char name", i))]));
+        var tree = Widgets.Expand(office.Scene());
+        var rects = new List<(Vector2 Min, Vector2 Max)>();
+        var inside = true;
+        foreach (var pen in tree.Roots.Where(r => r.Path.StartsWith("w-")))
+        {
+            var at = pen.Local.Translation;
+            var boxes = All([pen]).SelectMany(i => i.Boxes).ToList();
+            var half = boxes.First(b => b.Size.Y < 0.005f).Size.X / 2; // the floor
+            inside &= boxes.All(b => MathF.Abs(b.Centre.X) + (b.Size.X / 2) <= half + 0.0085f);
+            rects.Add((new(at.X + boxes.Min(b => b.Centre.X - (b.Size.X / 2)), at.Z + boxes.Min(b => b.Centre.Z - (b.Size.Z / 2))),
+                new(at.X + boxes.Max(b => b.Centre.X + (b.Size.X / 2)), at.Z + boxes.Max(b => b.Centre.Z + (b.Size.Z / 2)))));
+        }
+
+        var gap = rects.SelectMany((a, i) => rects.Skip(i + 1).Select(b => Math.Max(Math.Max(b.Min.X - a.Max.X, a.Min.X - b.Max.X), Math.Max(b.Min.Y - a.Max.Y, a.Min.Y - b.Max.Y)))).Min();
+        var back = rects.Min(r => r.Min.Y);
+        var want = n <= 9 ? 0.15f : n <= 12 ? 0.12f : 0.005f;
+        check(tree.Valid && rects.Count == n && gap >= want && inside && back > -3.1f,
+            $"{n} workspaces: enclosures {gap:F3} m apart (at least {want}), every sign within its rails ({inside}), the back at {back:F2} m");
+    }
 }
 
 // Readable names, an enclosure per workspace, stable identities and the selection's mark, on the real module.
