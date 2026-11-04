@@ -41,3 +41,14 @@ icon). Scanning the QR pairs the device in one step; it then needs no code for 9
 
 Needs ffmpeg 8 or later with `gfxcapture` and `libx264` on PATH (or `-ffmpeg <path>`), and a brain with `/hear`,
 `/said` and `/link` for voice and the QR.
+
+To put this checkout's gateway in place of a running one, with the same arguments:
+
+```powershell
+.\remote\deploy.ps1 -Dir <the folder the gateway runs from> -Check   # says what a deploy would do, changes nothing
+.\remote\deploy.ps1 -Dir <the folder the gateway runs from>          # builds and replaces; -Back puts the last one back
+```
+
+It replaces nothing while a device, a guest or Delta's window is connected, nor when the gateway already runs this
+build: a commit builds to the same bytes. A new build that does not listen within 15 s is stopped and the old one
+starts again. `<folder>\deploy.json` keeps the arguments, so a gateway that died starts again with them.

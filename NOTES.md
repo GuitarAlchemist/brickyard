@@ -805,6 +805,53 @@ Still to see live:
 - the delay;
 - whether the microphone shared with Delta's own listening keeps both working.
 
+## The gateway's deploy (2026-11-04)
+
+The user asked for one maintained tool instead of a new restart script each time: `remote/deploy.ps1`. It builds this
+checkout with a plain `go build`, which gives the same bytes for a commit (HEAD 0e30ca4 built to SHA-256 `3f2654f2…`,
+the running gateway's own), and replaces the gateway started from `-Dir` with the same arguments, unless someone is
+connected to one of its entries or it already runs this build. `-Check` says what a deploy would do; `-Back` puts the
+last replaced build back; a build that does not listen within 15 s is stopped and the old one starts again;
+`deploy.json` keeps the arguments, so a gateway that died starts again with them.
+
+Five tests, `deploy_windows_test.go`, run the script against copies of the test binary that only listen on loopback,
+in their own folder: the same arguments after a deploy and after `-Back` (a quoted microphone name included), nothing
+replaced while a connection is open, the old build back after one that exits at once, a dead gateway started again,
+and `-Check` changing nothing. 46 s, in parallel; Windows PowerShell's start and its CIM and TCP lookups take most of
+it. Two traps they caught under Windows PowerShell 5.1: a function's one CIM object comes back unrolled, its `.Count`
+then `$null`; and `Get-FileHash` is missing when it is started from PowerShell 7, whose module path it inherits.
+
+`-Check` on the live folder, 2026-11-04 at about 14:12 UTC: 0e30ca4 runs on 8810, 8812, 8813 and 8814, nobody connected,
+"nothing: it already runs this build". No restart was made.
+
+A sixth test runs it as a shell or a tool does, reading its output through a pipe. With `Start-Process`'s own
+redirection the pipe stayed open after the script ended, for a deploy (exit 0) and for a failed one put back (exit 1):
+the gateway inherited it. Making the script's three standard handles not inheritable did not help, so Windows
+PowerShell holds others on the pipe. Starting it through `cmd` by ShellExecute freed the pipe, but `cmd` read the
+path and the arguments: with a folder named `gate way & 100%X%`, where `X` names a variable set for the test only,
+the new build never started and neither did the old one put back, so no gateway ran. The gateway now starts by
+`CreateProcess`, compiled by `Add-Type`, with its command line as it was and the two log files as the only handles
+it inherits. Paths are taken literally, so that `[1]` in a folder's name is not read as a pattern either.
+
+Two more tests: that folder, with `[1]`, and arguments holding spaces, quotes, `&`, `%X%`, `^ | < >` reach the new
+build and the old one put back unchanged, through a pipe; and a gateway started through an unquoted path with a space,
+whose arguments cannot be told from its command line, is refused before anything is saved, stopped or replaced
+(without the refusal, the deploy exited 0 with the arguments cut). The eight tests pass in 27 s.
+
+Indigo's review then started a build Windows refuses (a text file): `CreateProcess` threw after the old gateway was
+stopped, the script ended there, and no gateway ran until `-Back`. A start that throws is now a start that failed, and
+takes the rollback: the old build runs again with its arguments, or the script says, exit 1, that neither could start
+and no gateway runs. A build from the checkout now goes into the folder only after the refusals, so a refused deploy
+leaves it as it was. Three tests, red first: a build that cannot start, neither build able to start, and a refused
+deploy from the checkout. Eleven tests, 29 s.
+
+Read, not tested: the return values of `SetHandleInformation` are not checked, and the process handle lives until
+the script ends. The gateway starts in the caller's job object: this tool's shells run in one, and so does the live
+gateway, which outlived the shell that started it on 2026-11-04 at 02:57; whether that job ends its processes when its
+host closes is not known.
+
+Still to verify: a real deploy of a new commit with the tablet paired, and the picture on the tablet.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

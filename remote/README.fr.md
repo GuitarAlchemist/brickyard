@@ -43,3 +43,14 @@ lien. `-forget-devices` désappaire tous les appareils.
 
 Il faut ffmpeg 8 ou plus récent, avec `gfxcapture` et `libx264`, dans le PATH (ou `-ffmpeg <chemin>`), et un cerveau
 qui a `/hear`, `/said` et `/link` pour la voix et le QR.
+
+Pour mettre la passerelle de ce checkout à la place de celle qui tourne, avec les mêmes arguments :
+
+```powershell
+.\remote\deploy.ps1 -Dir <le dossier de la passerelle> -Check   # dit ce que ferait un déploiement, ne change rien
+.\remote\deploy.ps1 -Dir <le dossier de la passerelle>          # compile et remplace ; -Back remet la précédente
+```
+
+Il ne remplace rien tant qu'un appareil, un invité ou la fenêtre de Delta est connecté, ni quand la passerelle tourne
+déjà ce build : un commit donne toujours les mêmes octets. Un nouveau build qui n'écoute pas dans les 15 s est arrêté et
+l'ancien redémarre. `<dossier>\deploy.json` garde les arguments, donc une passerelle morte redémarre avec eux.
