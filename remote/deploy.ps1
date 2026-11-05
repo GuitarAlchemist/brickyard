@@ -65,7 +65,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
-public class DeployedGateway {
+public class DeployedGateway : IDisposable {
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct StartupInfo {
         public int cb; public string reserved, desktop, title;
@@ -91,22 +91,34 @@ public class DeployedGateway {
     [DllImport("kernel32.dll")] static extern int WaitForSingleObject(IntPtr h, int milliseconds);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
 
-    const int HandleList = 0x20002, NoWindow = 0x08000000, ExtendedStartup = 0x80000, UseStdHandles = 0x100;
+    const int HandleList = 0x20002, NoWindow = 0x08000000, ExtendedStartup = 0x80000, UseStdHandles = 0x100,
+        InsufficientBuffer = 122;
     IntPtr process;
     public int Id;
     public bool HasExited { get { return WaitForSingleObject(process, 0) == 0; } }
+
+    // Closes this script's handle on the gateway; the gateway runs on.
+    public void Dispose() {
+        if (process != IntPtr.Zero) CloseHandle(process);
+        process = IntPtr.Zero;
+    }
 
     public static DeployedGateway Start(string exe, string commandLine, string directory, string outLog, string errLog) {
         using (FileStream output = new FileStream(outLog, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
         using (FileStream error = new FileStream(errLog, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)) {
             IntPtr o = output.SafeFileHandle.DangerousGetHandle(), e = error.SafeFileHandle.DangerousGetHandle();
-            SetHandleInformation(o, 1, 1);
-            SetHandleInformation(e, 1, 1);
+            if (!SetHandleInformation(o, 1, 1) || !SetHandleInformation(e, 1, 1)) throw new Win32Exception();
+            // Asked for its size only, the list says so by failing with ERROR_INSUFFICIENT_BUFFER.
             IntPtr size = IntPtr.Zero;
-            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
-            IntPtr list = Marshal.AllocHGlobal(size), handles = Marshal.AllocHGlobal(2 * IntPtr.Size);
+            if (!InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size) &&
+                Marshal.GetLastWin32Error() != InsufficientBuffer) throw new Win32Exception();
+            IntPtr list = IntPtr.Zero, handles = IntPtr.Zero;
+            bool initialized = false;
             try {
+                list = Marshal.AllocHGlobal(size);
+                handles = Marshal.AllocHGlobal(2 * IntPtr.Size);
                 if (!InitializeProcThreadAttributeList(list, 1, 0, ref size)) throw new Win32Exception();
+                initialized = true;
                 Marshal.WriteIntPtr(handles, 0, o);
                 Marshal.WriteIntPtr(handles, IntPtr.Size, e);
                 if (!UpdateProcThreadAttribute(list, 0, (IntPtr)HandleList, handles, (IntPtr)(2 * IntPtr.Size),
@@ -126,7 +138,7 @@ public class DeployedGateway {
                 g.Id = started.id;
                 return g;
             } finally {
-                DeleteProcThreadAttributeList(list);
+                if (initialized) DeleteProcThreadAttributeList(list);
                 Marshal.FreeHGlobal(list);
                 Marshal.FreeHGlobal(handles);
             }
@@ -256,16 +268,22 @@ $name = Split-Path $target -Leaf
 $new = Start-Gateway $target $arguments
 if (Await $new $ports) {
     "$name runs, PID $($new.Id), listening on $((Listening $new.Id) -join ', ')"
+    $new.Dispose()
     return
 }
 if ($new -and -not $new.HasExited) { Stop-Process -Id $new.Id -Force; Wait-Process -Id $new.Id -Timeout 10 -ErrorAction SilentlyContinue }
-if ($new) { $failed = "$name did not listen on $($ports -join ', ') within 15 s" } else { $failed = "$name could not start: $launchError" }
+if ($new) { $new.Dispose(); $failed = "$name did not listen on $($ports -join ', ') within 15 s" } else { $failed = "$name could not start: $launchError" }
 if (-not $old) { throw "$failed; no gateway runs" }
 $before = $null
 if ($state) { $before = $state.previous }
 Save $arguments $before
 $oldName = Split-Path $old.ExecutablePath -Leaf
 $again = Start-Gateway $old.ExecutablePath $arguments
-if (Await $again $ports) { throw "$failed; $oldName runs again, PID $($again.Id)" }
+$back = Await $again $ports
+$starting = $again -and -not $back -and -not $again.HasExited
+if ($again) { $again.Dispose() }
+if ($back) { throw "$failed; $oldName runs again, PID $($again.Id)" }
+# Left running: it may still be starting, and it is the only build there is.
+if ($starting) { throw "$failed, and $oldName did not listen again within 15 s: it still runs, PID $($again.Id), and may yet listen" }
 if ($again) { throw "$failed, and $oldName did not listen again within 15 s: no gateway runs" }
 throw "$failed, and $oldName could not start again: $launchError; no gateway runs"

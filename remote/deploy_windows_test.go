@@ -25,6 +25,9 @@ const fakeGatewayEnv = "DELTA_REMOTE_FAKE_GATEWAY"
 // fakeMark is set for the fakes and the script only, so that an argument naming it shows whether something expanded it.
 const fakeMark = "DELTA_REMOTE_FAKE_MARK"
 
+// slowMark, a file in a fake folder, makes the builds started from it slow to listen.
+const slowMark = "slow-start"
+
 func fakeEnv() []string { return append(os.Environ(), fakeGatewayEnv+"=1", fakeMark+"=EXPANDED") }
 
 func TestMain(m *testing.M) {
@@ -42,13 +45,20 @@ type fakeStart struct {
 }
 
 // fakeGateway listens on the -port and -local-port it is given, then writes what it was started with beside its
-// executable. A build named *broken* exits at once, as a gateway that cannot start would.
+// executable. A build named *broken* exits at once, as a gateway that cannot start would; with slowMark beside it, a
+// build waits 25 s before it listens, longer than deploy.ps1 waits.
 func fakeGateway() {
 	exe, _ := os.Executable()
 	if strings.Contains(filepath.Base(exe), "broken") {
 		os.Exit(3)
 	}
 	args := os.Args[1:]
+	started := filepath.Join(filepath.Dir(exe), fmt.Sprintf("started-%d.json", os.Getpid()))
+	if _, err := os.Stat(filepath.Join(filepath.Dir(exe), slowMark)); err == nil {
+		data, _ := json.Marshal(fakeStart{PID: os.Getpid(), Exe: exe, Args: args})
+		os.WriteFile(started, data, 0o644)
+		time.Sleep(25 * time.Second)
+	}
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] != "-port" && args[i] != "-local-port" {
 			continue
@@ -68,7 +78,7 @@ func fakeGateway() {
 		}()
 	}
 	data, _ := json.Marshal(fakeStart{PID: os.Getpid(), Exe: exe, Args: args})
-	os.WriteFile(filepath.Join(filepath.Dir(exe), fmt.Sprintf("started-%d.json", os.Getpid())), data, 0o644)
+	os.WriteFile(started, data, 0o644)
 	select {}
 }
 
@@ -400,6 +410,24 @@ func TestDeploySaysNoGatewayRunsWhenNeitherBuildCanStart(t *testing.T) {
 	out, code, held := f.deployPiped("-Exe", f.invalidBuild())
 	if held || code != 1 || !strings.Contains(out, "no gateway runs") || strings.Contains(out, "runs again") {
 		t.Errorf("neither build starts: exit %d, pipe held %v", code, held)
+	}
+}
+
+// The old build put back is still starting when deploy.ps1 stops waiting: it is not said to be gone.
+func TestDeploySaysTheOldBuildStillStartsWhenItIsSlowToListenAgain(t *testing.T) {
+	t.Parallel()
+	f := newFakeFolder(t)
+	if err := os.WriteFile(filepath.Join(f.dir, slowMark), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := f.deploy("-Exe", f.broken)
+	again := f.await(f.old, f.first.Process.Pid)
+	if err == nil || strings.Contains(out, "no gateway runs") || !strings.Contains(out, fmt.Sprintf("PID %d", again.PID)) {
+		t.Errorf("the old build, PID %d, still starting, was reported as: %v", again.PID, err)
+	}
+	if !alive(again.PID) {
+		t.Errorf("the old build, PID %d, was stopped", again.PID)
 	}
 }
 
