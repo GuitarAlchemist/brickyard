@@ -852,6 +852,22 @@ host closes is not known.
 
 Still to verify: a real deploy of a new commit with the tablet paired, and the picture on the tablet.
 
+## The deploy's native handles, and its job (2026-11-05)
+
+`deploy.ps1` now checks `SetHandleInformation` and the attribute list's size probe, deletes the list only once it was
+initialized, and closes its handle on each gateway it starts (20fba29). None of these failures could be made to
+happen through the real calls, so the change rests on Indigo's review, not on a red test. That review found two more.
+A slow old build put back was reported as "no gateway runs" while it still ran: with a fake that waits 25 s before
+listening, red first, the script now leaves it running and gives its PID. And a PowerShell session that already ran an
+older `deploy.ps1` keeps its older `Add-Type` type, so the README says to run a new one in a new PowerShell; that clash
+is expected from Windows PowerShell 5.1, not observed. Twelve tests, 60 s.
+
+The job, read with `QueryInformationJobObject` on this tool's own one: `BREAKAWAY_OK` only, no `KILL_ON_JOB_CLOSE`; it
+holds most of the desktop's agent processes, not the live gateway, which is in another job whose limits are not read.
+A fake gateway started by `deploy.ps1` landed in this tool's job and still ran, listening, 80 s after both the
+`powershell.exe` that ran the script and the shell that started it had exited. Not known: whether a gateway outlives
+the closing of the job's own host (Claude Code or wmux), a logoff or a sleep.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
