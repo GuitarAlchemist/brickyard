@@ -1022,6 +1022,36 @@ said live over a kept part, and a part never read had an age.
 
 Whether live wmux fails this way is not proven: the WMUX access had expired, and no wmux answer was read.
 
+From 381425f each office tree's log line also names the roots it added and removed, such as « (+w-… -w-…) », or
+« same roots »: one line names the enclosure that comes and goes.
+
+## Updating the live window, scene only (2026-11-06)
+
+`dev-deploy.ps1` rebuilds the brain too and needs delta reconnected in `/mcp`. A change to `scene/` or to a scene
+module alone has a shorter route, used for 228e865 on 2026-11-05:
+
+1. **Where the window runs.** A brain deployed with `-HotReload` runs `-scene-source <checkout>\scene`, so the
+   window runs under `dotnet watch` on that checkout (brain/voicemcp.go, `launch`). Check it before anything:
+   - the brain's command line names `-scene-source`;
+   - its child is `dotnet watch … --project <checkout>\scene`;
+   - scene.exe is under `<checkout>\scene\bin\Debug`.
+2. **The source.** Run `git -C <checkout> merge --ff-only <reviewed SHA>`, by SHA rather than by branch name. Then
+   `dotnet watch` rebuilds in Debug. It applies a hot reload, or, for a change it cannot apply live (new fields or
+   types), restarts the window: a new scene.exe on the same port. The brain stays, so there is no `/mcp` reconnect,
+   and the journal has no new `start`.
+3. **The office module.** Nothing rebuilds it: build it into the window's module folder with
+   `dotnet build modules/AgentOffice/AgentOffice.Module.csproj -c Release -p:Version=0.1.0 -o <checkout>\scene\bin\Debug\net10.0\win-x64\modules\office`,
+   or copy a reviewed image's `AgentOffice.Module.dll`, `.pdb` and `.deps.json` there. The scene reloads it once
+   the file holds still. `pwsh .\inspect-module.ps1 <image>` reads, without loading it, the commit an image was
+   built at, its sources' SHA256 and the contracts it was compiled against.
+4. **Checks.** scene.log, in the brain's `-home` folder, shows the watch's build, then « WIDGETS agent-office
+   reloaded … sha256 <the image> », then « tree: … » with no « refused » line after it. Only one scene.exe
+   listens on the port.
+5. **Before**, copy the module folder aside. **Rollback:** `git -C <checkout> reset --keep <previous SHA>` (the
+   window restarts again), then put the module folder back.
+
+A tree refused between steps 2 and 3, the new scene with the old module, is expected, and step 3 ends it.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
@@ -1079,6 +1109,8 @@ Whether live wmux fails this way is not proven: the WMUX access had expired, and
   - whether scene.log's « … unread N time(s) » lines come in step with the office's two looks;
   - whether the robots stay in their enclosures through them;
   - whether the wall's card reads « reading N s old » rather than « live » meanwhile.
+- The live window over a day: on 2026-11-06 it closed after 24 h with a working set peak of 4.8 GB, and runs of frames
+  near 425 ms in its log. Whether memory grows with time, and what those frames spend, is not measured.
 - The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
 - A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.
 - The agents' office with real sessions, beside Delta's window: each activity as wmux reports it, a click on a desk
