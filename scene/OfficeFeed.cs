@@ -15,7 +15,8 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
     private const int WorkspacesEvery = 10; // reads between two of the workspaces, which take a wmux call each
 
     private readonly Dictionary<string, OfficeSession> last = new(StringComparer.Ordinal);
-    private IReadOnlyDictionary<string, (string Id, string Title)> workspaces = new Dictionary<string, (string, string)>();
+    private readonly WorkspaceMap workspaces = new(); // a failed reading keeps the last answer
+    private string? workspacesSaid;
     private int reads;
     private volatile IReadOnlyList<OfficeActivities.Seen>? reading;
     private IReadOnlyList<OfficeActivities.Seen>? used;
@@ -92,11 +93,19 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
             var states = Shelf.Wmux.AgentStates();
             if (reads++ % WorkspacesEvery == 0)
             {
-                workspaces = Shelf.Wmux.SurfaceWorkspaces();
+                var now = DateTimeOffset.UtcNow;
+                workspaces.Apply(Shelf.Wmux.SurfaceWorkspaces(), now);
+                var said = workspaces.Said(now);
+                if ((said is null) != (workspacesSaid is null))
+                {
+                    Console.WriteLine($"WIDGETS agent-office {said ?? "workspaces read again"}"); // once when wmux stops answering, once when it answers again
+                }
+
+                workspacesSaid = said;
             }
 
             var files = Shelf.SessionFiles().Select(s => new OfficeActivities.SessionFile(s.Id, s.Name, s.Started, s.Status, s.Alive)).ToList();
-            reading = OfficeActivities.Merge(files, states, workspaces);
+            reading = OfficeActivities.Merge(files, states, workspaces.Map);
             Interlocked.Exchange(ref readTicks, DateTimeOffset.UtcNow.UtcTicks);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)

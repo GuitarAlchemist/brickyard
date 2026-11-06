@@ -636,6 +636,7 @@ internal sealed class Link(Func<double> clock)
         IdleTour.SelfTest(Check);
         FrameStats.SelfTest(Check);
         WallSource.SelfTest(Check);
+        WorkspaceMap.SelfTest(Check);
         Check(Parse("""{"language":"fr"}""", out _) is { State: null, Language: "fr" }, "the shelf speaks French");
         Check(Parse("""{"language":"de"}""", out _) is null, "an unknown language is refused");
         Check(Parse("""{"hearts":true,"mood":"joy"}""", out _) is { State: null, Hearts: true, Mood: "joy" }, "hearts and a smile");

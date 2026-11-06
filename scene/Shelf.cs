@@ -560,8 +560,9 @@ internal sealed class Shelf
         }
 
         // Each surface's workspace, its stable ID and its title: a call for the workspaces and one for each workspace's
-        // surfaces, so the agents' office asks only now and then.
-        public static Dictionary<string, (string Id, string Title)> SurfaceWorkspaces()
+        // surfaces, so the agents' office asks only now and then. Null when a call failed, which is not an empty answer
+        // (WorkspaceMap); without wmux there is no workspace.
+        public static Dictionary<string, (string Id, string Title)>? SurfaceWorkspaces()
         {
             var workspaceOf = new Dictionary<string, (string, string)>();
             if (!File.Exists(Exe))
@@ -572,19 +573,26 @@ internal sealed class Shelf
             using var workspaces = Run("list-workspaces");
             if (workspaces is null || !workspaces.RootElement.TryGetProperty("workspaces", out var ws) || ws.ValueKind != JsonValueKind.Array)
             {
-                return workspaceOf;
+                return null;
             }
 
             foreach (var w in ws.EnumerateArray())
             {
                 var (id, title) = (Text(w, "id"), Text(w, "title"));
-                using var surfaces = Run("list-surfaces", "--workspace", id);
-                if (id.Length > 0 && surfaces is not null && surfaces.RootElement.TryGetProperty("surfaces", out var ss) && ss.ValueKind == JsonValueKind.Array)
+                if (id.Length == 0)
                 {
-                    foreach (var surface in ss.EnumerateArray())
-                    {
-                        workspaceOf[Text(surface, "id")] = (id, title);
-                    }
+                    continue;
+                }
+
+                using var surfaces = Run("list-surfaces", "--workspace", id);
+                if (surfaces is null || !surfaces.RootElement.TryGetProperty("surfaces", out var ss) || ss.ValueKind != JsonValueKind.Array)
+                {
+                    return null; // a workspace whose panes are unknown: the reading is incomplete
+                }
+
+                foreach (var surface in ss.EnumerateArray())
+                {
+                    workspaceOf[Text(surface, "id")] = (id, title);
                 }
             }
 
