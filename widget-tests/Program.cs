@@ -97,6 +97,7 @@ static void Stage(Action<bool, string> check)
     var module = new TestModule();
     using var stage = new WidgetStage<TestSurface>(i => new TestSurface(i.Mesh), keepFrames: 3);
     check(stage.Sync(module) && stage.Instances == 6 && stage.Meshes == 2 && stage.Built == 2, "the tree is expanded and identical widgets share one mesh");
+    check(stage.Changes == "+a +b", $"a first tree says the roots it adds, for the log ({stage.Changes})");
     check(!stage.Sync(module), "an unchanged revision expands nothing again");
     stage.Frame(module, 0);
     check(stage.Items.Count == 4 && stage.Hits.Count(h => h.Click == "desk-a") == 2, "every drawn instance under a click target takes its parent's target");
@@ -117,8 +118,12 @@ static void Stage(Action<bool, string> check)
     module.Count = 1;
     stage.Sync(module);
     check(stage.Released == 0 && stage.Meshes == 2, "a mesh still used stays");
+    check(stage.Changes == "-b", $"a new tree says the roots it removes ({stage.Changes})");
     module.Mesh = "hand-2";
     stage.Sync(module);
+    check(stage.Changes == "same roots", $"a new tree with the same roots says so ({stage.Changes})");
+    check(WidgetStage<TestSurface>.Diff(new HashSet<string>(), Enumerable.Range(0, 11).Select(i => $"r{i:00}").ToHashSet()) == "+r00 +r01 +r02 +r03 +r04 +r05 +r06 +r07 and 3 more",
+        "a long change is cut after eight roots");
     for (var f = 0; f < 3; f++) stage.Frame(module, 3 + f);
     check(stage.Released == 0, "a released mesh outlives the frames in flight that may still draw it");
     stage.Frame(module, 6);

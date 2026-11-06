@@ -2409,7 +2409,7 @@ internal static unsafe class Stage
                         wall.Released(picked);
                     }
                     office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions, officeSelection.Selected));
-                    if (officeStage.Sync(office.Module)) Console.WriteLine($"WIDGETS agent-office tree: {officeStage.Instances} instances, {officeStage.Meshes} meshes; native mesh buffers live {Mesh.LiveCount}");
+                    if (officeStage.Sync(office.Module)) Console.WriteLine($"WIDGETS agent-office tree: {officeStage.Instances} instances, {officeStage.Meshes} meshes ({officeStage.Changes}); native mesh buffers live {Mesh.LiveCount}");
                     else if (officeStage.Problems.Count > 0 && officeLogged != officeStage.Revision)
                     {
                         officeLogged = officeStage.Revision;

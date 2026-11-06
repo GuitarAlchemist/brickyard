@@ -39,6 +39,10 @@ internal sealed class WidgetStage<TSurface> : IDisposable where TSurface : class
     public int Instances => nodes.Length;
     public int Meshes => meshes.Count;
     public int Built { get; private set; }
+
+    // The roots the last new tree added and removed, for the log: "+a -b", or "same roots" when only what is under
+    // them or where they stand changed.
+    public string Changes { get; private set; } = "";
     public int Released { get; private set; }
     public List<Item> Items { get; } = [];
     public List<Hit> Hits { get; } = [];
@@ -78,11 +82,22 @@ internal sealed class WidgetStage<TSurface> : IDisposable where TSurface : class
             meshes.Remove(key);
         }
 
+        Changes = Diff(Roots(nodes), Roots(next));
         nodes = [.. next];
         worlds = new SN.Matrix4x4[nodes.Length];
         hidden = new bool[nodes.Length];
         return true;
     }
+
+    // The roots in after and not before, then in before and not after, each in order; eight at most.
+    internal static string Diff(IReadOnlySet<string> before, IReadOnlySet<string> after)
+    {
+        var parts = after.Where(p => !before.Contains(p)).Order(StringComparer.Ordinal).Select(p => "+" + p)
+            .Concat(before.Where(p => !after.Contains(p)).Order(StringComparer.Ordinal).Select(p => "-" + p)).ToList();
+        return parts.Count == 0 ? "same roots" : string.Join(" ", parts.Take(8)) + (parts.Count > 8 ? $" and {parts.Count - 8} more" : "");
+    }
+
+    private static HashSet<string> Roots(IEnumerable<Node> tree) => tree.Where(n => n.Parent < 0).Select(n => n.Path).ToHashSet(StringComparer.Ordinal);
 
     // Forgets the tree, for a module replaced by new code: its meshes are released as any others.
     public void Reset()
