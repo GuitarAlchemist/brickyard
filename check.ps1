@@ -1,4 +1,5 @@
-# Runs every check CI runs, in its order: the plugin and the scripts, the brain, the hands, the scene. CI runs this
+# Runs every check CI runs, in its order: the plugin and the scripts, the brain, the hands, the scene, the widgets and
+# the agents' office (check-widgets.ps1). CI runs this
 # script, so a green run here is a green run there. Needs Go, the .NET 10 SDK and Python on PATH; it names the one
 # missing.
 $ErrorActionPreference = 'Stop'
@@ -51,4 +52,6 @@ try {
 }
 finally { Pop-Location }
 
-'CHECK ok: plugin, brain, hands and scene'
+Step 'widgets and office' { & (Join-Path $root 'check-widgets.ps1') }
+
+'CHECK ok: plugin, brain, hands, scene and widgets'
