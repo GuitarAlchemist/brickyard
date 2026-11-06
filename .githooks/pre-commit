@@ -26,7 +26,7 @@ if touches '^scene/'; then
 fi
 if touches '^(scene/|modules/|module-contracts/|widget-tests/|check-widgets\.ps1)'; then # widget-tests compiles some of scene/'s files
 	cd "$root"
-	powershell -NoProfile -ExecutionPolicy Bypass -File check-widgets.ps1 >/dev/null || { echo "pre-commit: the widget tests failed; run check-widgets.ps1 to see why" >&2; exit 1; }
+	powershell -NoProfile -ExecutionPolicy Bypass -File check-widgets.ps1 >/dev/null 2>&1 || { echo "pre-commit: the widget tests failed; run check-widgets.ps1 to see why" >&2; exit 1; }
 fi
 if touches '^(hands/|brain/gesture\.go)'; then # the hands' tests read the brain's gestures
 	cd "$root"
