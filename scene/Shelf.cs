@@ -532,8 +532,9 @@ internal sealed class Shelf
         }
 
         // Each session's surface, state ("working", "idle", "blocked") and provider ("claude", "codex"), from agent-state
-        // alone: one call, for the agents' office, which asks every few seconds.
-        public static Dictionary<string, (string Surface, string State, string Provider)> AgentStates()
+        // alone: one call, for the agents' office, which asks every few seconds. Null when the call failed, which is not
+        // an answer with no agent (KeptReading); without wmux there is no agent.
+        public static Dictionary<string, (string Surface, string State, string Provider)>? AgentStates()
         {
             var states = new Dictionary<string, (string, string, string)>();
             if (!File.Exists(Exe))
@@ -544,7 +545,7 @@ internal sealed class Shelf
             using var doc = Run("agent-state");
             if (doc is null || !doc.RootElement.TryGetProperty("states", out var list) || list.ValueKind != JsonValueKind.Array)
             {
-                return states;
+                return null;
             }
 
             foreach (var s in list.EnumerateArray())
@@ -561,7 +562,7 @@ internal sealed class Shelf
 
         // Each surface's workspace, its stable ID and its title: a call for the workspaces and one for each workspace's
         // surfaces, so the agents' office asks only now and then. Null when a call failed, which is not an empty answer
-        // (WorkspaceMap); without wmux there is no workspace.
+        // (KeptReading); without wmux there is no workspace.
         public static Dictionary<string, (string Id, string Title)>? SurfaceWorkspaces()
         {
             var workspaceOf = new Dictionary<string, (string, string)>();

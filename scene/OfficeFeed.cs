@@ -15,8 +15,9 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
     private const int WorkspacesEvery = 10; // reads between two of the workspaces, which take a wmux call each
 
     private readonly Dictionary<string, OfficeSession> last = new(StringComparer.Ordinal);
-    private readonly WorkspaceMap workspaces = new(); // a failed reading keeps the last answer
-    private string? workspacesSaid;
+    private readonly KeptReading<(string Surface, string State, string Provider)> agents = new("agent states"); // a failed reading keeps the last answer
+    private readonly KeptReading<(string Id, string Title)> workspaces = new("workspaces");
+    private string? agentsSaid, workspacesSaid;
     private int reads;
     private volatile IReadOnlyList<OfficeActivities.Seen>? reading;
     private IReadOnlyList<OfficeActivities.Seen>? used;
@@ -90,22 +91,16 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
 
         try
         {
-            var states = Shelf.Wmux.AgentStates();
+            agents.Apply(Shelf.Wmux.AgentStates(), DateTimeOffset.UtcNow);
+            agentsSaid = Say(agents, agentsSaid);
             if (reads++ % WorkspacesEvery == 0)
             {
-                var now = DateTimeOffset.UtcNow;
-                workspaces.Apply(Shelf.Wmux.SurfaceWorkspaces(), now);
-                var said = workspaces.Said(now);
-                if ((said is null) != (workspacesSaid is null))
-                {
-                    Console.WriteLine($"WIDGETS agent-office {said ?? "workspaces read again"}"); // once when wmux stops answering, once when it answers again
-                }
-
-                workspacesSaid = said;
+                workspaces.Apply(Shelf.Wmux.SurfaceWorkspaces(), DateTimeOffset.UtcNow);
+                workspacesSaid = Say(workspaces, workspacesSaid);
             }
 
             var files = Shelf.SessionFiles().Select(s => new OfficeActivities.SessionFile(s.Id, s.Name, s.Started, s.Status, s.Alive)).ToList();
-            reading = OfficeActivities.Merge(files, states, workspaces.Map);
+            reading = OfficeActivities.Merge(files, agents.Map, workspaces.Map);
             Interlocked.Exchange(ref readTicks, DateTimeOffset.UtcNow.UtcTicks);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
@@ -116,5 +111,17 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
         {
             Volatile.Write(ref busy, 0);
         }
+    }
+
+    // Logs once when wmux stops answering for a reading, and once when it answers again.
+    private static string? Say<TValue>(KeptReading<TValue> kept, string? before)
+    {
+        var said = kept.Said(DateTimeOffset.UtcNow);
+        if ((said is null) != (before is null))
+        {
+            Console.WriteLine($"WIDGETS agent-office {said ?? kept.What + " read again from wmux"}");
+        }
+
+        return said;
     }
 }
