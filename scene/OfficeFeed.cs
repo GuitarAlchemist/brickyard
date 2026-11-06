@@ -24,11 +24,12 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
     private Timer? timer;
     private int busy;
     private int demoStep = -1;
-    private long readTicks; // UTC ticks of the last reading that completed, 0 before the first
+    private long readTicks; // UTC ticks of the oldest part of the last reading that completed (AsOf), 0 when unknown
 
     public IReadOnlyList<OfficeSession> Sessions { get; private set; } = [];
 
-    // Seconds since the last reading completed at now, null before the first; under --demo, nothing is read.
+    // Seconds since the last reading at now, counted from its oldest part, so that what wmux gave long ago does not pass
+    // for fresh; null before the first or while a part was never read. Under --demo, nothing is read.
     public double? ReadAgo(DateTimeOffset now) => Interlocked.Read(ref readTicks) is var t and > 0 ? (now.UtcTicks - t) / (double)TimeSpan.TicksPerSecond : null;
 
     public void Start()
@@ -101,7 +102,7 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
 
             var files = Shelf.SessionFiles().Select(s => new OfficeActivities.SessionFile(s.Id, s.Name, s.Started, s.Status, s.Alive)).ToList();
             reading = OfficeActivities.Merge(files, agents.Map, workspaces.Map);
-            Interlocked.Exchange(ref readTicks, DateTimeOffset.UtcNow.UtcTicks);
+            Interlocked.Exchange(ref readTicks, AsOf(DateTimeOffset.UtcNow, agents, workspaces)?.UtcTicks ?? 0);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
         {
@@ -111,6 +112,22 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
         {
             Volatile.Write(ref busy, 0);
         }
+    }
+
+    // When a reading made at read stands: then, unless a part of it is kept from an older answer of wmux, then the
+    // oldest such answer; null when a kept part was never answered.
+    internal static DateTimeOffset? AsOf<TAgents, TWorkspaces>(DateTimeOffset read, KeptReading<TAgents> agents, KeptReading<TWorkspaces> workspaces)
+    {
+        DateTimeOffset? at = read;
+        foreach (var (stale, answered) in new[] { (agents.Stale, agents.At), (workspaces.Stale, workspaces.At) })
+        {
+            if (stale)
+            {
+                at = answered is { } a && at is { } t ? (a < t ? a : t) : null;
+            }
+        }
+
+        return at;
     }
 
     // Logs once when wmux stops answering for a reading, and once when it answers again.

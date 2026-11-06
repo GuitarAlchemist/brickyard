@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 // What the agents' office last read of wmux, by key: each pane's workspace (surface to workspace ID and title), or each
 // session's surface, state and provider. A reading of wmux that failed (no answer in time, an unreadable one, a
 // workspace whose panes could not be listed) is not an answer: the last good one stays, older by the time since it was
@@ -97,5 +99,55 @@ internal static class KeptReadings
             && Seen().StartsWith("s1:idle:", StringComparison.Ordinal), "a real change of a session's state applies");
         check(agents.Apply(new Dictionary<string, (string, string, string)>(), t0.AddSeconds(18)) && agents.Known && !agents.Stale && Seen() == "s1:::,s2:::",
             "an answer that succeeds with no agent leaves the sessions on their files, the one only wmux named gone");
+
+        // wmux's answers through their real decoding: a root that is not an object, a record that is not one, a
+        // workspace or a pane without an ID are failed readings, which keep the last answer; an empty array is an answer.
+        var thrown = new Dictionary<string, (string, string, string)> { ["threw"] = default };
+        Dictionary<string, (string Surface, string State, string Provider)>? States(string json)
+        {
+            try { return Shelf.Wmux.DecodeAgentStates(JsonDocument.Parse(json)); }
+            catch (InvalidOperationException) { return thrown; }
+        }
+
+        Dictionary<string, (string Id, string Title)>? Workspaces(string json, Dictionary<string, string>? surfaces = null)
+        {
+            try { return Shelf.Wmux.DecodeWorkspaces(JsonDocument.Parse(json), id => surfaces?.TryGetValue(id, out var s) == true ? JsonDocument.Parse(s) : null); }
+            catch (InvalidOperationException) { return new() { ["threw"] = default }; }
+        }
+
+        check(States("""{"states":[]}""") is { Count: 0 }, "agent-state's answer with no state is an answer: no agent");
+        check(States("[]") is null && States("\"busy\"") is null && States("""{"panes":[]}""") is null && States("""{"states":{}}""") is null && States("""{"states":[1]}""") is null,
+            "agent-state's answer is a failed reading unless its root is an object holding an array of objects");
+        check(States("""{"states":[{"sessionId":"s1","surfaceId":"surface-1","state":"working","sessionProvider":"claude"},{"surfaceId":"surface-9","state":"idle"}]}""")
+            is { Count: 1 } decoded && decoded["s1"] == ("surface-1", "working", "claude"), "a pane with no session is left out of agent-state's answer");
+        var a = """{"workspaces":[{"id":"ws-a","title":"a"},{"id":"ws-b","title":"b"}]}""";
+        var panes = new Dictionary<string, string> { ["ws-a"] = """{"surfaces":[]}""", ["ws-b"] = """{"surfaces":[{"id":"surface-2"}]}""" };
+        check(Workspaces("""{"workspaces":[]}""") is { Count: 0 } && Workspaces(a, panes) is { Count: 1 } placed && placed["surface-2"] == ("ws-b", "b"),
+            "an empty list of workspaces, or of a workspace's panes, is an answer");
+        check(Workspaces("[]") is null && Workspaces("\"ws\"") is null && Workspaces("""{"workspaces":[{"title":"no ID"}]}""") is null
+            && Workspaces(a, new(panes) { ["ws-a"] = """{"surfaces":[{"title":"no ID"}]}""" }) is null && Workspaces(a, new(panes) { ["ws-a"] = "[]" }) is null
+            && Workspaces(a, new(panes) { ["ws-b"] = """{"surfaces":[3]}""" }) is null && Workspaces(a, new() { ["ws-b"] = panes["ws-b"] }) is null,
+            "list-workspaces and list-surfaces are failed readings unless objects holding their arrays, every workspace and pane with an ID");
+        var cache = new KeptReading<(string Id, string Title)>("workspaces");
+        cache.Apply(Workspaces(a, panes), t0);
+        cache.Apply(Workspaces("""{"workspaces":[{"title":"no ID"}]}"""), t0.AddSeconds(30));
+        var survived = cache.Map.Count == 1 && cache.Failures == 1;
+        cache.Apply(Workspaces("""{"workspaces":[]}"""), t0.AddSeconds(60));
+        check(survived && cache.Map.Count == 0 && !cache.Stale, "a workspace without an ID keeps the last answer; a valid empty one then empties it");
+
+        // How old the office's reading looks: from its oldest part kept through failures, never fresher than wmux's answer.
+        var feedAgents = new KeptReading<(string Surface, string State, string Provider)>("agent states");
+        var feedPanes = new KeptReading<(string Id, string Title)>("workspaces");
+        feedAgents.Apply(new Dictionary<string, (string, string, string)>(), t0.AddSeconds(3));
+        feedPanes.Apply(new Dictionary<string, (string, string)>(), t0);
+        var fresh = OfficeFeed.AsOf(t0.AddSeconds(3), feedAgents, feedPanes) == t0.AddSeconds(3);
+        feedAgents.Apply(null, t0.AddSeconds(33));
+        var asOf = OfficeFeed.AsOf(t0.AddSeconds(33), feedAgents, feedPanes);
+        var card = WallSource.Card("s1", [new("s1", "one", Delta.SceneModules.OfficeActivity.Working, 0)], (t0.AddSeconds(33) - asOf!.Value).TotalSeconds, null, t0.AddSeconds(33), (en, _) => en);
+        check(fresh && asOf == t0.AddSeconds(3) && card.Any(l => l.StartsWith("reading 30 s old", StringComparison.Ordinal)) && !card.Any(l => l.Contains("· live", StringComparison.Ordinal)),
+            "a reading whose agents' states are kept from 30 s ago reads 30 s old, not live, on the wall's card");
+        var never = new KeptReading<(string Id, string Title)>("workspaces");
+        never.Apply(null, t0);
+        check(OfficeFeed.AsOf(t0.AddSeconds(33), feedAgents, never) is null, "a reading with a part wmux never gave has no age: it is not read yet");
     }
 }

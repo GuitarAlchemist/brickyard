@@ -992,6 +992,36 @@ before 9c42440 changed the contract's `OfficeSession` and `OfficeState` construc
 `dotnet build modules/AgentOffice/AgentOffice.Module.csproj -c Release -o <that dir>` (widget tests 62 ok on it).
 Nothing rebuilds that image when the contract changes: a stale image shows only as a refused line in scene.log.
 
+## The office's wmux readings, kept through failures (2026-11-06)
+
+The user saw the office's robots change between two looks by themselves. The live scene.log, after the 228e865
+install, has its tree alternating between 323 instances and 32 meshes and 316 and 25, about every 45 s, with no
+click. An office reading whose workspaces come back empty, 12 sessions in 8 workspaces, gives exactly that
+difference in widget-tests: the 8 enclosures fold into the one without a pane, and every robot moves and changes
+scale. The office used to take a failed wmux call (no answer in 5 s, an unreadable one) for an empty answer. That
+held for the workspaces, read every 30 s, and for the agents' states, read every 3 s, where a failure also dropped
+every pane and the sessions only wmux names.
+
+`KeptReading` now keeps each of those readings through failures. It ages what it keeps and logs it once
+(« workspaces unread N time(s); keeping those wmux gave N s ago »), then once more when wmux answers again. An
+answer replaces the reading as it is, empty or not (77b0087, 51111fe). After an independent review, the decoding
+(`Shelf.Wmux.DecodeAgentStates`, `DecodeWorkspaces`) refuses an answer as a failed reading, not an empty one,
+when:
+
+- its root is not an object;
+- it does not hold its array;
+- a record is not an object;
+- a workspace or a pane has no ID.
+
+An empty array is still an answer. The office's reading is now as old as its oldest kept part, so the wall's card no
+longer says « live » over what wmux gave 30 s ago; it is not read yet while a part was never answered.
+
+Red then green in the scene's selftest, through `JsonDocument.Parse` on made-up answers. The old decoding failed 5
+checks: a non-object root threw, records without an ID were accepted, an invalid answer emptied the cache, the card
+said live over a kept part, and a part never read had an age.
+
+Whether live wmux fails this way is not proven: the WMUX access had expired, and no wmux answer was read.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
@@ -1045,6 +1075,10 @@ Nothing rebuilds that image when the contract changes: a stale image shows only 
 - The hands with a real camera: each pose, a swipe each way, a wave and pointing down, and the thresholds by hand.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
 - The ring, live: whether 30 s suits, and whether talk to people in the room now reaches Claude too often.
+- The office's wmux readings, live, once its access is renewed:
+  - whether scene.log's « … unread N time(s) » lines come in step with the office's two looks;
+  - whether the robots stay in their enclosures through them;
+  - whether the wall's card reads « reading N s old » rather than « live » meanwhile.
 - The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
 - A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.
 - The agents' office with real sessions, beside Delta's window: each activity as wmux reports it, a click on a desk

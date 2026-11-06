@@ -536,20 +536,46 @@ internal sealed class Shelf
         // an answer with no agent (KeptReading); without wmux there is no agent.
         public static Dictionary<string, (string Surface, string State, string Provider)>? AgentStates()
         {
-            var states = new Dictionary<string, (string, string, string)>();
             if (!File.Exists(Exe))
             {
-                return states;
+                return [];
             }
 
             using var doc = Run("agent-state");
-            if (doc is null || !doc.RootElement.TryGetProperty("states", out var list) || list.ValueKind != JsonValueKind.Array)
+            return DecodeAgentStates(doc);
+        }
+
+        // Each surface's workspace, its stable ID and its title: a call for the workspaces and one for each workspace's
+        // surfaces, so the agents' office asks only now and then. Null when a call failed, which is not an empty answer
+        // (KeptReading); without wmux there is no workspace.
+        public static Dictionary<string, (string Id, string Title)>? SurfaceWorkspaces()
+        {
+            if (!File.Exists(Exe))
+            {
+                return [];
+            }
+
+            using var workspaces = Run("list-workspaces");
+            return DecodeWorkspaces(workspaces, id => Run("list-surfaces", "--workspace", id));
+        }
+
+        // agent-state's answer: null unless it is an object holding an array of states, each an object. A state without
+        // a session is a pane with no session, not an agent: it is left out.
+        internal static Dictionary<string, (string Surface, string State, string Provider)>? DecodeAgentStates(JsonDocument? doc)
+        {
+            if (Listed(doc, "states") is not { } list)
             {
                 return null;
             }
 
+            var states = new Dictionary<string, (string, string, string)>();
             foreach (var s in list.EnumerateArray())
             {
+                if (s.ValueKind != JsonValueKind.Object)
+                {
+                    return null;
+                }
+
                 var id = Text(s, "sessionId");
                 if (id.Length > 0)
                 {
@@ -560,45 +586,48 @@ internal sealed class Shelf
             return states;
         }
 
-        // Each surface's workspace, its stable ID and its title: a call for the workspaces and one for each workspace's
-        // surfaces, so the agents' office asks only now and then. Null when a call failed, which is not an empty answer
-        // (KeptReading); without wmux there is no workspace.
-        public static Dictionary<string, (string Id, string Title)>? SurfaceWorkspaces()
+        // list-workspaces' answer and each workspace's list-surfaces (surfacesOf): null unless each is an object holding
+        // its array, and every workspace and surface in them has an ID; an array may be empty.
+        internal static Dictionary<string, (string Id, string Title)>? DecodeWorkspaces(JsonDocument? workspaces, Func<string, JsonDocument?> surfacesOf)
         {
-            var workspaceOf = new Dictionary<string, (string, string)>();
-            if (!File.Exists(Exe))
-            {
-                return workspaceOf;
-            }
-
-            using var workspaces = Run("list-workspaces");
-            if (workspaces is null || !workspaces.RootElement.TryGetProperty("workspaces", out var ws) || ws.ValueKind != JsonValueKind.Array)
+            if (Listed(workspaces, "workspaces") is not { } ws)
             {
                 return null;
             }
 
+            var workspaceOf = new Dictionary<string, (string, string)>();
             foreach (var w in ws.EnumerateArray())
             {
                 var (id, title) = (Text(w, "id"), Text(w, "title"));
                 if (id.Length == 0)
                 {
-                    continue;
+                    return null; // a workspace without an ID: the answer is not one
                 }
 
-                using var surfaces = Run("list-surfaces", "--workspace", id);
-                if (surfaces is null || !surfaces.RootElement.TryGetProperty("surfaces", out var ss) || ss.ValueKind != JsonValueKind.Array)
+                using var surfaces = surfacesOf(id);
+                if (Listed(surfaces, "surfaces") is not { } ss)
                 {
                     return null; // a workspace whose panes are unknown: the reading is incomplete
                 }
 
                 foreach (var surface in ss.EnumerateArray())
                 {
-                    workspaceOf[Text(surface, "id")] = (id, title);
+                    var surfaceId = Text(surface, "id");
+                    if (surfaceId.Length == 0)
+                    {
+                        return null; // a pane without an ID cannot be placed
+                    }
+
+                    workspaceOf[surfaceId] = (id, title);
                 }
             }
 
             return workspaceOf;
         }
+
+        // The array named in an answer whose root is an object, or null.
+        private static JsonElement? Listed(JsonDocument? doc, string name) =>
+            doc is { RootElement: { ValueKind: JsonValueKind.Object } root } && root.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array ? list : null;
 
         // Shows a surface's pane: its workspace first, then the surface.
         public static void Focus(string surface)
