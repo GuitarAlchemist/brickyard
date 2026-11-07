@@ -868,6 +868,12 @@ A fake gateway started by `deploy.ps1` landed in this tool's job and still ran, 
 `powershell.exe` that ran the script and the shell that started it had exited. Not known: whether a gateway outlives
 the closing of the job's own host (Claude Code or wmux), a logoff or a sleep.
 
+`-Check` now says it, so each deploy shows it instead of a separate probe: "a new gateway's job:" none, or the shell's,
+and whether that job ends it when it closes (`KILL_ON_JOB_CLOSE`); the jobs it is nested in are not read. From this
+tool's shell: "this shell's, which does not end it when the job closes". The `-Check` test went red on the missing line
+first. The pre-commit hook, now enabled in this clone, also runs gofmt, vet and the tests of `remote/` and the page's
+node tests; it did not cover `remote/` before.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

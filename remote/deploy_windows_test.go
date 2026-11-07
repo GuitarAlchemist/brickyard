@@ -560,7 +560,7 @@ func TestDeployCheckChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"connected: 0", "-port -local-port -mic", "a deploy would do: replace it"} {
+	for _, want := range []string{"connected: 0", "-port -local-port -mic", "a new gateway's job: ", "a deploy would do: replace it"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("-Check does not say %q", want)
 		}

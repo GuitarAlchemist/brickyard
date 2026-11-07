@@ -5,8 +5,8 @@
 #
 #   .\remote\deploy.ps1 -Dir <the folder the gateway runs from> [-Check] [-Exe <a build>] [-Back]
 #
-# -Check builds aside and says what runs, whether anyone is connected and whether a deploy would replace it; it changes
-# nothing. Otherwise nothing is replaced while a device, a guest or Delta's window holds a connection to one of the
+# -Check builds aside and says what runs, whether anyone is connected, whether the job a new gateway would start in ends
+# it when that job closes, and whether a deploy would replace it; it changes nothing. Otherwise nothing is replaced while a device, a guest or Delta's window holds a connection to one of the
 # gateway's entries. A new build that does not listen on the old one's ports within 15 s is stopped and the old one
 # starts again. -Exe puts that build in place instead of this checkout's; -Back puts back the one replaced last.
 # <Dir>\deploy.json keeps the arguments and the replaced build, so a gateway that died starts again with its arguments.
@@ -90,9 +90,32 @@ public class DeployedGateway : IDisposable {
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetHandleInformation(IntPtr h, int mask, int flags);
     [DllImport("kernel32.dll")] static extern int WaitForSingleObject(IntPtr h, int milliseconds);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, int length, IntPtr returned);
 
     const int HandleList = 0x20002, NoWindow = 0x08000000, ExtendedStartup = 0x80000, UseStdHandles = 0x100,
-        InsufficientBuffer = 122;
+        InsufficientBuffer = 122, ExtendedLimits = 9, KillOnJobClose = 0x2000;
+
+    // The job a gateway started now lands in: this script's own, since it does not break away. Only the immediate job
+    // is read; the jobs it may be nested in are not.
+    public static string Job() {
+        bool inJob;
+        if (!IsProcessInJob(GetCurrentProcess(), IntPtr.Zero, out inJob)) throw new Win32Exception();
+        if (!inJob) return "none";
+        // JOBOBJECT_EXTENDED_LIMIT_INFORMATION: LimitFlags sits after two 8-byte times on both architectures.
+        int size = IntPtr.Size == 8 ? 144 : 112;
+        IntPtr info = Marshal.AllocHGlobal(size);
+        try {
+            if (!QueryInformationJobObject(IntPtr.Zero, ExtendedLimits, info, size, IntPtr.Zero)) throw new Win32Exception();
+            if ((Marshal.ReadInt32(info, 16) & KillOnJobClose) != 0)
+                return "this shell's, which ends it when the job closes: deploy from a shell that outlives this one";
+            return "this shell's, which does not end it when the job closes (the jobs it is nested in are not read)";
+        } finally {
+            Marshal.FreeHGlobal(info);
+        }
+    }
     IntPtr process;
     public int Id;
     public bool HasExited { get { return WaitForSingleObject(process, 0) == 0; } }
@@ -228,6 +251,7 @@ if ($Check) {
     } else {
         "running: no gateway from $Dir$(if ($state) { '; deploy.json keeps its arguments' } else { ', and no deploy.json' })"
     }
+    "a new gateway's job: $([DeployedGateway]::Job())"
     if ($same) { $verdict = 'nothing: it already runs this build' }
     elseif (-not $old -and -not $state) { $verdict = 'nothing: no arguments to start it with' }
     elseif ($clients.Count) { $verdict = 'nothing while someone is connected' }
