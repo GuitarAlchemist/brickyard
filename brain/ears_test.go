@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -79,20 +82,33 @@ func TestEarsHear(t *testing.T) {
 
 // fakeWhisper is whisper-server as the test binary plays it, copied under a name that says how it behaves: "broken"
 // stops at once, as a GPU build without its libraries; "dies" hears its first request, the warm-up, then stops at the
-// next; any other answers every request with its own name. As whisper.cpp does, it serves its routes under
-// --request-path, and nothing outside it.
+// next; "deaf" stops at its first request; any other answers every request with its own name. As whisper.cpp does, it
+// serves its routes under --request-path, and nothing outside it, and on an argument it does not take it prints the
+// usage and exits 0 (examples/server/server.cpp): "old" plays a build that does not take --request-path.
 func fakeWhisper() {
 	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
 	if name == "broken" {
 		os.Exit(1)
 	}
+	takes := map[string]bool{"-m": true, "-l": true, "-t": true, "--host": true, "--port": true, "--prompt": true, "-ac": true,
+		"--request-path": name != "old", "-nf": false} // whether each takes a value
 	port, prefix := "", ""
-	for i, a := range os.Args {
+	for i := 1; i < len(os.Args); i++ {
+		a := os.Args[i]
+		value, known := takes[a]
+		if !known || (a == "--request-path" && name == "old") {
+			fmt.Fprintf(os.Stderr, "error: unknown argument: %s\n", a)
+			os.Exit(0)
+		}
+		if !value {
+			continue
+		}
+		i++
 		switch a {
 		case "--port":
-			port = os.Args[i+1]
+			port = os.Args[i]
 		case "--request-path":
-			prefix = os.Args[i+1]
+			prefix = os.Args[i]
 		}
 	}
 	heard := 0
@@ -230,6 +246,82 @@ func TestTheEarsRoutesAreUnguessable(t *testing.T) {
 	}
 	if paths[0] == paths[1] {
 		t.Fatalf("two starts drew the same path %q", paths[0])
+	}
+}
+
+// whisper-server exits 0 at once on an argument it does not take, as a build that predates --request-path does on it:
+// the error names the server and the argument it may lack, rather than a bare exit status.
+func TestAnEarsServerWithoutRequestPathIsNamed(t *testing.T) {
+	t.Setenv("BRAIN_FAKE_WHISPER", "1")
+	old := fakeWhisperExe(t, "old")
+	_, err := startEars([]string{old}, "model.bin", "fr", freePort(), 1, "", 0)
+	if err == nil || !strings.Contains(err.Error(), "old.exe") || !strings.Contains(err.Error(), "--request-path") {
+		t.Fatalf("a server that does not take --request-path: %v", err)
+	}
+	broken := fakeWhisperExe(t, "broken")
+	if _, err := startEars([]string{broken}, "model.bin", "fr", freePort(), 1, "", 0); err == nil || strings.Contains(err.Error(), "--request-path") {
+		t.Fatalf("a server that fails with its own status is not blamed on --request-path: %v", err)
+	}
+}
+
+// The contract with the real whisper-server, on a throwaway instance of the build BRAIN_REAL_WHISPER names with the
+// model BRAIN_REAL_WHISPER_MODEL, started with the brain's own arguments: its routes answer under the path only, and a
+// /load posted at the root, with a file that is no model, neither reaches it nor stops the server. It sends no audio,
+// never writes the path, and is skipped without both variables (CI has no real build).
+func TestTheRealWhisperServerKeepsItsRoutesUnderThePath(t *testing.T) {
+	server, model := os.Getenv("BRAIN_REAL_WHISPER"), os.Getenv("BRAIN_REAL_WHISPER_MODEL")
+	if server == "" || model == "" {
+		t.Skip("BRAIN_REAL_WHISPER and BRAIN_REAL_WHISPER_MODEL name a real whisper-server and its model")
+	}
+	port, path := freePort(), earsPath()
+	root := "http://127.0.0.1:" + strconv.Itoa(port)
+	cmd := exec.Command(server, earsArgs(model, "en", port, 2, "", 0, path)...)
+	hideConsole(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dead := make(chan struct{})
+	go func() { cmd.Wait(); close(dead) }()
+	t.Cleanup(func() { cmd.Process.Kill(); <-dead })
+	status := func(method, at string) int {
+		var body bytes.Buffer
+		form := multipart.NewWriter(&body)
+		form.WriteField("model", os.Args[0]) // a file that exists and is no model: /load would exit on it
+		form.Close()
+		req, _ := http.NewRequest(method, root+at, &body)
+		req.Header.Set("Content-Type", form.FormDataContentType())
+		req.Header.Set("Origin", "https://example.invalid")
+		resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+		if err != nil {
+			return -1
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for ready := time.Now().Add(2 * time.Minute); status(http.MethodGet, path+"/health") != http.StatusOK; time.Sleep(250 * time.Millisecond) {
+		select {
+		case <-dead:
+			t.Fatalf("%s stopped before it was ready: %v", filepath.Base(server), cmd.ProcessState)
+		default:
+		}
+		if time.Now().After(ready) {
+			t.Fatalf("%s did not answer under its path within 2 min", filepath.Base(server))
+		}
+	}
+	for _, c := range []struct{ method, at string }{
+		{http.MethodPost, "/inference"}, {http.MethodPost, "/load"}, {http.MethodGet, "/health"}, {http.MethodGet, "/"},
+	} {
+		if got := status(c.method, c.at); got != http.StatusNotFound {
+			t.Errorf("%s %s at the root: %d, want 404", c.method, c.at, got)
+		}
+	}
+	select {
+	case <-dead:
+		t.Fatalf("%s stopped after the requests at the root: %v", filepath.Base(server), cmd.ProcessState)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if got := status(http.MethodGet, path+"/health"); got != http.StatusOK {
+		t.Fatalf("under its path after them: %d", got)
 	}
 }
 

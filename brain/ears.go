@@ -69,14 +69,8 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 		c.Close()
 		return nil, fmt.Errorf("ears: %s is already taken", addr)
 	}
-	// -nf: no temperature fallback. With it, a mumbled reply took 31.6 s to come back as "Euh... Oui."; a voice loop
-	// would rather have a rough transcript at once.
-	args := []string{"-m", model, "-l", lang, "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt, "-nf"}
-	if audioCtx > 0 {
-		args = append(args, "-ac", strconv.Itoa(audioCtx))
-	}
 	path := earsPath()
-	args = append(args, "--request-path", path)
+	args := earsArgs(model, lang, port, threads, prompt, audioCtx, path)
 	e := &ears{url: "http://" + addr + path, addr: addr, patience: earsPatience}
 	e.run = func(server string) error { return e.start(server, args, addr) }
 	for i, server := range servers {
@@ -88,6 +82,17 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 		return e, nil
 	}
 	return nil, fmt.Errorf("%s", strings.Join(e.failed, "; "))
+}
+
+// earsArgs are whisper-server's arguments: the loopback port, its routes under path (earsPath).
+// -nf: no temperature fallback. With it, a mumbled reply took 31.6 s to come back as "Euh... Oui."; a voice loop
+// would rather have a rough transcript at once.
+func earsArgs(model, lang string, port, threads int, prompt string, audioCtx int, path string) []string {
+	args := []string{"-m", model, "-l", lang, "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt, "-nf"}
+	if audioCtx > 0 {
+		args = append(args, "-ac", strconv.Itoa(audioCtx))
+	}
+	return append(args, "--request-path", path)
 }
 
 // earsPath is the path every route of whisper-server sits under (its --request-path), drawn at each start and known to
@@ -119,6 +124,10 @@ func (e *ears) start(server string, args []string, addr string) error {
 	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		select {
 		case <-dead: // a GPU build without its libraries stops at once
+			if cmd.ProcessState.ExitCode() == 0 { // whisper-server's answer to an argument it does not take
+				return fmt.Errorf("ears: %s stopped at once with exit status 0, as whisper-server does on an argument it "+
+					"does not take: it may be too old for --request-path, which keeps its routes from web pages", server)
+			}
 			return fmt.Errorf("ears: %s stopped: %v", server, cmd.ProcessState)
 		default:
 		}
