@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,7 +73,9 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 	if audioCtx > 0 {
 		args = append(args, "-ac", strconv.Itoa(audioCtx))
 	}
-	e := &ears{url: "http://" + addr, patience: earsPatience}
+	path := earsPath()
+	args = append(args, "--request-path", path)
+	e := &ears{url: "http://" + addr + path, patience: earsPatience}
 	e.run = func(server string) error { return e.start(server, args, addr) }
 	for i, server := range servers {
 		if err := e.run(server); err != nil {
@@ -82,6 +86,18 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 		return e, nil
 	}
 	return nil, fmt.Errorf("%s", strings.Join(e.failed, "; "))
+}
+
+// earsPath is the path every route of whisper-server sits under (its --request-path), drawn at each start and known to
+// the brain alone. whisper.cpp answers every request with Access-Control-Allow-Origin: * and checks neither Origin nor
+// Host, so a web page reaches its loopback port and could read what /inference makes of its audio, or post a file's
+// path to /load, which tells whether that file exists and exits on one that is no model, leaving Delta deaf. Under a
+// path it cannot guess, it finds neither. Both servers Delta runs take --request-path: IX's b5454, which setup.ps1
+// installs, and the CUDA build.
+func earsPath() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return "/" + hex.EncodeToString(b)
 }
 
 // start runs one server and waits until it hears. Its caller holds mu, or alone has e.

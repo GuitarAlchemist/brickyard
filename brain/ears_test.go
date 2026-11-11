@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -78,20 +79,24 @@ func TestEarsHear(t *testing.T) {
 
 // fakeWhisper is whisper-server as the test binary plays it, copied under a name that says how it behaves: "broken"
 // stops at once, as a GPU build without its libraries; "dies" hears its first request, the warm-up, then stops at the
-// next; any other answers every request with its own name.
+// next; any other answers every request with its own name. As whisper.cpp does, it serves its routes under
+// --request-path, and nothing outside it.
 func fakeWhisper() {
 	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
 	if name == "broken" {
 		os.Exit(1)
 	}
-	port := ""
+	port, prefix := "", ""
 	for i, a := range os.Args {
-		if a == "--port" {
+		switch a {
+		case "--port":
 			port = os.Args[i+1]
+		case "--request-path":
+			prefix = os.Args[i+1]
 		}
 	}
 	heard := 0
-	http.HandleFunc("/inference", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(prefix+"/inference", func(w http.ResponseWriter, r *http.Request) {
 		if heard++; name == "dies" && heard > 1 {
 			os.Exit(2)
 		}
@@ -108,17 +113,7 @@ func fakeWhisper() {
 // so does a chain of servers that cannot start, and a sentence heard while another takes over.
 func TestTheEarsFallBackOnTheNextServer(t *testing.T) {
 	t.Setenv("BRAIN_FAKE_WHISPER", "1")
-	self, err := os.ReadFile(os.Args[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := func(name string) string {
-		path := filepath.Join(t.TempDir(), name+".exe")
-		if err := os.WriteFile(path, self, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
+	server := func(name string) string { return fakeWhisperExe(t, name) }
 	broken, dies, hangs, cpu := server("broken"), server("dies"), server("hangs"), server("cpu")
 	start := func(servers ...string) *ears {
 		e, err := startEars(servers, "model.bin", "fr", freePort(), 1, "", 0)
@@ -179,6 +174,59 @@ func TestTheEarsFallBackOnTheNextServer(t *testing.T) {
 
 	if _, err := startEars([]string{broken}, "model.bin", "fr", freePort(), 1, "", 0); err == nil || !strings.Contains(err.Error(), "broken.exe") {
 		t.Fatalf("no server can hear: %v", err)
+	}
+}
+
+// fakeWhisperExe copies the test binary as a fake whisper-server named name (fakeWhisper).
+func fakeWhisperExe(t *testing.T, name string) string {
+	t.Helper()
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), name+".exe")
+	if err := os.WriteFile(path, self, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// whisper.cpp answers every request with Access-Control-Allow-Origin: * and checks neither Origin nor Host, so a web
+// page can reach its loopback port. Its routes sit under a path drawn at each start, which the brain alone knows: a
+// request to /inference or /load itself finds nothing, and two starts draw two paths.
+func TestTheEarsRoutesAreUnguessable(t *testing.T) {
+	t.Setenv("BRAIN_FAKE_WHISPER", "1")
+	cpu := fakeWhisperExe(t, "cpu")
+	var paths []string
+	for range 2 {
+		port := freePort()
+		e, err := startEars([]string{cpu}, "model.bin", "fr", port, 1, "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(e.close)
+		if text, err := e.hear(make([]float32, 1600)); text != "cpu" || err != nil {
+			t.Fatalf("the brain hears under its path: %q %v", text, err)
+		}
+		root := "http://127.0.0.1:" + strconv.Itoa(port)
+		path := strings.TrimPrefix(e.url, root)
+		if len(path) != 33 || path[0] != '/' || strings.Trim(path[1:], "0123456789abcdef") != "" {
+			t.Fatalf("the ears' path %q is not / and 32 hex digits", path)
+		}
+		for _, guess := range []string{"/inference", "/load", "/"} {
+			resp, err := http.Post(root+guess, "multipart/form-data; boundary=x", strings.NewReader("--x--\r\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("a page that posts to %s gets %d, want 404", guess, resp.StatusCode)
+			}
+		}
+		paths = append(paths, path)
+	}
+	if paths[0] == paths[1] {
+		t.Fatalf("two starts drew the same path %q", paths[0])
 	}
 }
 

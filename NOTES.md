@@ -1052,6 +1052,25 @@ module alone has a shorter route, used for 228e865 on 2026-11-05:
 
 A tree refused between steps 2 and 3, the new scene with the old module, is expected, and step 3 ends it.
 
+## whisper-server's routes under a path only the brain knows (2026-11-11)
+
+whisper.cpp's server answers every request with `Access-Control-Allow-Origin: *` and checks neither `Origin` nor
+`Host` (`examples/server/server.cpp`, `set_default_headers`), unlike the brain's own port, which `localOnly` keeps. A
+web page reaches its loopback port, random but scannable. It could post audio to `/inference` and read the
+transcript, a « simple » CORS request with no preflight. It could also post a file's path to `/load`. That route tells
+whether the file exists. On a file that is no model, it frees the context and calls `exit(1)`, leaving Delta deaf.
+IxForge QA saw the headers on a throwaway instance of the same binary.
+
+The brain now starts it with `--request-path /<32 hex digits>`, drawn at each start (`earsPath`). Every route sits
+under that path, `/load` and `/health` included, and a request outside it gets 404. `TestTheEarsRoutesAreUnguessable`
+covers it with the test binary's fake server. Both real builds were checked on throwaway instances, with no audio and
+not the live one: IX's b5454, which `setup.ps1` installs, and the CUDA build. Each answered `<path>/health` 200, and
+404 to `/inference`, `/load`, `/health` and `/` at the root, and kept running after a `POST /load` at the root. The
+`Access-Control-Allow-Origin: *` header stays; only the routes are out of reach.
+
+To verify on the live brain once deployed: the whisper-server command line names `--request-path`, and Delta still
+hears.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
