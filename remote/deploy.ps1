@@ -251,6 +251,20 @@ if ($Check) {
         "connected: $($clients.Count)$(if ($clients.Count) { ' on ' + (($clients | ForEach-Object LocalPort | Sort-Object -Unique) -join ', ') })"
     } else {
         "running: no gateway from $Dir$(if ($state) { '; deploy.json keeps its arguments' } else { ', and no deploy.json' })"
+        # Why, without a line of any log: a log may hold an address, a host or a code. Its lines are counted by the
+        # words they start with after "delta-remote: ", up to the first character that is not a letter.
+        "Windows started: $((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('u'))"
+        $last = Get-ChildItem -LiteralPath $Dir -Filter 'err-*.log' | Sort-Object LastWriteTimeUtc | Select-Object -Last 1
+        if ($last) {
+            $kinds = @(Get-Content -LiteralPath $last.FullName | ForEach-Object {
+                if ($_ -match "^delta-remote: ([A-Za-z' ]{1,40})") { $Matches[1].Trim() } else { 'other' }
+            } | Group-Object | Sort-Object Count -Descending | ForEach-Object { "$($_.Count) $($_.Name)" })
+            "last log: $($last.Name), written $($last.LastWriteTimeUtc.ToString('u')), $(if ($kinds.Count) { $kinds -join ', ' } else { 'empty' })"
+        }
+        # resume.log holds what -resume did and never the arguments (resume_windows.go).
+        $resumeLog = Join-Path $Dir 'resume.log'
+        if (Test-Path -LiteralPath $resumeLog) { "last resume: $(Get-Content -LiteralPath $resumeLog -Tail 1)" }
+        "to resume: $(if ($state -and $state.current) { Split-Path $state.current -Leaf } else { 'nothing, deploy.json names no build' })"
     }
     "a new gateway's job: $([DeployedGateway]::Job())"
     if ($same) { $verdict = 'nothing: it already runs this build' }

@@ -52,7 +52,8 @@ To put this checkout's gateway in place of a running one, with the same argument
 It replaces nothing while a device, a guest or Delta's window is connected, nor when the gateway already runs this
 build: a commit builds to the same bytes. A new build that does not listen within 15 s is stopped and the old one
 starts again. `<folder>\deploy.json` keeps the arguments, so a gateway that died starts again with them. `-Check` also
-says whether the job a new gateway would start in ends it when that job closes. Run it in a
+says whether the job a new gateway would start in ends it when that job closes, and, when none runs, why: when Windows
+started, the last log's lines counted by kind (never a line itself), the last resume and the build to resume. Run it in a
 new PowerShell after pulling a new `deploy.ps1`: a session that already ran an older one refuses to load its new code.
 
 After Windows restarts, `delta-remote -resume <folder>` starts the build last deployed there, with the arguments

@@ -558,6 +558,56 @@ func TestDeployStartsAGatewayThatDiedWithItsArguments(t *testing.T) {
 	}
 }
 
+// With no gateway running, -Check says why without showing a log line: when Windows started, what the last log holds,
+// counted by its fixed prefixes, the last resume, and the build to resume.
+func TestDeployCheckSaysWhyNoGatewayRunsWithoutShowingTheLog(t *testing.T) {
+	t.Parallel()
+	f := newFakeFolder(t)
+	if _, err := f.deploy("-Exe", f.newer); err != nil {
+		t.Fatal(err)
+	}
+	died := f.await(f.newer)
+	if p, err := os.FindProcess(died.PID); err == nil {
+		p.Kill()
+		p.Wait()
+	}
+	var errLog string
+	entries, _ := os.ReadDir(f.dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "err-") {
+			errLog = filepath.Join(f.dir, e.Name()) // the last, by its time stamp
+		}
+	}
+	lines := "delta-remote: the QR: Post \"http://127.0.0.1:8807/link?k=SECRET-1\": connection refused\n" +
+		"delta-remote: the QR: Post \"http://127.0.0.1:8807/link?k=SECRET-2\": connection refused\n" +
+		"delta-remote: guest 3: ICE connected owner@SECRET-3\n" +
+		"[gfxcapture] SECRET-4 something ffmpeg said\n"
+	if err := os.WriteFile(errLog, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resumed := "2026-11-11T01:00:00Z delta-remote-new.exe runs, PID 42\n"
+	if err := os.WriteFile(filepath.Join(f.dir, "resume.log"), []byte(resumed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := f.deploy("-Check", "-Exe", f.newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"running: no gateway", "Windows started: ", "2 the QR", "1 guest", "1 other",
+		"last resume: 2026-11-11T01:00:00Z delta-remote-new.exe runs, PID 42", "to resume: delta-remote-new.exe",
+		"a deploy would do: start it"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-Check does not say %q", want)
+		}
+	}
+	for _, kept := range []string{"SECRET", "Jabra", "8807", "gfxcapture"} {
+		if strings.Contains(out, kept) {
+			t.Errorf("-Check shows %q, from a log or an argument", kept)
+		}
+	}
+}
+
 func TestDeployCheckChangesNothing(t *testing.T) {
 	t.Parallel()
 	f := newFakeFolder(t)

@@ -54,7 +54,9 @@ Pour mettre la passerelle de ce checkout à la place de celle qui tourne, avec l
 Il ne remplace rien tant qu'un appareil, un invité ou la fenêtre de Delta est connecté, ni quand la passerelle tourne
 déjà ce build : un commit donne toujours les mêmes octets. Un nouveau build qui n'écoute pas dans les 15 s est arrêté et
 l'ancien redémarre. `<dossier>\deploy.json` garde les arguments, donc une passerelle morte redémarre avec eux. `-Check`
-dit aussi si le job dans lequel démarrerait une nouvelle passerelle la termine quand ce job se ferme. Lancez-le
+dit aussi si le job dans lequel démarrerait une nouvelle passerelle la termine quand ce job se ferme, et, quand aucune ne
+tourne, pourquoi : quand Windows a démarré, les lignes du dernier journal comptées par sorte (jamais une ligne elle-même),
+la dernière reprise et le build à reprendre. Lancez-le
 dans un nouveau PowerShell après avoir récupéré un nouveau `deploy.ps1` : une session qui a déjà lancé l'ancien refuse de
 charger son nouveau code.
 
