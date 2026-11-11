@@ -50,7 +50,8 @@ To put this checkout's gateway in place of a running one, with the same argument
 ```
 
 It replaces nothing while a device, a guest or Delta's window is connected, nor when the gateway already runs this
-build: a commit builds to the same bytes. A new build that does not listen within 15 s is stopped and the old one
+build: a commit builds to the same bytes. The build is named `delta-remote-<git describe>.exe`, with `-dirty-<time>`
+only when `remote/`'s code, not its Markdown, differs from the commit; `-Check` says the name. A new build that does not listen within 15 s is stopped and the old one
 starts again. `<folder>\deploy.json` keeps the arguments, so a gateway that died starts again with them. `-Check` also
 says whether the job a new gateway would start in ends it when that job closes, and, when none runs, why: when Windows
 started, the last log's lines counted by kind (never a line itself), the last resume and the build to resume. Run it in a

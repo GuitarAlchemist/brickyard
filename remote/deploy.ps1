@@ -1,7 +1,7 @@
 # Builds this checkout's gateway and puts it in place of the one running from -Dir, with the same arguments: paired
 # devices, the tunnel's entries and Access stay as they are. The build is <Dir>\delta-remote-<git describe>.exe, built
 # as a plain `go build` builds it, so that a commit always gives the same bytes and deploying the running one restarts
-# nothing.
+# nothing; -dirty-<time> follows only when this folder's code, not its Markdown, differs from the commit.
 #
 #   .\remote\deploy.ps1 -Dir <the folder the gateway runs from> [-Check] [-Exe <a build>] [-Back]
 #
@@ -208,8 +208,12 @@ if ($Back) {
 } elseif ($Exe) {
     $target = (Resolve-Path -LiteralPath $Exe).Path
 } else {
-    $describe = (& git -C $PSScriptRoot describe --tags --always --dirty).Trim()
-    if ($describe -like '*-dirty') { $describe += '-' + (Get-Date -Format 'HHmmss') }
+    # Dirty only when the code built here changed since the commit, as `describe --dirty` sees it but for this folder
+    # without its Markdown: a change to the docs, or elsewhere in the repository, builds the same bytes and keeps the
+    # name, and with it the firewall rule Windows keeps for the build's path.
+    $describe = (& git -C $PSScriptRoot describe --tags --always).Trim()
+    & git -C $PSScriptRoot diff --quiet HEAD -- . ':!*.md'
+    if ($LASTEXITCODE -ne 0) { $describe += '-dirty-' + (Get-Date -Format 'HHmmss') }
     if ($Check) { $built = Join-Path $env:TEMP "delta-remote-check-$PID.exe" } else { $built = Join-Path $Dir ".building-$PID.exe" }
     Push-Location $PSScriptRoot
     try {
@@ -266,6 +270,7 @@ if ($Check) {
         if (Test-Path -LiteralPath $resumeLog) { "last resume: $(Get-Content -LiteralPath $resumeLog -Tail 1)" }
         "to resume: $(if ($state -and $state.current) { Split-Path $state.current -Leaf } else { 'nothing, deploy.json names no build' })"
     }
+    if ($built) { "this checkout builds: delta-remote-$describe.exe" }
     "a new gateway's job: $([DeployedGateway]::Job())"
     if ($same) { $verdict = 'nothing: it already runs this build' }
     elseif (-not $old -and -not $state) { $verdict = 'nothing: no arguments to start it with' }

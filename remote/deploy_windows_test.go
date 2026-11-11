@@ -39,6 +39,14 @@ func TestMain(m *testing.M) {
 		fakeLauncher(folder)
 		return
 	}
+	// A pre-commit hook runs these tests with GIT_DIR and GIT_INDEX_FILE naming the repository being committed to: a
+	// git command here, or in deploy.ps1, would act on it instead of the folder it names. On 2026-11-11 one made a
+	// commit there and set core.bare in the shared config.
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(strings.ToUpper(name), "GIT_") {
+			os.Unsetenv(name)
+		}
+	}
 	os.Exit(m.Run())
 }
 
@@ -609,6 +617,73 @@ func TestDeployCheckSaysWhyNoGatewayRunsWithoutShowingTheLog(t *testing.T) {
 		if strings.Contains(out, kept) {
 			t.Errorf("-Check shows %q, from a log or an argument", kept)
 		}
+	}
+}
+
+// A build is named after the commit, and marked dirty only when the code it builds from changed: a change to the
+// folder's Markdown builds the same bytes, so the name, and the firewall rule Windows keeps for its path, stay.
+func TestDeployNamesTheBuildAfterItsCodeNotItsDocs(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	remote := filepath.Join(repo, "remote")
+	script, err := os.ReadFile("deploy.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"deploy.ps1": string(script), "go.mod": "module fake\n\ngo 1.21\n",
+		"main.go": "package main\n\nfunc main() {}\n", "README.md": "A fake gateway.\n"}
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(remote, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := os.WriteFile(filepath.Join(repo, "elsewhere.txt"), []byte("another part\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q")
+	git("add", ".")
+	git("commit", "-q", "-m", "a fake gateway")
+	commit := git("rev-parse", "--short", "HEAD")
+	folder := t.TempDir()
+	name := func() string {
+		out, err := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+			filepath.Join(remote, "deploy.ps1"), "-Dir", folder, "-Check").CombinedOutput()
+		if err != nil {
+			t.Fatalf("-Check: %v\n%s", err, out)
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if after, ok := strings.CutPrefix(strings.TrimSpace(line), "this checkout builds: "); ok {
+				return after
+			}
+		}
+		t.Fatalf("-Check names no build:\n%s", out)
+		return ""
+	}
+
+	if got := name(); got != "delta-remote-"+commit+".exe" {
+		t.Errorf("a clean checkout builds %s", got)
+	}
+	os.WriteFile(filepath.Join(repo, "elsewhere.txt"), []byte("another part, changed\n"), 0o644)
+	if got := name(); got != "delta-remote-"+commit+".exe" {
+		t.Errorf("a change outside the folder builds %s", got)
+	}
+	os.WriteFile(filepath.Join(remote, "README.md"), []byte("A fake gateway, documented.\n"), 0o644)
+	if got := name(); got != "delta-remote-"+commit+".exe" {
+		t.Errorf("a change to the README alone builds %s", got)
+	}
+	os.WriteFile(filepath.Join(remote, "main.go"), []byte("package main\n\nfunc main() { _ = 1 }\n"), 0o644)
+	if got := name(); !strings.HasPrefix(got, "delta-remote-"+commit+"-dirty-") {
+		t.Errorf("a change to the code builds %s", got)
 	}
 }
 
