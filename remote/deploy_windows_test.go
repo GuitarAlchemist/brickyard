@@ -472,6 +472,12 @@ func TestDeployPutsTheNewBuildInPlaceWithTheSameArgumentsAndBack(t *testing.T) {
 	if !reflect.DeepEqual(newer.Args, f.args) {
 		t.Errorf("the new build got %q, not %q", newer.Args, f.args)
 	}
+	// -resume starts the build deploy.json names.
+	data, _ := os.ReadFile(filepath.Join(f.dir, "deploy.json"))
+	var state deployState
+	if json.Unmarshal(data, &state) != nil || !strings.EqualFold(state.Current, f.newer) {
+		t.Errorf("deploy.json does not name the build it started: %s", data)
+	}
 	select {
 	case <-f.firstExited:
 	case <-time.After(10 * time.Second):

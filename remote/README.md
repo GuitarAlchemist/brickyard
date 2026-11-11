@@ -54,3 +54,10 @@ build: a commit builds to the same bytes. A new build that does not listen withi
 starts again. `<folder>\deploy.json` keeps the arguments, so a gateway that died starts again with them. `-Check` also
 says whether the job a new gateway would start in ends it when that job closes. Run it in a
 new PowerShell after pulling a new `deploy.ps1`: a session that already ran an older one refuses to load its new code.
+
+After Windows restarts, `delta-remote -resume <folder>` starts the build last deployed there, with the arguments
+`deploy.json` keeps, once the network gives a LAN address (it waits up to 3 minutes). It starts nothing when a gateway
+already runs from the folder, and writes what it did, never the arguments, to `<folder>\resume.log`. A shortcut in the
+Startup folder (`shell:startup`) runs it at each logon with no shell: target `<folder>\<a build of this version>.exe`,
+arguments `-resume "<folder>"`, run minimized. A folder deployed before `deploy.json` named its build resumes nothing
+until its next deploy.

@@ -57,3 +57,10 @@ l'ancien redémarre. `<dossier>\deploy.json` garde les arguments, donc une passe
 dit aussi si le job dans lequel démarrerait une nouvelle passerelle la termine quand ce job se ferme. Lancez-le
 dans un nouveau PowerShell après avoir récupéré un nouveau `deploy.ps1` : une session qui a déjà lancé l'ancien refuse de
 charger son nouveau code.
+
+Après un redémarrage de Windows, `delta-remote -resume <dossier>` démarre le dernier build déployé dans ce dossier, avec
+les arguments que garde `deploy.json`, dès que le réseau donne une adresse locale (il attend jusqu'à 3 minutes). Il ne
+démarre rien quand une passerelle tourne déjà depuis ce dossier, et note ce qu'il a fait, jamais les arguments, dans
+`<dossier>\resume.log`. Un raccourci dans le dossier Démarrage (`shell:startup`) le lance à chaque ouverture de session,
+sans shell : cible `<dossier>\<un build de cette version>.exe`, arguments `-resume "<dossier>"`, exécution réduite. Un
+dossier déployé avant que `deploy.json` nomme son build ne reprend rien jusqu'à son prochain déploiement.

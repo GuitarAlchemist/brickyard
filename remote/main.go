@@ -3,6 +3,7 @@
 //	delta-remote [-ip <address>] [-port 8810] [-udp 8811] [-cert <file> -key <file> -name <host>] [-forget-devices]
 //	             [-guest-host <name> [-guest-port 8812] [-local-port 8813] [-turn <file>] [-mic <device>]
 //	              [-owner-host <name> -access-team <team> -access-aud <tag> -access-email <email> [-owner-port 8814]]]
+//	delta-remote -resume <the folder deploy.ps1 deploys to>
 //
 // Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within 100 s. Then a new code
 // replaces it, as soon as a device uses it too: Delta's window shows the current one as a QR, and link.txt holds it. A
@@ -83,8 +84,16 @@ func main() {
 	flag.StringVar(&o.mic, "mic", "", `the microphone guests hear, by its DirectShow name ("ffmpeg -list_devices true -f dshow -i dummy"); default: none`)
 	flag.StringVar(&o.turnFile, "turn", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta-remote", "turn.json"),
 		`Cloudflare's TURN key for the guests' video, as {"id": "…", "token": "…"}`)
+	resume := flag.String("resume", "", "start the build deploy.ps1 last put in this folder, with its arguments, once the network is up (resume_windows.go)")
 	flag.Parse()
 
+	if *resume != "" {
+		if err := newResumer(*resume).run(); err != nil {
+			fmt.Fprintln(os.Stderr, "delta-remote:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(o); err != nil {
 		fmt.Fprintln(os.Stderr, "delta-remote:", err)
 		os.Exit(1)

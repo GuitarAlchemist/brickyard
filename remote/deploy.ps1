@@ -9,7 +9,8 @@
 # it when that job closes, and whether a deploy would replace it; it changes nothing. Otherwise nothing is replaced while a device, a guest or Delta's window holds a connection to one of the
 # gateway's entries. A new build that does not listen on the old one's ports within 15 s is stopped and the old one
 # starts again. -Exe puts that build in place instead of this checkout's; -Back puts back the one replaced last.
-# <Dir>\deploy.json keeps the arguments and the replaced build, so a gateway that died starts again with its arguments.
+# <Dir>\deploy.json keeps the arguments, the replaced build and the one started, so a gateway that died starts again
+# with its arguments, and `delta-remote -resume <Dir>` starts that build at logon (resume_windows.go).
 # Each start logs to <Dir>\out-<time>.log and err-<time>.log.
 param(
     [Parameter(Mandatory = $true)][string]$Dir,
@@ -50,8 +51,8 @@ function Connected([int]$id) {
         Where-Object { $ports -contains [int]$_.LocalPort })
 }
 
-function Save($arguments, $previous) {
-    $json = [pscustomobject]@{ arguments = $arguments; previous = $previous } | ConvertTo-Json
+function Save($arguments, $previous, $current) {
+    $json = [pscustomobject]@{ arguments = $arguments; previous = $previous; current = $current } | ConvertTo-Json
     [IO.File]::WriteAllText($statePath, $json + "`n", (New-Object Text.UTF8Encoding $false))
 }
 
@@ -283,7 +284,7 @@ if ($built) {
 
 $previous = $null
 if ($old) { $previous = $old.ExecutablePath } elseif ($state) { $previous = $state.previous }
-Save $arguments $previous
+Save $arguments $previous $target
 if ($old) {
     Stop-Process -Id $old.ProcessId -Force
     Wait-Process -Id $old.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
@@ -297,10 +298,13 @@ if (Await $new $ports) {
 }
 if ($new -and -not $new.HasExited) { Stop-Process -Id $new.Id -Force; Wait-Process -Id $new.Id -Timeout 10 -ErrorAction SilentlyContinue }
 if ($new) { $new.Dispose(); $failed = "$name did not listen on $($ports -join ', ') within 15 s" } else { $failed = "$name could not start: $launchError" }
-if (-not $old) { throw "$failed; no gateway runs" }
+if (-not $old) {
+    Save $arguments $previous $state.current
+    throw "$failed; no gateway runs"
+}
 $before = $null
 if ($state) { $before = $state.previous }
-Save $arguments $before
+Save $arguments $before $old.ExecutablePath
 $oldName = Split-Path $old.ExecutablePath -Leaf
 $again = Start-Gateway $old.ExecutablePath $arguments
 $back = Await $again $ports
