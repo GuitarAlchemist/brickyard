@@ -1,5 +1,5 @@
 # Runs every check CI runs, in its order: the plugin and the scripts, the brain, the hands, the scene, the widgets and
-# the agents' office (check-widgets.ps1). CI runs this
+# the agents' office (check-widgets.ps1), and check-ears-flag.ps1's self-test. CI runs this
 # script, so a green run here is a green run there. Needs Go, the .NET 10 SDK and Python on PATH; it names the one
 # missing.
 $ErrorActionPreference = 'Stop'
@@ -54,4 +54,8 @@ finally { Pop-Location }
 
 Step 'widgets and office' { & (Join-Path $root 'check-widgets.ps1') }
 
-'CHECK ok: plugin, brain, hands, scene and widgets'
+# The check run after a deploy says whether whisper-server has its path, and must never print it: its verdicts, on
+# made-up command lines, in the Windows PowerShell 5.1 users run it in.
+Step 'ears flag check' { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'check-ears-flag.ps1') -SelfTest }
+
+'CHECK ok: plugin, brain, hands, scene, widgets and the ears flag check'

@@ -1068,8 +1068,20 @@ not the live one: IX's b5454, which `setup.ps1` installs, and the CUDA build. Ea
 404 to `/inference`, `/load`, `/health` and `/` at the root, and kept running after a `POST /load` at the root. The
 `Access-Control-Allow-Origin: *` header stays; only the routes are out of reach.
 
-To verify on the live brain once deployed: the whisper-server command line names `--request-path`, and Delta still
-hears.
+The path is a secret, and it travelled at first. Go's request errors name the whole URL, so the reason for falling
+back, the failed servers, the journal's `ears` notes, stderr and `/hear`'s 502 all carried it. So did the ready line.
+They now give the address and `/…` (`hidePath`), and `TestTheEarsPathStaysOutOfTheirMessages` reads each one. The
+test's fake whisper-server takes only the brain's arguments and exits 0 on any other, as whisper.cpp does. A build too
+old for `--request-path` is therefore named as such (`TestAnEarsServerWithoutRequestPathIsNamed`), not as « exit status
+0 ». `TestTheRealWhisperServerKeepsItsRoutesUnderThePath` runs the same checks against a real build when
+`BRAIN_REAL_WHISPER` and `BRAIN_REAL_WHISPER_MODEL` name it. It uses the brain's own arguments (`earsArgs`), sends no
+audio and never writes the path. It passed on b5454 and on the CUDA build, and failed with the flag left out.
+
+To verify on the live brain once deployed and delta reconnected: `.\check-ears-flag.ps1` says, for each
+whisper-server, `--request-path present (32 hex digits)`, `absent` or `present but not 32 hex digits`, and never
+prints the path. Its exit is 0 only if each has it. Do not read the command line by hand: it shows the path. Then
+check that Delta still hears. `check.ps1` runs `check-ears-flag.ps1 -SelfTest`, which fails if a verdict prints the
+path.
 
 ## Known problems
 

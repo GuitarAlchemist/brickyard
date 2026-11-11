@@ -1,6 +1,7 @@
 #!/bin/sh
 # CI's checks on the parts a commit touches, run before it leaves the machine: gofmt, vet and the tests for the brain,
-# the build and selftest for the scene, the widget and office tests (check-widgets.ps1), the camera process's tests,
+# the build and selftest for the scene, the widget and office tests (check-widgets.ps1), check-ears-flag.ps1's
+# self-test, the camera process's tests,
 # check-plugin.ps1 for the plugin and the marketplace. Enable once per clone:
 #   git config core.hooksPath .githooks
 set -e
@@ -27,6 +28,10 @@ fi
 if touches '^(scene/|modules/|module-contracts/|widget-tests/|check-widgets\.ps1)'; then # widget-tests compiles some of scene/'s files
 	cd "$root"
 	powershell -NoProfile -ExecutionPolicy Bypass -File check-widgets.ps1 >/dev/null 2>&1 || { echo "pre-commit: the widget tests failed; run check-widgets.ps1 to see why" >&2; exit 1; }
+fi
+if touches '^check-ears-flag\.ps1'; then
+	cd "$root"
+	powershell -NoProfile -ExecutionPolicy Bypass -File check-ears-flag.ps1 -SelfTest >/dev/null 2>&1 || { echo "pre-commit: check-ears-flag.ps1's self-test failed; run it with -SelfTest to see why" >&2; exit 1; }
 fi
 if touches '^(hands/|brain/gesture\.go)'; then # the hands' tests read the brain's gestures
 	cd "$root"
