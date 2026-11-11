@@ -874,6 +874,39 @@ tool's shell: "this shell's, which does not end it when the job closes". The `-C
 first. The pre-commit hook, now enabled in this clone, also runs gofmt, vet and the tests of `remote/` and the page's
 node tests; it did not cover `remote/` before.
 
+## The gateway after Windows restarts (2026-11-11)
+
+Windows restarted on 2026-11-09 at 04:39Z; the gateway deployed two days before stopped, and nothing started it again.
+Its error log then held only "the QR: … connection refused", one per 100 s, for about 15.7 h: it outlived its brain.
+
+`delta-remote -resume <folder>` now starts, at logon, the build `deploy.json` names as `current` (each deploy records
+it), with its command line as kept and no shell: it waits up to 3 min for a LAN address, since the gateway exits
+without one, starts nothing when one already runs from the folder, retries a build that exits at once, and writes each
+outcome, never the arguments, to `resume.log`. It starts the gateway with `CREATE_BREAKAWAY_FROM_JOB`, so a job that
+ends its processes when it closes does not end it; a job that lets no child go keeps it, and `resume.log` says so. Two
+tests put a launcher in a real job object with `KILL_ON_JOB_CLOSE` and close it: with `BREAKAWAY_OK` the fake gateway is
+outside the job and still runs, without it the gateway is inside and the log says so. They run when the test's own job
+lets children go, as this tool's shell does; a CI runner's may not, and then the first one is skipped.
+
+With no gateway running, `deploy.ps1 -Check` now says why: when Windows started, the last error log's lines counted by
+the words they start with (never a line: a log may hold an address, a host or a code), the last resume and the build to
+resume. A build is named `-dirty-<time>` only when `remote/`'s code, not its Markdown, differs from the commit: before,
+any tracked change in the repository renamed it, and on a Public network each new name needs a new firewall rule.
+
+Each change went red first, and mutations each turned a test red: no network wait, the arguments in the log, no
+duplicate check; no breakaway, no fallback, the stay not reported; a raw log line, a wider word pattern; Markdown
+counted, the whole repository counted, code ignored, `describe --dirty`.
+
+The name test first ran under the pre-commit hook, which gives git GIT_DIR and GIT_INDEX_FILE for the repository being
+committed to: its `git init`, `add` and `commit` in a temporary folder acted on that repository instead, committed a
+fake tree on this branch and set `core.bare = true` in the shared config from 03:02:53Z to 03:04:12Z, when it was set
+back. The branch was put back by `update-ref` and its index rebuilt. The tests now drop every GIT_* variable; run with
+them pointing at a throwaway repository, the test passes and leaves it unchanged.
+
+Not done: the live gateway is still stopped (the restart from this tool was refused, "Production Deploy"), no Startup
+shortcut is installed, and no firewall rule was changed. Still to verify: the restart, the tablet, one real logon
+through the shortcut.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
