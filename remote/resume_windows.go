@@ -45,7 +45,7 @@ type deployState struct {
 	Current   string `json:"current"`
 }
 
-const createNoWindow = 0x08000000
+const createNoWindow, createBreakawayFromJob = 0x08000000, 0x01000000
 
 var givesIP = regexp.MustCompile(`(^|\s)--?ip[\s=]`)
 
@@ -82,9 +82,13 @@ func (r *resumer) resume() error {
 	}
 	var last error
 	for try := 1; try <= r.tries; try++ {
-		pid, err := r.start(st)
+		pid, stayed, err := r.start(st)
 		if err == nil {
-			r.log(fmt.Sprintf("%s runs, PID %d", name, pid))
+			where := ""
+			if stayed {
+				where = ", in the launcher's job, which may end it when it closes"
+			}
+			r.log(fmt.Sprintf("%s runs, PID %d%s", name, pid, where))
 			return nil
 		}
 		last = err
@@ -110,36 +114,47 @@ func (r *resumer) awaitNetwork() error {
 }
 
 // start runs the build with its command line as deploy.ps1 kept it, read by no shell, logging where deploy.ps1 does.
-// A build still running after settle has started; the gateway outlives this process.
-func (r *resumer) start(st deployState) (int, error) {
+// A build still running after settle has started; the gateway outlives this process. It leaves the job this process
+// runs in, which may end its processes when it closes, as a shell's may; a job that lets no child go keeps it, and
+// stayed says so.
+func (r *resumer) start(st deployState) (pid int, stayed bool, err error) {
 	stamp := time.Now().Format("0102-150405.000")
 	stamp = strings.Replace(stamp, ".", "-", 1)
 	out, err := os.Create(filepath.Join(r.folder, "out-"+stamp+".log"))
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer out.Close()
 	errLog, err := os.Create(filepath.Join(r.folder, "err-"+stamp+".log"))
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer errLog.Close()
 	line := `"` + st.Current + `"`
 	if st.Arguments != "" {
 		line += " " + st.Arguments
 	}
-	cmd := &exec.Cmd{
-		Path:        st.Current,
-		Dir:         r.folder,
-		Env:         r.env,
-		Stdout:      out,
-		Stderr:      errLog,
-		SysProcAttr: &syscall.SysProcAttr{CmdLine: line, CreationFlags: createNoWindow},
+	command := func(flags uint32) *exec.Cmd {
+		return &exec.Cmd{
+			Path:        st.Current,
+			Dir:         r.folder,
+			Env:         r.env,
+			Stdout:      out,
+			Stderr:      errLog,
+			SysProcAttr: &syscall.SysProcAttr{CmdLine: line, CreationFlags: flags},
+		}
 	}
-	if err := cmd.Start(); err != nil {
-		return 0, err
+	cmd := command(createNoWindow | createBreakawayFromJob)
+	err = cmd.Start()
+	if errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+		stayed = true
+		cmd = command(createNoWindow)
+		err = cmd.Start()
 	}
-	pid := cmd.Process.Pid
+	if err != nil {
+		return 0, false, err
+	}
+	pid = cmd.Process.Pid
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	select {
@@ -147,9 +162,9 @@ func (r *resumer) start(st deployState) (int, error) {
 		if err == nil {
 			err = errors.New("exit status 0")
 		}
-		return 0, fmt.Errorf("it exited at once: %w", err)
+		return 0, false, fmt.Errorf("it exited at once: %w", err)
 	case <-time.After(r.settle):
-		return pid, nil
+		return pid, stayed, nil
 	}
 }
 

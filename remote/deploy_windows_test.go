@@ -35,6 +35,10 @@ func TestMain(m *testing.M) {
 		fakeGateway()
 		return
 	}
+	if folder := os.Getenv(fakeLauncherEnv); folder != "" {
+		fakeLauncher(folder)
+		return
+	}
 	os.Exit(m.Run())
 }
 

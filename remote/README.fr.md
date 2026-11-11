@@ -63,6 +63,7 @@ charger son nouveau code.
 Après un redémarrage de Windows, `delta-remote -resume <dossier>` démarre le dernier build déployé dans ce dossier, avec
 les arguments que garde `deploy.json`, dès que le réseau donne une adresse locale (il attend jusqu'à 3 minutes). Il ne
 démarre rien quand une passerelle tourne déjà depuis ce dossier, et note ce qu'il a fait, jamais les arguments, dans
-`<dossier>\resume.log`. Un raccourci dans le dossier Démarrage (`shell:startup`) le lance à chaque ouverture de session,
+`<dossier>\resume.log`. La passerelle quitte le job dans lequel tourne `-resume`, qui peut terminer ses processus à sa
+fermeture ; si ce job ne laisse partir aucun enfant, elle y reste, et `resume.log` le dit. Un raccourci dans le dossier Démarrage (`shell:startup`) le lance à chaque ouverture de session,
 sans shell : cible `<dossier>\<un build de cette version>.exe`, arguments `-resume "<dossier>"`, exécution réduite. Un
 dossier déployé avant que `deploy.json` nomme son build ne reprend rien jusqu'à son prochain déploiement.
