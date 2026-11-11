@@ -97,6 +97,9 @@ func fakeWhisper() {
 	}
 	heard := 0
 	http.HandleFunc(prefix+"/inference", func(w http.ResponseWriter, r *http.Request) {
+		if name == "deaf" { // stops at its first request, the warm-up
+			os.Exit(2)
+		}
 		if heard++; name == "dies" && heard > 1 {
 			os.Exit(2)
 		}
@@ -227,6 +230,84 @@ func TestTheEarsRoutesAreUnguessable(t *testing.T) {
 	}
 	if paths[0] == paths[1] {
 		t.Fatalf("two starts drew the same path %q", paths[0])
+	}
+}
+
+// The ears' path is a secret, and the ears' errors travel: the failed servers and the reason for falling back go to
+// the journal and to stderr, and a transcription that failed goes back to the device that posted to /hear. None names
+// the path; each keeps the server, the address and the cause, for the diagnosis.
+func TestTheEarsPathStaysOutOfTheirMessages(t *testing.T) {
+	t.Setenv("BRAIN_FAKE_WHISPER", "1")
+	deaf, dies, cpu := fakeWhisperExe(t, "deaf"), fakeWhisperExe(t, "dies"), fakeWhisperExe(t, "cpu")
+	start := func(servers ...string) (e *ears, addr, path string) {
+		port := freePort()
+		e, err := startEars(servers, "model.bin", "fr", port, 1, "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(e.close)
+		addr = "127.0.0.1:" + strconv.Itoa(port)
+		return e, addr, strings.TrimPrefix(e.url, "http://"+addr)
+	}
+
+	// deaf stops at its warm-up, then dies hears it and stops at the first sentence, which cpu hears.
+	e, addr, path := start(deaf, dies, cpu)
+	readyLine, readyNote := earsReady(e)
+	var why string
+	e.fell = func(_, w string) { why = w }
+	if text, err := e.hear(make([]float32, 1600)); text != "cpu" || err != nil {
+		t.Fatalf("%q %v", text, err)
+	}
+	fellLine, fellNote := earsFell(cpu, why)
+
+	// A server alone that dies: the sentence fails, and /hear says why.
+	lone, loneAddr, lonePath := start(dies)
+	r := &remote{secret: "s3cret", route: func(utterance) (int, string) { return 1, "channel" }}
+	r.hearWith(lone.hearIn)
+	req, _ := http.NewRequest(http.MethodPost, remoteServer(t, r).URL+"/hear", strings.NewReader(string(wavBytes(t, earsRate, 1))))
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, "s3cret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("/hear with ears that died: %d", resp.StatusCode)
+	}
+
+	for _, c := range []struct{ what, msg, path string }{
+		{"the failed servers (e.failed)", strings.Join(e.failed, "; "), path},
+		{"the journal's ears note at start", fmt.Sprint(readyNote), path},
+		{"stderr's ready line", readyLine, path},
+		{"the journal's ears note on falling back", fmt.Sprint(fellNote), path},
+		{"stderr's falling-back line", fellLine, path},
+		{"/hear's 502", string(body), lonePath},
+	} {
+		if strings.Contains(c.msg, c.path[1:]) {
+			t.Errorf("%s names the ears' path: %s", c.what, strings.ReplaceAll(c.msg, c.path[1:], "<path>"))
+		}
+	}
+	for _, c := range []struct{ what, msg string }{
+		{"the failed servers", strings.Join(e.failed, "; ")},
+		{"the falling-back line", fellLine},
+		{"the ready line", readyLine},
+		{"/hear's 502", string(body)},
+	} {
+		want := addr
+		if c.what == "/hear's 502" {
+			want = loneAddr
+		}
+		if !strings.Contains(c.msg, want) {
+			t.Errorf("%s lost the address %s", c.what, want)
+		}
+	}
+	if !strings.Contains(strings.Join(e.failed, "; "), "deaf.exe") || !strings.Contains(fellLine, "dies.exe died") ||
+		!strings.Contains(readyLine, "dies.exe") || !strings.Contains(string(body), "transcription:") {
+		t.Errorf("a message lost its server or cause: failed %q; fell %q; ready %q; 502 %q",
+			strings.ReplaceAll(strings.Join(e.failed, "; "), path[1:], "<path>"), strings.ReplaceAll(fellLine, path[1:], "<path>"),
+			strings.ReplaceAll(readyLine, path[1:], "<path>"), strings.ReplaceAll(string(body), lonePath[1:], "<path>"))
 	}
 }
 

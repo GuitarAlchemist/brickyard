@@ -153,7 +153,7 @@ func main() {
 			fail(err)
 		}
 		defer e.close()
-		fmt.Printf("ears ready on %s in %d ms\n", e.url, time.Since(start).Milliseconds())
+		fmt.Printf("ears ready on %s in %d ms\n", e.addr, time.Since(start).Milliseconds())
 	}
 
 	s := dialScene(*sceneAddr)

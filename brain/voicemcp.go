@@ -375,15 +375,13 @@ func runMCP(c mcpConfig) {
 		}
 		notHearing = nil
 		hearing.Unlock()
-		logf("ears ready on %s with %s", e.url, e.server)
-		ready := map[string]any{"server": e.server}
-		if len(e.failed) > 0 { // the journal tells which server hears, and why the first did not
-			ready["failed"] = strings.Join(e.failed, "; ")
-		}
+		line, ready := earsReady(e)
+		logf("%s", line)
 		m.note("ears", ready)
 		e.fell = func(server, why string) {
-			logf("ears: %s; %s hears now", why, server)
-			m.note("ears", map[string]any{"server": server, "failed": why})
+			line, note := earsFell(server, why)
+			logf("%s", line)
+			m.note("ears", note)
 		}
 		rm.hearWith(e.hearIn)
 		heard := make(chan utterance)
@@ -533,6 +531,21 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	s.launched = time.Now()
 	s.launch()
 	return s
+}
+
+// earsReady is stderr's line and the journal's ears note once Delta hears: which server hears, and why the ones
+// before it did not.
+func earsReady(e *ears) (line string, note map[string]any) {
+	note = map[string]any{"server": e.server}
+	if len(e.failed) > 0 {
+		note["failed"] = strings.Join(e.failed, "; ")
+	}
+	return fmt.Sprintf("ears ready on %s with %s", e.addr, e.server), note
+}
+
+// earsFell is stderr's line and the journal's ears note when another server takes over.
+func earsFell(server, why string) (line string, note map[string]any) {
+	return fmt.Sprintf("ears: %s; %s hears now", why, server), map[string]any{"server": server, "failed": why}
 }
 
 // freePort is a loopback port nothing listens on, so that whisper-server never collides with another.

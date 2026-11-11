@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"slices"
@@ -35,7 +36,8 @@ const earsPatience = 30 * time.Second
 // ggml-large-v3-turbo-q5_0), used as they are. Given several servers, such as a GPU build and then the CPU build, the
 // ears run the first that starts and hears, and the next when the one running dies.
 type ears struct {
-	url       string
+	url       string // where it transcribes, under its path (earsPath): never written to a log, the journal or an answer
+	addr      string // its loopback address, which the messages give instead
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	dead      chan struct{} // closed once cmd has exited
@@ -75,7 +77,7 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 	}
 	path := earsPath()
 	args = append(args, "--request-path", path)
-	e := &ears{url: "http://" + addr + path, patience: earsPatience}
+	e := &ears{url: "http://" + addr + path, addr: addr, patience: earsPatience}
 	e.run = func(server string) error { return e.start(server, args, addr) }
 	for i, server := range servers {
 		if err := e.run(server); err != nil {
@@ -256,7 +258,7 @@ func (e *ears) post(samples []float32, lang string) (heardOut, error) {
 	client := http.Client{Timeout: e.patience}
 	resp, err := client.Post(e.url+"/inference", form.FormDataContentType(), &body)
 	if err != nil {
-		return out, err
+		return out, e.hidePath(err)
 	}
 	defer resp.Body.Close()
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -266,6 +268,17 @@ func (e *ears) post(samples []float32, lang string) (heardOut, error) {
 		return out, fmt.Errorf("ears: %s", out.Error)
 	}
 	return out, nil
+}
+
+// hidePath keeps the ears' path out of a request's error, which names the whole URL: the error goes to the journal, to
+// stderr and to /hear's answer. The address stays, and the cause, for the diagnosis; *url.Error stays too, so that a
+// timeout is still told from a dead server.
+func (e *ears) hidePath(err error) error {
+	var u *url.Error
+	if errors.As(err, &u) && e.addr != "" {
+		u.URL = "http://" + e.addr + "/…/inference"
+	}
+	return err
 }
 
 // likeliest is the code among codes that Whisper found likeliest, the first when it gave no probabilities.
