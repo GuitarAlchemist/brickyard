@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Delta</title>
+<link rel="stylesheet" href="page.css">
+</head>
+<body>
+<header>
+  <video id="scene" autoplay playsinline muted></video>
+  <p id="state">Connexion…</p>
+</header>
+<main id="log" aria-live="polite"></main>
+<footer>
+  <button id="go" hidden>Se reconnecter</button>
+  <button id="sound" hidden>Activer le son</button>
+  <div id="controls" hidden>
+    <button id="talk">Maintenir pour parler</button>
+    <button id="call">Appeler</button>
+  </div>
+  <div id="guests" hidden>
+    <button id="invite">Inviter quelqu’un</button>
+    <button id="end" hidden>Couper les invités</button>
+  </div>
+</footer>
+<script src="talk.js"></script>
+<script src="page.js"></script>
+</body>
+</html>

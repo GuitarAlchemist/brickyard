@@ -21,7 +21,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # The same script a contributor runs before pushing: the plugin, the brain, the scene.
+      # The same script a contributor runs before pushing: the plugin, the brain, the remote, the scene.
       - name: check.ps1
         shell: powershell
         run: .\check.ps1

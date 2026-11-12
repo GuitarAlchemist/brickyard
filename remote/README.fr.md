@@ -1,0 +1,70 @@
+# delta-remote
+
+[English](README.md)
+
+Montre la fenêtre de Delta sur un téléphone ou un autre ordinateur, en direct, par WebRTC, et permet de parler avec
+Delta depuis cet appareil. Un appareil à la fois.
+
+```powershell
+cd remote; go build; .\delta-remote.exe
+```
+
+Il affiche un lien, `https://<adresse>:8810/#code=<code>`, et le confie à la fenêtre de Delta pour sa carte QR
+(l'icône du téléphone). Scanner le QR appaire l'appareil en une seule étape ; il n'a ensuite plus besoin de code
+pendant 90 jours. Le code est renouvelé toutes les 100 s, et dès qu'un appareil s'en sert, donc la carte contient
+toujours un QR qui marche tant que la passerelle tourne ; `%LOCALAPPDATA%\delta-remote\link.txt` contient le même
+lien. `-forget-devices` désappaire tous les appareils.
+
+- **Parler :** la page montre la conversation en bulles, chaque réponse sous la phrase à laquelle elle répond. Il y a
+  deux façons de parler :
+  - **Maintenir** le bouton et parler ; ce que le micro a entendu part au relâchement.
+  - **Appeler** lance un appel. Le micro reste ouvert, et la page découpe ce qu'elle entend en phrases d'après le
+    volume, en envoyant chacune quand tu t'arrêtes de parler. Elle n'écoute pas pendant que Delta parle, donc elle ne
+    l'entend jamais. L'écran reste allumé jusqu'à **Raccrocher**.
+
+  Chaque phrase part vers le cerveau de Delta en WAV 16 kHz (30 s au plus), qui la transcrit et la prend comme dite à
+  Delta. Un carillon sonne dans la pièce. L'appareil joue les réponses à ses propres phrases. Il montre les réponses
+  aux phrases dites à l'ordinateur sans le son, avec un ▶ pour en écouter une ici, et ne joue Delta parlant de
+  lui-même que pendant un appel. Les `/hear`, `/said` et `/link` du cerveau exigent le secret qu'il écrit à chaque
+  démarrage dans `%LOCALAPPDATA%\delta\remote.secret` ; la passerelle le relit à chaque requête. La logique de la page
+  qui se passe de navigateur est testée par `node --test` (`talk.test.js`).
+
+- **Ce qu'il montre :** l'unique fenêtre visible intitulée `Brickyard` de `scene.exe`, par le `gfxcapture` de ffmpeg 8
+  (la capture graphique de Windows, donc la fenêtre se voit même recouverte). Aucune fenêtre de ce genre, ou plusieurs :
+  rien n'est montré. ffmpeg ne tourne que pendant qu'un appareil est connecté.
+- **Où il écoute :** une seule adresse (par défaut, l'adresse de ce PC sur le réseau local), en TCP 8810 et UDP 8811.
+  Windows ne laisse entrer un appareil que sur un réseau classé Privé, ou avec une règle pour ces deux ports.
+- **Son certificat** est le sien par défaut : le navigateur avertit une fois, et pendant que tu acceptes cet
+  avertissement, un appareil du même réseau pourrait se faire passer pour la passerelle. Pour l'exclure, donne un
+  certificat auquel l'appareil fait confiance, par exemple celui que `tailscale cert` crée pour le nom de cette machine
+  sur le tailnet : `-ip <adresse tailnet> -cert <crt> -key <clé> -name <nom>`.
+- **Ce qu'il refuse :** une requête qui nomme un autre hôte (rebinding DNS), un POST d'une autre origine, une offre d'un
+  appareil non appairé, un second appareil. La page n'exécute que son propre script.
+
+Il faut ffmpeg 8 ou plus récent, avec `gfxcapture` et `libx264`, dans le PATH (ou `-ffmpeg <chemin>`), et un cerveau
+qui a `/hear`, `/said` et `/link` pour la voix et le QR.
+
+Pour mettre la passerelle de ce checkout à la place de celle qui tourne, avec les mêmes arguments :
+
+```powershell
+.\remote\deploy.ps1 -Dir <le dossier de la passerelle> -Check   # dit ce que ferait un déploiement, ne change rien
+.\remote\deploy.ps1 -Dir <le dossier de la passerelle>          # compile et remplace ; -Back remet la précédente
+```
+
+Il ne remplace rien tant qu'un appareil, un invité ou la fenêtre de Delta est connecté, ni quand la passerelle tourne
+déjà ce build : un commit donne toujours les mêmes octets. Le build s'appelle `delta-remote-<git describe>.exe`, suivi
+de `-dirty-<heure>` seulement quand le code de `remote/`, pas son Markdown, diffère du commit ; `-Check` donne ce nom. Un nouveau build qui n'écoute pas dans les 15 s est arrêté et
+l'ancien redémarre. `<dossier>\deploy.json` garde les arguments, donc une passerelle morte redémarre avec eux. `-Check`
+dit aussi si le job dans lequel démarrerait une nouvelle passerelle la termine quand ce job se ferme, et, quand aucune ne
+tourne, pourquoi : quand Windows a démarré, les lignes du dernier journal comptées par sorte (jamais une ligne elle-même),
+la dernière reprise et le build à reprendre. Lancez-le
+dans un nouveau PowerShell après avoir récupéré un nouveau `deploy.ps1` : une session qui a déjà lancé l'ancien refuse de
+charger son nouveau code.
+
+Après un redémarrage de Windows, `delta-remote -resume <dossier>` démarre le dernier build déployé dans ce dossier, avec
+les arguments que garde `deploy.json`, dès que le réseau donne une adresse locale (il attend jusqu'à 3 minutes). Il ne
+démarre rien quand une passerelle tourne déjà depuis ce dossier, et note ce qu'il a fait, jamais les arguments, dans
+`<dossier>\resume.log`. La passerelle quitte le job dans lequel tourne `-resume`, qui peut terminer ses processus à sa
+fermeture ; si ce job ne laisse partir aucun enfant, elle y reste, et `resume.log` le dit. Un raccourci dans le dossier Démarrage (`shell:startup`) le lance à chaque ouverture de session,
+sans shell : cible `<dossier>\<un build de cette version>.exe`, arguments `-resume "<dossier>"`, exécution réduite. Un
+dossier déployé avant que `deploy.json` nomme son build ne reprend rien jusqu'à son prochain déploiement.

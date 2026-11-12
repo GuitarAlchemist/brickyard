@@ -598,8 +598,345 @@ and the dots are one small texture drawn twelve times, tinted lit or dim each fr
 someone else, Brutal or Gaïa among them, still ends the conversation at once, and the ring with it. The cost is the
 one the old rule avoided: talk that goes on and on goes on to Claude, now in sight.
 
+## The phone, as a conversation (2026-10-23)
+
+IX's gateway page becomes a conversation with Delta, and Delta's window always holds a QR that pairs.
+
+- The page shows bubbles, each answer under the sentence it answers, by `utterance_id`. The acknowledgement shows
+  small until the answer replaces it. Appeler opens a call: an energy VAD, half-duplex, so the phone hears nothing
+  while Delta plays, and the screen stays awake. Hold-to-talk stays; releasing it before the microphone opens now
+  closes the microphone.
+- Where an answer plays (`Router` in `remote/talk.js`): on the phone when it answers the phone's own `/hear`; silent,
+  behind a ▶ button, when it answers the computer's; Delta speaking on its own plays on the phone only during a call.
+  An answer that arrives before its `/hear` reply waits for it, 2 s at most. The later sentences of an answer follow
+  the first by `say_id`, since brain 0.5.0 names only the first.
+- The gateway sends `X-Delta-Plays: own` on `/said`, and brain 0.6.0 then leaves the phone's answers out at the
+  computer, where they echoed. delta-live confirmed the name and the exact value `own`.
+- The QR: a new code every 100 s, inside the window's 120 s, and at once after a device pairs. No empty link reaches
+  `/link`, which refuses it. The card opens only on the user's click. `link.txt` and the line the gateway prints kept
+  the code of the start, which the first renewal made useless: `link.txt` now follows the QR, and the line says 100 s.
+- The capture scales the window to 1280×720, keeping its aspect: a window maximized after connect showed one corner.
+- The tests' WebRTC gathers loopback candidates only, without mDNS, so a test build no longer has Windows ask for a
+  firewall rule (`TestTheTestsWebRTCStaysOnLoopback`).
+
+Measured: `go vet` and `go test` pass in `remote/`, and `node --test` passes 12 tests. Each new Go test went red
+first; mutation witnesses: four for `talk.js`, two for the QR's renewal, one for `link.txt`. IX's live check, with a
+fake brain, a fake microphone and headless Chrome at phone size, passed the eleven expectations written before the
+run. IX deployed this gateway from the working tree on 2026-10-23 at 14:41, on the author's go, for a demo of the QR.
+
+## The phone after a brain restart (2026-10-23)
+
+The brain was away from 14:58 to 15:03, and afterwards the gateway had no `/said` stream to it: the phone's page no
+longer heard Delta, and the brain, with no listener sending `X-Delta-Plays: own`, played the phone's answers at the
+computer. While the brain was away the gateway answered `/said` with 503, and an EventSource gives up for good on an
+error status. Measured with headless Chrome against a stub, over 5 s: after a 503 it asked `/said` once; after a 200
+event stream holding `retry: 300` and then ending, 15 times. The gateway now answers `/said` that way, with
+`retry: 2000`, while the brain cannot be reached or refuses it, so the page asks again until the brain is back. The
+test went red first, with 503 for a stopped brain and 502 for one that refuses the secret.
+
+## The phone's sound, and its first sentence (2026-10-23)
+
+At 17:57 the user spoke from the phone and heard nothing: « Je ne t'entends pas » (utterance 71). Says 31 to 37 went
+`on_device`, so the computer kept quiet, and the phone played none of them. The page made its sound when a finger
+touched « Maintenir pour parler », but a touch that starts is not one of HTML's activation-triggering events, only a
+touch that ends is: the sound stayed suspended, and so did the microphone's worklet, which records nothing then. The
+gateway still told the brain that the page played its answers. Measured with headless Chrome under the real autoplay
+rule (`--autoplay-policy=document-user-activation-required`), a finger held 2.6 s on the button: the committed page
+stayed suspended during and after the touch, played nothing, and sent `/hear` a WAV of 44 bytes, 0.00 s; Whisper writes
+a sentence for such silence, as « Söyut, Elda. » and « RT, Ximantong. », the utterances 66 and 69 Claude answered.
+Now:
+
+- each touch that ends, or a key, starts the sound if it does not run, and the page asks for that touch, with
+  « Activer le son », as soon as it is connected;
+- a recording under 0.3 s of sound is not sent: the page says the sound is now on, and to hold again;
+- the page says it plays its answers, `/said?plays=own`, only while its sound runs, and the gateway sends the brain
+  `X-Delta-Plays: own` only then, as delta-live asked: until then the computer says them. The page opens its stream
+  again when that changes, one stream per page, where « Se reconnecter » opened a second;
+- the state line keeps its news: the frame counter wrote over it every second.
+
+The same Chrome check, two touches: before any, `/said` without the header; the first touch sends nothing and leaves
+the sound running and the stream at `plays=own`; the second records 2.61 s, and its answer plays. The header's Go test
+went red first. IX's live check (`--autoplay-policy=no-user-gesture-required`) passes its eleven expectations again.
+
+## The page on a tablet (2026-10-23)
+
+The user paired a tablet, and the page showed Delta's window small: 28 % of the height at most, as on a phone. Where
+both sides are at least 600 px, a tablet or a computer, Delta's window now takes the screen: in landscape the
+conversation is a column beside it, in portrait it goes under it, at 18 px. A touch on the window hides the
+conversation, or brings it back, and on a tablet also puts the page full screen, without the browser's bars. Measured
+in headless Chrome, with the window's 1280×720 test card: at 1280×800 the window is 880×760 and the column 384 px; at
+800×1280 the window is 784×441; at 390×844, a phone, it is 358×201, as before.
+
+## The tablet's picture after Delta's window changed (2026-10-23)
+
+Around 19:41 the tablet connected and showed « connecté à Delta » with no picture (utterances 5 and 7). Two windows titled
+« Brickyard » were open, Delta's and a scene demo IX had opened to show a new look, and the gateway's log says twice
+`2 windows "Brickyard" of scene.exe are open; the capture shows one or none`. The capture looked for the window once,
+when a device connected, and never again: the demo's window closing did not bring the picture back, nor would a new
+window from a brain started again, as each reconnection of `/mcp` does. While a device is connected the gateway now
+looks for the window every 2 s: it starts the capture once there is one window, starts it again on a new window, and
+again when ffmpeg ends; a second window beside the one it shows leaves it as it is, and the error is written once,
+not every 2 s. Each ffmpeg numbers its RTP packets from a random start, so the packets of a capture started again
+carry on from the last ones sent: a browser drops packets that seem older than the ones it has seen. The three tests,
+on a fake window and a fake ffmpeg, went red first. Still to see live: the picture coming back on the tablet after a
+`/mcp` reconnection, and how long the browser takes over the jump to the new capture.
+
+## Guests who watch from outside (2026-10-23)
+
+The user asked to try the version that goes through the tunnel: someone who is not on this network watches Delta's
+window, and does nothing else. With `-guest-host delta.guitaralchemist.com`, the gateway opens a second entry on
+127.0.0.1:8812. The tunnel « delta » (not ga-demos) carries it to that host, run by `cloudflared --config
+%LOCALAPPDATA%\delta-remote\tunnel.yml tunnel run`. The device's entry on 8810 is unchanged.
+
+The guests' entry serves the guest's page, `/join`, `/ice` and `/offer`, and nothing else: no `/hear`, no `/said`, no
+pairing.
+
+- **Inviting.** A paired device's « Inviter quelqu’un » gives a link with its code in the #fragment. The code works
+  once, within an hour, and is traded for a cookie that lasts two hours. « Couper les invités » voids every invitation
+  and cookie and closes their connections.
+- **Two at a time.** At most two guests watch beside the device. A third gets 409.
+- **Through the relay only.** A guest's connection goes through Cloudflare's TURN relay alone (`ICETransportPolicyRelay`,
+  UDP 3478 on the gateway's side), so the guest never sees this network's address. The gateway asks Cloudflare for
+  credentials that last two hours, with the key in `%LOCALAPPDATA%\delta-remote\turn.json`, read for each guest and
+  never written. The browser gets every relay address except port 53, which browsers block.
+- **The badge.** The brain is told how many guests watch at each change and every 30 s, for the badge in Delta's
+  window (delta-live's `/guests`).
+- **Kept in memory.** Invitations and cookies are kept only as SHA-256, in memory: restarting the gateway ends them
+  all.
+
+Nine tests, on loopback WebRTC and a fake brain, written after the code, not red first:
+
+- the guests' entry has nothing else;
+- an invitation works once, and an unused one dies after an hour;
+- only a paired device invites;
+- each cookie opens its own entry only;
+- each entry answers its own host only;
+- the device and two guests get the video, the third waits, and ending the guests leaves the device watching;
+- the brain hears 1, 2, then 0;
+- the relay's addresses.
+
+Still to see live:
+
+- a phone on 4G watching through the tunnel and the relay;
+- the badge in Delta's window with the real brain;
+- the delay the relay adds.
+
+## The guest's page in English and French (2026-10-24)
+
+The user asked that the page a guest opens be in English as well as French. It speaks the first of the browser's
+languages it knows, French or English, and English otherwise. Both languages carry every message on the page:
+connecting, watching, the reconnect button, and each refusal (invitation used, no valid invitation, invitation ended,
+two guests already, relay down). guest.test.js checks it with `node --test`: it went red first on the French-only page
+(`document is not defined`), as the page had no logic apart from the browser. In headless Chrome on a static copy,
+`--lang=en-US` and `de-DE` show « Refused: 404 » and « Reconnect » with `lang="en"`, and `fr-CA` shows « Refusé : 404 »
+and « Se reconnecter » with `lang="fr"`. The 404 is the static server's, which has no `/ice`. Still to see live: a
+guest's phone in English, through the tunnel.
+
+## A guest's video through the relay, and invitations that last their hour (2026-10-24)
+
+The first real guest, a friend in France, never got the video: at 13:36, then at 13:45 on a new link, the page went to
+« Connexion perdue ». At 13:36, opening the spent link again then showed « déjà servi ». The gateway logged nothing
+about guests, so it now writes each step down, without codes or addresses:
+
+- the invitation;
+- its trade;
+- the relay's addresses;
+- the candidate types each side offers;
+- each ICE state and, once connected, the types of the pair.
+
+`PION_LOG_WARN=all` and `PION_LOG_INFO=ice,turnc` add pion's own lines.
+
+**The cause.** An invitation minted from this PC and opened in headless Chrome through the tunnel failed the same way
+at 13:55. Pion's TURN client sent Cloudflare a ChannelBind toward one of the browser's relay candidates, a Cloudflare
+relay address too, and Cloudflare answered 400. Its FAQ says it refuses private and BYOIP ranges. Pion then closed the
+whole allocation, and every pair with it, including the ones that would have worked. delta-live read the same lines.
+
+**The fix.** The gateway now leaves the browser's relay candidates out of a guest's offer. Its own relay reaches the
+browser at its public address, the srflx, or the one its checks come from. Same test at 14:00: the browser offered
+1 host, 1 srflx and 10 relay candidates; the gateway kept the host and the srflx, answered with 4 relay, and got
+« ICE connected, relay here to srflx there », with the capture started for the guest.
+
+**The user's other changes:**
+- **Invitations last their hour.** An invitation now serves for its whole hour, as often as it is opened: in another
+  browser, after a reload, or by whoever the link is passed on to. It stays within two guests at a time, and
+  « Couper les invités » still voids everything.
+- **Delta's window can invite.** It does so through its own entry on 127.0.0.1:8813, which needs the brain's secret,
+  `X-Delta-Hook` and no Origin, and which the tunnel does not reach. It answers 409 while a guest watches, because the
+  guest would see the QR card.
+
+The tests (hour-long invitation, the window's entry and its 409, candidate counts, relay left out) were written with
+the code, not red first.
+
+Still to see live:
+- the friend in France watching;
+- the badge with the real brain;
+- the delay the relay adds.
+
+## Guests hear Delta, and the microphone once the window lets them (2026-10-24)
+
+Eric, the first guest, watched from France from 14:21. The user then asked, by voice, that he hear them: Delta's voice
+by default, and the user's microphone only after a switch in Delta's window, off by default and at each start. They
+chose the headset's microphone (Jabra EVOLVE 20), so that the room's speakers and Delta's own voice do not echo into it.
+
+The gateway changes:
+
+- **Delta's voice.** `/said` on the guests' entry streams the sound of each sentence Delta says, and nothing else:
+  not its text, and not what anyone said to it. The brain is asked as by a page whose sound does not run, so the
+  computer still says everything aloud. The guest's page plays each sentence after the one before it.
+- **The microphone.** With `-mic <DirectShow name>`, ffmpeg sends that microphone as Opus over RTP on loopback, into a
+  track that only guests' connections carry. Its capture runs only while a guest watches and the switch is on, and
+  starts again within 2 s if ffmpeg ends. The RTP is renumbered across captures, with a 20 ms gap.
+- **The switch.** It is `POST /guests/mic {"on": true|false}` on the window's entry, 127.0.0.1:8813, with the brain's
+  secret, and answers 204, or 404 without `-mic`. The brain hears it in `/guests`, as `{"watching": n, "mic": on}`, at
+  each change, at the gateway's start (off), and every 30 s while a guest watches.
+- **The guest's page.** It asks for the picture and the sound, shows « Activer le son » / "Turn sound on", and a touch
+  unmutes the picture's sound and starts Delta's voice: browsers play sound only after a touch.
+
+Five tests, written with the code, not red first: the guest hears only Delta's voice and the brain is not told the
+page plays; the microphone runs only with a guest and the switch; only a guest's answer carries the track; the
+capture's arguments; the 20 ms gap. ffmpeg 8 opened the Jabra microphone with these arguments for 2 s.
+
+Guests still cannot speak: a two-way call through the paired phone comes next. The user chose that during the call
+the phone sends nothing to Delta.
+
+Still to see live:
+
+- Eric hearing Delta, then the user once the switch is on;
+- the delay;
+- whether the microphone shared with Delta's own listening keeps both working.
+
+## The gateway's deploy (2026-11-04)
+
+The user asked for one maintained tool instead of a new restart script each time: `remote/deploy.ps1`. It builds this
+checkout with a plain `go build`, which gives the same bytes for a commit (HEAD 0e30ca4 built to SHA-256 `3f2654f2…`,
+the running gateway's own), and replaces the gateway started from `-Dir` with the same arguments, unless someone is
+connected to one of its entries or it already runs this build. `-Check` says what a deploy would do; `-Back` puts the
+last replaced build back; a build that does not listen within 15 s is stopped and the old one starts again;
+`deploy.json` keeps the arguments, so a gateway that died starts again with them.
+
+Five tests, `deploy_windows_test.go`, run the script against copies of the test binary that only listen on loopback,
+in their own folder: the same arguments after a deploy and after `-Back` (a quoted microphone name included), nothing
+replaced while a connection is open, the old build back after one that exits at once, a dead gateway started again,
+and `-Check` changing nothing. 46 s, in parallel; Windows PowerShell's start and its CIM and TCP lookups take most of
+it. Two traps they caught under Windows PowerShell 5.1: a function's one CIM object comes back unrolled, its `.Count`
+then `$null`; and `Get-FileHash` is missing when it is started from PowerShell 7, whose module path it inherits.
+
+`-Check` on the live folder, 2026-11-04 at about 14:12 UTC: 0e30ca4 runs on 8810, 8812, 8813 and 8814, nobody connected,
+"nothing: it already runs this build". No restart was made.
+
+A sixth test runs it as a shell or a tool does, reading its output through a pipe. With `Start-Process`'s own
+redirection the pipe stayed open after the script ended, for a deploy (exit 0) and for a failed one put back (exit 1):
+the gateway inherited it. Making the script's three standard handles not inheritable did not help, so Windows
+PowerShell holds others on the pipe. Starting it through `cmd` by ShellExecute freed the pipe, but `cmd` read the
+path and the arguments: with a folder named `gate way & 100%X%`, where `X` names a variable set for the test only,
+the new build never started and neither did the old one put back, so no gateway ran. The gateway now starts by
+`CreateProcess`, compiled by `Add-Type`, with its command line as it was and the two log files as the only handles
+it inherits. Paths are taken literally, so that `[1]` in a folder's name is not read as a pattern either.
+
+Two more tests: that folder, with `[1]`, and arguments holding spaces, quotes, `&`, `%X%`, `^ | < >` reach the new
+build and the old one put back unchanged, through a pipe; and a gateway started through an unquoted path with a space,
+whose arguments cannot be told from its command line, is refused before anything is saved, stopped or replaced
+(without the refusal, the deploy exited 0 with the arguments cut). The eight tests pass in 27 s.
+
+Indigo's review then started a build Windows refuses (a text file): `CreateProcess` threw after the old gateway was
+stopped, the script ended there, and no gateway ran until `-Back`. A start that throws is now a start that failed, and
+takes the rollback: the old build runs again with its arguments, or the script says, exit 1, that neither could start
+and no gateway runs. A build from the checkout now goes into the folder only after the refusals, so a refused deploy
+leaves it as it was. Three tests, red first: a build that cannot start, neither build able to start, and a refused
+deploy from the checkout. Eleven tests, 29 s.
+
+Read, not tested: the return values of `SetHandleInformation` are not checked, and the process handle lives until
+the script ends. The gateway starts in the caller's job object: this tool's shells run in one, and so does the live
+gateway, which outlived the shell that started it on 2026-11-04 at 02:57; whether that job ends its processes when its
+host closes is not known.
+
+Still to verify: a real deploy of a new commit with the tablet paired, and the picture on the tablet.
+
+## The deploy's native handles, and its job (2026-11-05)
+
+`deploy.ps1` now checks `SetHandleInformation` and the attribute list's size probe, deletes the list only once it was
+initialized, and closes its handle on each gateway it starts (20fba29). None of these failures could be made to
+happen through the real calls, so the change rests on Indigo's review, not on a red test. That review found two more.
+A slow old build put back was reported as "no gateway runs" while it still ran: with a fake that waits 25 s before
+listening, red first, the script now leaves it running and gives its PID. And a PowerShell session that already ran an
+older `deploy.ps1` keeps its older `Add-Type` type, so the README says to run a new one in a new PowerShell; that clash
+is expected from Windows PowerShell 5.1, not observed. Twelve tests, 60 s.
+
+The job, read with `QueryInformationJobObject` on this tool's own one: `BREAKAWAY_OK` only, no `KILL_ON_JOB_CLOSE`; it
+holds most of the desktop's agent processes, not the live gateway, which is in another job whose limits are not read.
+A fake gateway started by `deploy.ps1` landed in this tool's job and still ran, listening, 80 s after both the
+`powershell.exe` that ran the script and the shell that started it had exited. Not known: whether a gateway outlives
+the closing of the job's own host (Claude Code or wmux), a logoff or a sleep.
+
+`-Check` now says it, so each deploy shows it instead of a separate probe: "a new gateway's job:" none, or the shell's,
+and whether that job ends it when it closes (`KILL_ON_JOB_CLOSE`); the jobs it is nested in are not read. From this
+tool's shell: "this shell's, which does not end it when the job closes". The `-Check` test went red on the missing line
+first. The pre-commit hook, now enabled in this clone, also runs gofmt, vet and the tests of `remote/` and the page's
+node tests; it did not cover `remote/` before.
+
+## The first deploy on the live gateway (2026-11-07)
+
+`deploy.ps1` replaced the live gateway for the first time, from this tool's shell, with 2ca5e6c. `-Check` first:
+0e30ca4, PID 62360, running since 2026-11-04 02:57Z on 8810, 8812, 8813 and 8814, nobody connected, the job "this
+shell's, which does not end it when the job closes", and "replace it with delta-remote-v0.6.0-21-g2ca5e6c.exe". The
+deploy took 50 s, 17:19:41Z to 17:20:31Z, exit 0: the new build, PID 148060, listens on the same four TCP ports and UDP
+8811, and is connected to the brain on 8807. 62360 no longer runs; its exe stays in the folder, and the new
+`deploy.json` keeps the arguments and that build for `-Back`. Its error log is empty, and its output gives the same four
+lines as 0e30ca4's: the owner's page, the guests' tunnel, the pairing link and `link.txt`.
+
+The gateway's own code has not changed since 0e30ca4, so this proves the deploy, not a new behaviour. Still to verify:
+the tablet coming back on its own after the swap, and whether a gateway started from this tool outlives Claude Code
+closing; if it does not, deploying again from the user's own PowerShell starts it with the kept arguments.
+
+## The gateway after Windows restarts (2026-11-11)
+
+Windows restarted on 2026-11-09 at 04:39Z; the gateway deployed two days before stopped, and nothing started it again.
+Its error log then held only "the QR: … connection refused", one per 100 s, for about 15.7 h: it outlived its brain.
+It was still writing at 04:38:52Z, about 35 h after the deploy, so the job it started in did not end it in that time.
+
+Read on this machine, not changed. The Wi-Fi is a Public network. Windows lets the gateway in through an allow rule per
+executable path, made at its first listen; each build deployed so far has one. A new build's name needs a new rule,
+which takes an administrator; restarting the same build needs none. The gateway's folder sits in another session's
+Temp scratchpad, which a cleanup of that folder would remove.
+
+`delta-remote -resume <folder>` now starts, at logon, the build `deploy.json` names as `current` (each deploy records
+it), with its command line as kept and no shell: it waits up to 3 min for a LAN address, since the gateway exits
+without one, starts nothing when one already runs from the folder, retries a build that exits at once, and writes each
+outcome, never the arguments, to `resume.log`. It starts the gateway with `CREATE_BREAKAWAY_FROM_JOB`, so a job that
+ends its processes when it closes does not end it; a job that lets no child go keeps it, and `resume.log` says so. Two
+tests put a launcher in a real job object with `KILL_ON_JOB_CLOSE` and close it: with `BREAKAWAY_OK` the fake gateway is
+outside the job and still runs, without it the gateway is inside and the log says so. They run when the test's own job
+lets children go, as this tool's shell does; a CI runner's may not, and then the first one is skipped.
+
+With no gateway running, `deploy.ps1 -Check` now says why: when Windows started, the last error log's lines counted by
+the words they start with (never a line: a log may hold an address, a host or a code), the last resume and the build to
+resume. A build is named `-dirty-<time>` only when `remote/`'s code, not its Markdown, differs from the commit: before,
+any tracked change in the repository renamed it, and on a Public network each new name needs a new firewall rule.
+
+Each change went red first, and mutations each turned a test red: no network wait, the arguments in the log, no
+duplicate check; no breakaway, no fallback, the stay not reported; a raw log line, a wider word pattern; Markdown
+counted, the whole repository counted, code ignored, `describe --dirty`.
+
+The name test first ran under the pre-commit hook, which gives git GIT_DIR and GIT_INDEX_FILE for the repository being
+committed to: its `git init`, `add` and `commit` in a temporary folder acted on that repository instead, committed a
+fake tree on this branch and set `core.bare = true` in the shared config from 03:02:53Z to 03:04:12Z, when it was set
+back. The branch was put back by `update-ref` and its index rebuilt. The tests now drop every GIT_* variable; run with
+them pointing at a throwaway repository, the test passes and leaves it unchanged. A test runs the suite again with a
+hook's variables and fails if they reach it, and the pre-commit hook itself now drops every GIT_* variable after its
+own two git reads: in a throwaway repository, a brain test that fails on any of them refused the commit under the old
+hook and passed under the new one (with `GOFLAGS=-count=1`: a cached pass hid the first mutation).
+
+Not done: the live gateway is still stopped (the restart from this tool was refused, "Production Deploy"), no Startup
+shortcut is installed, and no firewall rule was changed. Still to verify: the restart, the tablet, one real logon
+through the shortcut.
+
 ## Known problems
 
+- A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
+  (Cloudflare refuses to relay to them), so that guest gets no video.
+- Stopping the gateway with `Stop-Process` leaves its ffmpeg running, which keeps `err.log` open and goes on
+  capturing Delta's window for nobody, seen on 2026-10-23 and ended by hand. A job object would end it with the
+  gateway.
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
   writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
   one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two
@@ -616,12 +953,10 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
   for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
 - The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
   streamed, other people's words would show too. There is no switch to turn it off yet.
-- IX's gateway makes a pairing code only when it starts, so two minutes later the card can only say that the code
-  expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user has not decided.
 - When a phone in the room hears a sentence without « Delta », the computer's copy is ignored and its caption shows,
   while the phone's copy, which needs no wake word, goes to Claude.
-- A window that starts after the gateway posted its link never gets it: the brain keeps no pairing for a new
-  connection.
+- A window that starts after the gateway posted its link waits for the next one, up to 100 s: the brain keeps no
+  pairing for a new connection.
 - The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
   second, and there is one per workspace.
 
@@ -641,6 +976,8 @@ one the old rule avoided: talk that goes on and on goes on to Claude, now in sig
 - English for the local window and shelf commands, the triage and the compaction sentence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
+- A call from the phone with brain 0.6.0, live: the phone's answers play on the phone only, and whether the phone's
+  echo cancellation removes Delta's voice, before `/hush` is built.
 - The ring, live: whether 30 s suits, and whether talk to people in the room now reaches Claude too often.
 - The pairing QR live: IX's gateway posts its link, and a phone scans the window's code and pairs.
 - A phone in the room: each answer heard once, on the device that asked, and one sentence heard by both sent once.
