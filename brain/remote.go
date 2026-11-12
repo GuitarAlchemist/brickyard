@@ -65,6 +65,7 @@ type remote struct {
 	subs       map[chan []byte]bool                                   // the devices listening to /said: whether each plays its answers
 	answers    map[int]replyTo                                        // whom each sentence about to be said answers, by say_id
 	heard      map[int]bool                                           // the utterances that came through /hear, the last 64
+	pairAsked  time.Time                                              // when the window last asked the gateway for a new pairing code
 }
 
 // replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, by, who wrote it

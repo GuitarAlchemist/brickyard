@@ -244,7 +244,7 @@ internal static class Panel
         string[] lines = rows is not null
             ? [Words.Say($"Scan it with the phone's camera. The code lives {left} more.", $"Scanne-le avec l'appareil photo du téléphone. Le code vit encore {left}.")]
             : expired
-                ? [Words.Say("This code has expired.", "Ce code a expiré."), Words.Say("Restart the phone gateway for a new one.", "Redémarre la passerelle du téléphone pour en avoir un autre.")]
+                ? [Words.Say("This code has expired: a new one is asked for.", "Ce code a expiré : un autre est demandé."), Words.Say("If none comes, restart the phone gateway.", "S'il n'en vient pas, redémarre la passerelle du téléphone.")]
                 : [Words.Say("No pairing code yet.", "Pas encore de code de jumelage."), Words.Say("Start the phone gateway: its code shows here for two minutes.", "Démarre la passerelle du téléphone : son code s'affiche ici deux minutes.")];
         return QrCard(Words.Say("Pair a phone", "Jumeler un téléphone"), rows, lines, Words.Say("Click the phone or press P to close", "Clique sur le téléphone ou appuie sur P pour fermer"), (90, 220, 130), windowWidth, windowHeight); // green, as the icon's light
     }

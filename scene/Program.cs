@@ -1084,6 +1084,10 @@ internal static unsafe class Stage
         {
             pairingShown = show;
             pairingOpened = clock.Elapsed.TotalSeconds;
+            if (show && !demo && link.Read(clock.Elapsed.TotalSeconds).Pairing is null)
+            {
+                link.Tell("""{"pair":true}"""); // no code alive: the brain asks the phone gateway for one, which comes as a pairing line
+            }
         }
         (int X, int Y) PhoneAt() => (extent.Width - Panel.PhoneSize(extent.Height) - CardMargin(), CardMargin());
         // The language button left of the phone icon (Panel.LanguageButton): a click, or L, picks the next setting, which

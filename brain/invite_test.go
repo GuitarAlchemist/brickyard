@@ -78,3 +78,31 @@ func TestTheBadgeSwitchesWhetherGuestsHearTheRoom(t *testing.T) {
 		t.Error("the gateway takes a wrong secret")
 	}
 }
+
+// Opening the pairing card with no code alive asks the gateway's own entry for a new one, with the brain's secret; the
+// gateway then posts the link to /link as at its start. A gateway without the entry says so by 404; asking again
+// within pairNewEvery is not sent.
+func TestTheWindowAsksTheGatewayForANewPairingCode(t *testing.T) {
+	status, asked := http.StatusAccepted, 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost || req.Header.Get(hookHeader) != "1" || req.Header.Get(remoteHeader) != "s3cret" {
+			http.Error(w, "only Delta's brain asks here", http.StatusForbidden)
+			return
+		}
+		asked++
+		w.WriteHeader(status)
+	}))
+	defer gateway.Close()
+	r := &remote{secret: "s3cret"}
+	now := time.Date(2026, 11, 12, 6, 0, 0, 0, time.UTC)
+	if err := r.pairNew(gateway.URL+"/pair/new", now); err != nil || asked != 1 {
+		t.Fatalf("pairNew = %v, asked %d", err, asked)
+	}
+	if err := r.pairNew(gateway.URL+"/pair/new", now.Add(3*time.Second)); !errors.Is(err, errPairSoon) || asked != 1 {
+		t.Fatalf("asked again at once: %v, asked %d", err, asked)
+	}
+	status = http.StatusNotFound
+	if err := r.pairNew(gateway.URL+"/pair/new", now.Add(pairNewEvery)); !errors.Is(err, errPairOld) || asked != 2 {
+		t.Fatalf("a gateway without /pair/new: %v, asked %d", err, asked)
+	}
+}

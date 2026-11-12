@@ -173,9 +173,14 @@ func runMCP(c mcpConfig) {
 	// The window's Inviter button, once the gateway's secret is known (below).
 	var invite func()
 	var guestMic func(on bool)             // the window's guest badge, likewise
+	var pairNew func()                     // the window's pairing card, opened with no code alive, likewise
 	s.asked = func(event map[string]any) { // the window's language, microphone and Inviter buttons
 		if asked, ok := event["invite"].(bool); ok && asked && invite != nil {
 			go invite()
+			return
+		}
+		if asked, ok := event["pair"].(bool); ok && asked && pairNew != nil {
+			go pairNew()
 			return
 		}
 		if on, ok := event["guests_mic"].(bool); ok && guestMic != nil {
@@ -287,6 +292,19 @@ func runMCP(c mcpConfig) {
 		s.send(map[string]any{"pairing": map[string]any{"rows": rows, "seconds": pairingSeconds}})
 		m.note("pairing", map[string]any{"seconds": pairingSeconds})
 		logf("remote: a pairing link came; Delta's window shows its QR code behind the phone icon")
+	}
+	pairNew = func() { // the code comes through /link, as at the gateway's start (rm.pair)
+		err := rm.pairNew(gatewayPairNew, time.Now())
+		if errors.Is(err, errPairSoon) {
+			return
+		}
+		if err != nil {
+			logf("pairing: %v", err)
+			m.note("pairing", map[string]any{"asked": true, "refused": err.Error()})
+			return
+		}
+		logf("pairing: the window asked the phone gateway for a new code")
+		m.note("pairing", map[string]any{"asked": true})
 	}
 	invite = func() { // the journal says that an invitation came and until when, never its link
 		link, until, err := rm.invite(gatewayInvite)

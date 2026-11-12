@@ -1131,7 +1131,10 @@ On fix/link-first-line, after the ears' path (e928fcb), the last loopback port o
   (RoomCaptions); what was said to Delta or Claude, and what Delta says, still show, and the choice outlives the
   window (%LOCALAPPDATA%\delta\captions-room.off).
 - IX's gateway makes a pairing code only when it starts, so two minutes later the card can only say that the code
-  expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user has not decided.
+  expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user said yes on 2026-11-12. On
+  fix/link-first-line, opening the pairing card with no code alive sends `{"pair":true}`; the brain posts
+  127.0.0.1:8813/pair/new with the hooks header and X-Delta-Remote, at most every 10 s, and the gateway answers 202
+  and posts the new link to /link as at its start, or 404 until brickyard-remote builds the entry.
 - When a phone in the room hears a sentence without « Delta », the computer's copy is ignored and its caption shows,
   while the phone's copy, which needs no wake word, goes to Claude.
 - (Fixed on fix/link-first-line) A window that starts after the gateway posted its link never got it: the brain kept
