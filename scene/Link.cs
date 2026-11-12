@@ -636,6 +636,7 @@ internal sealed class Link(Func<double> clock)
         FrameGap.SelfTest(Check);
         MemoryWatch.SelfTest(Check);
         Panel.BrainSelfTest(Check);
+        RoomCaptions.SelfTest(Check);
         IdleTour.SelfTest(Check);
         FrameStats.SelfTest(Check);
         WallSource.SelfTest(Check);

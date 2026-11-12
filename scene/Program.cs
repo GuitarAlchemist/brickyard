@@ -1460,6 +1460,10 @@ internal static unsafe class Stage
             {
                 ShowNotes(!notesShown);
             }
+            else if (key == GlfwKey.T)
+            {
+                RoomCaptions.Toggle();
+            }
             else if (key == GlfwKey.L)
             {
                 NextLanguage();
@@ -2558,7 +2562,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (hud && moment.HeardAge >= 0f && caption is not null && captionTexture is not null)
+                if (hud && moment.HeardAge >= 0f && caption is not null && captionTexture is not null && RoomCaptions.Shows(moment.HeardTo, RoomCaptions.Off))
                 {
                     // Centred at the bottom; it comes in over 0.2 s and fades over the last 0.8 s.
                     var fade = Math.Clamp(Math.Min(moment.HeardAge / 0.2f, ((float)Link.HeardSeconds(moment.Heard) - moment.HeardAge) / 0.8f), 0f, 1f);

@@ -1127,7 +1127,9 @@ On fix/link-first-line, after the ears' path (e928fcb), the last loopback port o
 - A sentence from another device gets its chime, its acknowledgement and `/hear`'s 202 only once routed: up to 4 s
   for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
 - The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
-  streamed, other people's words would show too. There is no switch to turn it off yet.
+  streamed, other people's words would show too. On fix/link-first-line, T turns those captions off and on
+  (RoomCaptions); what was said to Delta or Claude, and what Delta says, still show, and the choice outlives the
+  window (%LOCALAPPDATA%\delta\captions-room.off).
 - IX's gateway makes a pairing code only when it starts, so two minutes later the card can only say that the code
   expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user has not decided.
 - When a phone in the room hears a sentence without « Delta », the computer's copy is ignored and its caption shows,
