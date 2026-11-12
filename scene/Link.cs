@@ -739,6 +739,10 @@ internal sealed class Link(Func<double> clock)
         link.Apply(new Change(null, [], "", null, null, Gaia: "connected"), 4400.0);
         Check(link.Read(4500.0) is { Gaia: "connected" }, "Gaia stays connected until the brain says otherwise");
         WireSelfTest(Check, PairingLine(DemoPairing, "120"));
+        var face = Tray.FaceRgba(64);
+        int At(int x, int y) => ((y * 64) + x) * 4;
+        Check(face.Length == 64 * 64 * 4 && face[At(21, 29)..(At(21, 29) + 4)].SequenceEqual(new byte[] { 0x59, 0xCC, 0xFF, 0xFF }) && face[At(0, 0) + 3] == 0 &&
+            face[At(32, 12)..(At(32, 12) + 4)].SequenceEqual(new byte[] { 0xB3, 0xAD, 0x9E, 0xFF }), "the window's icon is Delta's face in RGBA, cyan eyes on the visor, clear around the shell");
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
     }

@@ -455,6 +455,10 @@ internal static unsafe class Stage
             ? new int2(sizeW, sizeH)
             : new int2(Width, Height);
         var window = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = demo ? "Brickyard demo" : "Brickyard", Size = sized });
+        fixed (byte* face = Tray.FaceRgba(64))
+        {
+            window.SetIcon(1, new GlfwImage { Width = 64, Height = 64, Pixels = face }); // Delta's face in the title bar and the taskbar
+        }
 
         // Instance with the extensions GLFW needs to present, and the window's surface.
         var glfwExtensions = Glfw.GetRequiredInstanceExtensions(out var extensionCount);
