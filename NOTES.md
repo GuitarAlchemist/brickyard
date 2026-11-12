@@ -1097,7 +1097,11 @@ On fix/link-first-line, after the ears' path (e928fcb), the last loopback port o
 - MemoryWatch writes `SCENE memory at …`, then `SCENE memory peak: … between A s and B s` or `SCENE memory grows: …`
   when the working set's peak or the private bytes pass the last line's by a quarter and 256 MB. The live window of
   2026-11-10 peaked at 4.6 GB of working set over a day with 460 MB private, across a 7-hour sleep of the computer;
-  the next peak will be placed in the log.
+  the next peak will be placed in the log. Live on 2026-11-12, a window maximised to 3840x2054 grew from 281 to 622 MB
+  private in 30 s: the 4K targets, not a leak. A hidden window resized 40 times between 1280x720 and 1920x1080 stayed
+  at 468 to 476 MB private after its first 10 rebuilds (scratchpad resize-probe.ps1): the swapchain's rebuild leaks
+  nothing measurable. The working set's 4.6 GB, ten times the private bytes, remains unexplained; the computer's sleep
+  is the suspect, not tried.
 - dev-deploy.ps1 stops before building when it would move the window from the config's -scene-source (another
   checkout, or the published scene without modules); -MoveWindow does it on purpose. check-deploy-guard.ps1 runs it on
   made-up configs, building nothing.
