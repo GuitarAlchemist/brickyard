@@ -1034,9 +1034,6 @@ internal static unsafe class Stage
 
         var stale = false; // the swapchain no longer matches the window
         var gap = new FrameGap(); // what fills the time between two frames, for a slow frame's line
-        var memory = new MemoryWatch(); // when the memory climbs, for its line
-        Task<MemoryWatch.Reading>? memoryReading = null; // a reading on its way, asked at memoryAsked
-        var memoryAsked = 0.0;
         window.OnFramebufferSize += (_, _) =>
         {
             stale = true;
@@ -1935,6 +1932,8 @@ internal static unsafe class Stage
         var shot = 0;
         var last = filmDir is null ? clock.Elapsed.TotalSeconds : 0.0;
         var firstFrame = -1.0;
+        // When the memory climbs, minimised or not, timed like the other lines from the first frame.
+        using var memory = MemoryWatch.Start(() => firstFrame < 0 ? 0 : clock.Elapsed.TotalSeconds - firstFrame, MemoryWatch.Read, Console.WriteLine);
         var clears = stackalloc VkClearValue[2];
         var cpuStart = Process.GetCurrentProcess().TotalProcessorTime;
         var loopStart = clock.Elapsed;
@@ -2898,21 +2897,6 @@ internal static unsafe class Stage
                     // Where in the log a long frame falls says what came before it; where its time went, what the window did.
                     Console.WriteLine($"SCENE slow frame {(presented - lastPresent) * 1000.0:F0} ms, frame {frame} at {presented - firstFrame:F2} s: {gap.Describe(presented - lastPresent)}");
                 }
-            }
-
-            // Reading the memory costs about 14 ms (Windows lists every process for it): off the render thread.
-            if (memoryReading is { IsCompleted: true } read)
-            {
-                memoryReading = null;
-                if (read.IsCompletedSuccessfully && memory.Sample(memoryAsked, read.Result) is { } memoryLine)
-                {
-                    Console.WriteLine(memoryLine);
-                }
-            }
-            else if (memoryReading is null && memory.Due(presented - firstFrame))
-            {
-                memoryAsked = presented - firstFrame;
-                memoryReading = Task.Run(MemoryWatch.Read);
             }
 
             lastPresent = presented;
