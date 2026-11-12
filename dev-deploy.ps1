@@ -9,15 +9,40 @@
 # the one built here. Then reconnect delta in Claude
 # Code's /mcp. The new brain records itself in %LOCALAPPDATA%\delta\brain.pid and the brain it replaces stops by
 # itself; a brain built before brain.pid existed does not, and must be stopped by hand.
+#
+# When the config already runs the window from a -scene-source other than the one this deploy would give it (this
+# checkout's scene\ with -HotReload, none without), the deploy stops before building: deploying a brain from another
+# checkout would otherwise move the live window there too, or to the published scene, which has no modules. Deploy from
+# the checkout the window runs from, or pass -MoveWindow to move it.
 param(
     [Parameter(Mandatory = $true)][string]$PluginData,
     [string]$McpJson,
     [string]$Triage,
-    [switch]$HotReload
+    [switch]$HotReload,
+    [switch]$MoveWindow,
+    [switch]$GuardOnly # stops after that check, for check-deploy-guard.ps1
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $PluginData = (Resolve-Path $PluginData).Path
+
+if ($McpJson -and -not $MoveWindow) {
+    $before = @((Get-Content (Resolve-Path $McpJson).Path -Raw | ConvertFrom-Json).mcpServers.delta.args)
+    $i = [Array]::IndexOf($before, '-scene-source')
+    $runs = if ($i -ge 0 -and $i + 1 -lt $before.Count) { $before[$i + 1] } else { '' }
+    $would = if ($HotReload) { Join-Path $root 'scene' } else { '' }
+    $same = ($runs -eq '' -and $would -eq '') -or ($runs -ne '' -and $would -ne '' -and
+        [IO.Path]::GetFullPath($runs).TrimEnd('\') -ieq [IO.Path]::GetFullPath($would).TrimEnd('\'))
+    if (-not $same) {
+        $from = if ($runs) { $runs } else { 'the published scene' }
+        $to = if ($would) { $would } else { 'the published scene, without modules' }
+        throw "the live window runs from $from; this deploy would move it to $to. Deploy from that checkout, or pass -MoveWindow"
+    }
+}
+if ($GuardOnly) {
+    'DEPLOY GUARD ok: the window stays where it runs'
+    return
+}
 
 $describe = (& git -C $root describe --tags --always --dirty).Trim()
 if ($describe -like '*-dirty') { $describe += '-' + (Get-Date -Format 'HHmmss') }
