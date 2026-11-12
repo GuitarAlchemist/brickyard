@@ -874,10 +874,30 @@ tool's shell: "this shell's, which does not end it when the job closes". The `-C
 first. The pre-commit hook, now enabled in this clone, also runs gofmt, vet and the tests of `remote/` and the page's
 node tests; it did not cover `remote/` before.
 
+## The first deploy on the live gateway (2026-11-07)
+
+`deploy.ps1` replaced the live gateway for the first time, from this tool's shell, with 2ca5e6c. `-Check` first:
+0e30ca4, PID 62360, running since 2026-11-04 02:57Z on 8810, 8812, 8813 and 8814, nobody connected, the job "this
+shell's, which does not end it when the job closes", and "replace it with delta-remote-v0.6.0-21-g2ca5e6c.exe". The
+deploy took 50 s, 17:19:41Z to 17:20:31Z, exit 0: the new build, PID 148060, listens on the same four TCP ports and UDP
+8811, and is connected to the brain on 8807. 62360 no longer runs; its exe stays in the folder, and the new
+`deploy.json` keeps the arguments and that build for `-Back`. Its error log is empty, and its output gives the same four
+lines as 0e30ca4's: the owner's page, the guests' tunnel, the pairing link and `link.txt`.
+
+The gateway's own code has not changed since 0e30ca4, so this proves the deploy, not a new behaviour. Still to verify:
+the tablet coming back on its own after the swap, and whether a gateway started from this tool outlives Claude Code
+closing; if it does not, deploying again from the user's own PowerShell starts it with the kept arguments.
+
 ## The gateway after Windows restarts (2026-11-11)
 
 Windows restarted on 2026-11-09 at 04:39Z; the gateway deployed two days before stopped, and nothing started it again.
 Its error log then held only "the QR: … connection refused", one per 100 s, for about 15.7 h: it outlived its brain.
+It was still writing at 04:38:52Z, about 35 h after the deploy, so the job it started in did not end it in that time.
+
+Read on this machine, not changed. The Wi-Fi is a Public network. Windows lets the gateway in through an allow rule per
+executable path, made at its first listen; each build deployed so far has one. A new build's name needs a new rule,
+which takes an administrator; restarting the same build needs none. The gateway's folder sits in another session's
+Temp scratchpad, which a cleanup of that folder would remove.
 
 `delta-remote -resume <folder>` now starts, at logon, the build `deploy.json` names as `current` (each deploy records
 it), with its command line as kept and no shell: it waits up to 3 min for a LAN address, since the gateway exits
@@ -901,7 +921,10 @@ The name test first ran under the pre-commit hook, which gives git GIT_DIR and G
 committed to: its `git init`, `add` and `commit` in a temporary folder acted on that repository instead, committed a
 fake tree on this branch and set `core.bare = true` in the shared config from 03:02:53Z to 03:04:12Z, when it was set
 back. The branch was put back by `update-ref` and its index rebuilt. The tests now drop every GIT_* variable; run with
-them pointing at a throwaway repository, the test passes and leaves it unchanged.
+them pointing at a throwaway repository, the test passes and leaves it unchanged. A test runs the suite again with a
+hook's variables and fails if they reach it, and the pre-commit hook itself now drops every GIT_* variable after its
+own two git reads: in a throwaway repository, a brain test that fails on any of them refused the commit under the old
+hook and passed under the new one (with `GOFLAGS=-count=1`: a cached pass hid the first mutation).
 
 Not done: the live gateway is still stopped (the restart from this tool was refused, "Production Deploy"), no Startup
 shortcut is installed, and no firewall rule was changed. Still to verify: the restart, the tablet, one real logon
