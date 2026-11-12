@@ -1034,6 +1034,7 @@ internal static unsafe class Stage
 
         var stale = false; // the swapchain no longer matches the window
         var gap = new FrameGap(); // what fills the time between two frames, for a slow frame's line
+        var memory = new MemoryWatch(); // when the memory climbs, for its line
         window.OnFramebufferSize += (_, _) =>
         {
             stale = true;
@@ -2832,6 +2833,11 @@ internal static unsafe class Stage
                     // Where in the log a long frame falls says what came before it; where its time went, what the window did.
                     Console.WriteLine($"SCENE slow frame {(presented - lastPresent) * 1000.0:F0} ms, frame {frame} at {presented - firstFrame:F2} s: {gap.Describe(presented - lastPresent)}");
                 }
+            }
+
+            if (memory.Due(presented - firstFrame) && memory.Sample(presented - firstFrame, MemoryWatch.Read()) is { } memoryLine)
+            {
+                Console.WriteLine(memoryLine);
             }
 
             lastPresent = presented;

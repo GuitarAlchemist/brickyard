@@ -634,6 +634,7 @@ internal sealed class Link(Func<double> clock)
         ScriptScreen.SelfTest(Check);
         ArcadeFilm.SelfTest(Check);
         FrameGap.SelfTest(Check);
+        MemoryWatch.SelfTest(Check);
         IdleTour.SelfTest(Check);
         FrameStats.SelfTest(Check);
         WallSource.SelfTest(Check);
