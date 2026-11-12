@@ -641,6 +641,74 @@ internal static class Panel
         return new Card(rgba, size, size, []);
     }
 
+    // While Claude thinks: a small amber brain with dark folds, which the window lays in the bottom left corner, beside
+    // the listening ring when that shows, and makes beat (BrainBeat), as the user asked for on 2026-10-23.
+    public static Card Brain(int windowHeight)
+    {
+        var scale = LeaseScale(windowHeight);
+        var (width, height) = ((int)MathF.Round(42 * scale), (int)MathF.Round(34 * scale));
+        var rgba = new byte[width * height * 4];
+        const int Sub = 4; // samples per pixel on each axis, for smooth edges
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var (halo, fill) = (0, 0);
+                for (var j = 0; j < Sub; j++)
+                {
+                    for (var i = 0; i < Sub; i++)
+                    {
+                        var (u, v) = ((x + ((i + 0.5f) / Sub)) / width, (y + ((j + 0.5f) / Sub)) / height);
+                        halo += InBrain(u, v, 0.06f) ? 1 : 0;
+                        fill += InBrain(u, v, 0f) && !OnFold(u, v) ? 1 : 0;
+                    }
+                }
+
+                Over(rgba, width, height, x, y, (24, 18, 10), halo * 230 / (Sub * Sub));
+                Over(rgba, width, height, x, y, (255, 190, 90), fill * 255 / (Sub * Sub));
+            }
+        }
+
+        return new Card(rgba, width, height, []);
+    }
+
+    // How opaque the brain is, t seconds after Claude began to think: full at once, then beating every 1.2 s.
+    public static float BrainBeat(double t) => 0.55f + (0.45f * (0.5f + (0.5f * MathF.Cos(2f * MathF.PI * (float)(t / 1.2)))));
+
+    // The brain's lobes, as circles in the card's unit square, grown by grow for its dark halo.
+    private static bool InBrain(float u, float v, float grow)
+    {
+        ReadOnlySpan<(float X, float Y, float R)> lobes = [(0.30f, 0.40f, 0.22f), (0.50f, 0.30f, 0.22f), (0.70f, 0.40f, 0.22f), (0.28f, 0.62f, 0.20f), (0.72f, 0.62f, 0.20f), (0.50f, 0.60f, 0.24f)];
+        foreach (var (cx, cy, r) in lobes)
+        {
+            if (((u - cx) * (u - cx)) + ((v - cy) * (v - cy)) < (r + grow) * (r + grow))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The line between the halves and a fold in each of their quarters.
+    private static bool OnFold(float u, float v)
+    {
+        static bool Arc(float u, float v, float cx, float cy, float r) => MathF.Abs(MathF.Sqrt(((u - cx) * (u - cx)) + ((v - cy) * (v - cy))) - r) < 0.022f;
+        return (MathF.Abs(u - 0.5f) < 0.022f && v is > 0.10f and < 0.80f) ||
+            (v < 0.47f && (Arc(u, v, 0.30f, 0.50f, 0.11f) || Arc(u, v, 0.70f, 0.50f, 0.11f))) ||
+            (v > 0.68f && (Arc(u, v, 0.34f, 0.62f, 0.10f) || Arc(u, v, 0.66f, 0.62f, 0.10f)));
+    }
+
+    internal static void BrainSelfTest(Action<bool, string> check)
+    {
+        var brain = Brain(720);
+        byte[] At(int x, int y) => brain.Rgba[(((y * brain.Width) + x) * 4)..((((y * brain.Width) + x) * 4) + 4)];
+        check(brain is { Width: 42, Height: 34 } && At(0, 0)[3] == 0, "the thinking brain is small, clear around it");
+        check(At(8, 21) is [255, 190, 90, 255], "its lobes are amber");
+        check(At(21, 17) is [< 60, < 60, < 60, > 200], "the line between its halves is dark");
+        check(BrainBeat(0) == 1f && MathF.Abs(BrainBeat(0.6) - 0.55f) < 1e-4f && BrainBeat(1.2) > 0.99f, "it beats every 1.2 s, from full");
+    }
+
     private static float LeaseScale(int windowHeight) => Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
 
     private static int DotSize(int windowHeight) => Math.Max(3, (int)MathF.Round(5f * LeaseScale(windowHeight)));

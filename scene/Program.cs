@@ -959,8 +959,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 20, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel and the keys' card
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 20 }], // one image each
+            MaxSets = 21, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card and the thinking brain
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 21 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -1173,6 +1173,13 @@ internal static unsafe class Stage
         Texture? leaseDotTexture = null;
         Panel.Card? leaseDot = null;
         var leaseDrawn = (Height: 0, Language: "");
+        // While Claude thinks, a small brain beside the ring (Panel.Brain), beating from when the thinking began.
+        var brainSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? brainTexture = null;
+        Panel.Card? brainCard = null;
+        var brainDrawn = 0; // the window's height it was drawn for
+        var thinkingSince = double.NegativeInfinity;
+        var thinkingWas = false;
         (int X, int Y) PairingAt() => pairingCard is null ? (0, 0) : ((extent.Width - pairingCard.Width) / 2, (extent.Height - pairingCard.Height) / 2);
 
         // Uploads a drawn card into a new texture that set samples, once no frame in flight reads the old one.
@@ -2337,6 +2344,20 @@ internal static unsafe class Stage
                     leaseDotTexture = Upload(leaseDot, leaseDotSet, leaseDotTexture);
                 }
 
+                var thinking = moment.State == "thinking";
+                if (thinking && !thinkingWas)
+                {
+                    thinkingSince = now;
+                }
+
+                thinkingWas = thinking;
+                if (thinking && !splashing && brainDrawn != extent.Height)
+                {
+                    brainDrawn = extent.Height;
+                    brainCard = Panel.Brain(extent.Height);
+                    brainTexture = Upload(brainCard, brainSet, brainTexture);
+                }
+
                 if (pairingShown && !demo && clock.Elapsed.TotalSeconds - pairingOpened > 60.0)
                 {
                     pairingShown = false;
@@ -2564,6 +2585,19 @@ internal static unsafe class Stage
                         cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&dot, sizeof(SplashPush)));
                         cb.Draw(6, 1, 0, 0);
                     }
+                }
+
+                if (hud && moment.State == "thinking" && brainCard is not null && brainTexture is not null)
+                {
+                    // Bottom left, or right of the ring's card when Delta listens without its name, centred on it.
+                    var ring = moment.Lease > 0f && leaseCard is not null ? leaseCard : null;
+                    var left = CardMargin() + (ring is null ? 0 : ring.Width + (CardMargin() / 2));
+                    var top = extent.Height - CardMargin() - (ring is null ? brainCard.Height : (ring.Height + brainCard.Height) / 2);
+                    var push = new SplashPush(Rect(left, top, brainCard.Width, brainCard.Height), new SN.Vector4(1f, 1f, 1f, Panel.BrainBeat(now - thinkingSince)));
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [brainSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
                 }
 
                 if (hud && moment.Guests > 0 && guestBadge is not null && guestTexture is not null)
@@ -2996,6 +3030,7 @@ internal static unsafe class Stage
         versionTexture?.Dispose();
         notesTexture?.Dispose();
         leaseTexture?.Dispose();
+        brainTexture?.Dispose();
         leaseDotTexture?.Dispose();
         filmTitleTexture?.Dispose();
         filmHintTexture?.Dispose();
