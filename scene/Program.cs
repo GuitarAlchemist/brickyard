@@ -1035,6 +1035,8 @@ internal static unsafe class Stage
         var stale = false; // the swapchain no longer matches the window
         var gap = new FrameGap(); // what fills the time between two frames, for a slow frame's line
         var memory = new MemoryWatch(); // when the memory climbs, for its line
+        Task<MemoryWatch.Reading>? memoryReading = null; // a reading on its way, asked at memoryAsked
+        var memoryAsked = 0.0;
         window.OnFramebufferSize += (_, _) =>
         {
             stale = true;
@@ -2869,9 +2871,19 @@ internal static unsafe class Stage
                 }
             }
 
-            if (memory.Due(presented - firstFrame) && memory.Sample(presented - firstFrame, MemoryWatch.Read()) is { } memoryLine)
+            // Reading the memory costs about 14 ms (Windows lists every process for it): off the render thread.
+            if (memoryReading is { IsCompleted: true } read)
             {
-                Console.WriteLine(memoryLine);
+                memoryReading = null;
+                if (read.IsCompletedSuccessfully && memory.Sample(memoryAsked, read.Result) is { } memoryLine)
+                {
+                    Console.WriteLine(memoryLine);
+                }
+            }
+            else if (memoryReading is null && memory.Due(presented - firstFrame))
+            {
+                memoryAsked = presented - firstFrame;
+                memoryReading = Task.Run(MemoryWatch.Read);
             }
 
             lastPresent = presented;

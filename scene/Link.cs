@@ -773,9 +773,13 @@ internal sealed class Link(Func<double> clock)
             {
                 return s.Read(new byte[1]) == 0; // the scene hung up
             }
+            catch (IOException e) when (e.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted })
+            {
+                return true; // hung up with the body unread: Windows resets rather than closes
+            }
             catch (IOException)
             {
-                return false;
+                return false; // still open after 2 s
             }
         }
 

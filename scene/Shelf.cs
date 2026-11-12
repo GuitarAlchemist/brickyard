@@ -506,15 +506,24 @@ internal sealed class Shelf
                 {
                     var listed = ws.EnumerateArray().Select(w => (Id: Text(w, "id"), Title: Text(w, "title"))).ToList();
                     var answers = Each(listed.Select(w => w.Id).ToList(), id => Run("list-surfaces", "--workspace", id));
-                    for (var i = 0; i < listed.Count; i++)
+                    try
                     {
-                        using var surfaces = answers[i];
-                        if (surfaces is not null && surfaces.RootElement.TryGetProperty("surfaces", out var ss))
+                        for (var i = 0; i < listed.Count; i++)
                         {
-                            foreach (var surface in ss.EnumerateArray())
+                            if (answers[i] is { } surfaces && surfaces.RootElement.TryGetProperty("surfaces", out var ss) && ss.ValueKind == JsonValueKind.Array)
                             {
-                                workspaceOfSurface[Text(surface, "id")] = listed[i].Title;
+                                foreach (var surface in ss.EnumerateArray())
+                                {
+                                    workspaceOfSurface[Text(surface, "id")] = listed[i].Title;
+                                }
                             }
+                        }
+                    }
+                    finally
+                    {
+                        foreach (var answer in answers)
+                        {
+                            answer?.Dispose();
                         }
                     }
                 }
@@ -651,7 +660,7 @@ internal sealed class Shelf
             {
                 Parallel.For(0, ids.Count, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i => answers[i] = surfacesOf(ids[i]));
             }
-            catch (AggregateException e) when (e.InnerExceptions.Count == 1)
+            catch (AggregateException e)
             {
                 foreach (var answer in answers)
                 {
