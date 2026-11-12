@@ -661,6 +661,7 @@ func (mo *mouth) run(v *voice) {
 			if rest := cut.flush(); rest != "" {
 				parts = append(parts, rest)
 			}
+			parts = breathFirst(parts) // the first sound comes sooner
 			mo.mu.Lock()
 			mo.pending++
 			mo.busy.Store(true)

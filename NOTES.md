@@ -1100,8 +1100,9 @@ path.
   that answer as text only, and the computer stays silent too.
 - The persona still over-claims: the first answer offered to « construire, lancer ou modifier des projets » although
   the persona says it cannot yet. Live, it claimed to have built a token indicator. Model and persona belong to #261.
-- The first audio waits for the whole first sentence: cutting a long first sentence at a comma would start the voice
-  sooner.
+- The first audio waits for the whole first sentence. On fix/link-first-line a first sentence over 80 characters is
+  cut at its first comma with 30 characters before it and 20 after (breathFirst); the gain and how the cut sounds are
+  not yet heard live.
 - A sentence from another device gets its chime, its acknowledgement and `/hear`'s 202 only once routed: up to 4 s
   for the triage and 3 s for the fact model when Ollama is slow or cold, where the chime used to come at once.
 - The caption shows for five seconds what was said in the room without « Delta »: in a window that is shared or
