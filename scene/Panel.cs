@@ -672,6 +672,11 @@ internal static class Panel
         return new Card(rgba, width, height, []);
     }
 
+    // Beside the brain, how long Claude has worked: one dot of the ring's (Dot) per ten seconds, up to nine, laid by the
+    // window like the ring's, so that no texture is drawn again while Claude works. There is no estimate of the time
+    // left: Claude Code gives none.
+    public static int ElapsedDots(double seconds) => Math.Clamp((int)(seconds / 10), 0, 9);
+
     // How opaque the brain is, t seconds after Claude began to think: full at once, then beating every 1.2 s.
     public static float BrainBeat(double t) => 0.55f + (0.45f * (0.5f + (0.5f * MathF.Cos(2f * MathF.PI * (float)(t / 1.2)))));
 
@@ -707,6 +712,7 @@ internal static class Panel
         check(At(8, 21) is [255, 190, 90, 255], "its lobes are amber");
         check(At(21, 17) is [< 60, < 60, < 60, > 200], "the line between its halves is dark");
         check(BrainBeat(0) == 1f && MathF.Abs(BrainBeat(0.6) - 0.55f) < 1e-4f && BrainBeat(1.2) > 0.99f, "it beats every 1.2 s, from full");
+        check(ElapsedDots(9.9) == 0 && ElapsedDots(10) == 1 && ElapsedDots(42) == 4 && ElapsedDots(300) == 9 && ElapsedDots(-1) == 0, "beside it, a dot per ten seconds Claude has worked, up to nine");
     }
 
     private static float LeaseScale(int windowHeight) => Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);

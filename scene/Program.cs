@@ -2368,6 +2368,15 @@ internal static unsafe class Stage
                     brainTexture = Upload(brainCard, brainSet, brainTexture);
                 }
 
+                if (thinking && !splashing && leaseDrawn != (extent.Height, Words.Language)) // the ring's dot, for the brain's dots too
+                {
+                    leaseDrawn = (extent.Height, Words.Language);
+                    leaseCard = Panel.Lease(extent.Height);
+                    leaseTexture = Upload(leaseCard, leaseSet, leaseTexture);
+                    leaseDot = Panel.Dot(extent.Height);
+                    leaseDotTexture = Upload(leaseDot, leaseDotSet, leaseDotTexture);
+                }
+
                 if (pairingShown && !demo && clock.Elapsed.TotalSeconds - pairingOpened > 60.0)
                 {
                     pairingShown = false;
@@ -2608,6 +2617,18 @@ internal static unsafe class Stage
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [brainSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
+                    var dots = Panel.ElapsedDots(now - thinkingSince);
+                    if (dots > 0 && leaseDot is not null && leaseDotTexture is not null)
+                    {
+                        // A dot per ten seconds of work, in a row right of the brain, amber like it.
+                        cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [leaseDotSet], []);
+                        for (var i = 0; i < dots; i++)
+                        {
+                            var dot = new SplashPush(Rect(left + brainCard.Width + (CardMargin() / 3) + (i * leaseDot.Width * 2), top + ((brainCard.Height - leaseDot.Height) / 2), leaseDot.Width, leaseDot.Height), new SN.Vector4(1f, 0.745f, 0.353f, 1f));
+                            cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&dot, sizeof(SplashPush)));
+                            cb.Draw(6, 1, 0, 0);
+                        }
+                    }
                 }
 
                 if (hud && moment.Guests > 0 && guestBadge is not null && guestTexture is not null)
