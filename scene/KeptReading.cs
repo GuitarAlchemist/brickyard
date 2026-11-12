@@ -128,6 +128,27 @@ internal static class KeptReadings
             && Workspaces(a, new(panes) { ["ws-a"] = """{"surfaces":[{"title":"no ID"}]}""" }) is null && Workspaces(a, new(panes) { ["ws-a"] = "[]" }) is null
             && Workspaces(a, new(panes) { ["ws-b"] = """{"surfaces":[3]}""" }) is null && Workspaces(a, new() { ["ws-b"] = panes["ws-b"] }) is null,
             "list-workspaces and list-surfaces are failed readings unless objects holding their arrays, every workspace and pane with an ID");
+        // Each list-surfaces costs wmux about half a second: the workspaces' panes are asked at once, not one by one.
+        static void InterlockedMax(ref int target, int value)
+        {
+            int seen;
+            while ((seen = Volatile.Read(ref target)) < value && Interlocked.CompareExchange(ref target, value, seen) != seen)
+            {
+            }
+        }
+
+        var inFlight = 0;
+        var most = 0;
+        var three = """{"workspaces":[{"id":"ws-1","title":"1"},{"id":"ws-2","title":"2"},{"id":"ws-3","title":"3"}]}""";
+        var together = Shelf.Wmux.DecodeWorkspaces(JsonDocument.Parse(three), id =>
+        {
+            var now = Interlocked.Increment(ref inFlight);
+            InterlockedMax(ref most, now);
+            var met = SpinWait.SpinUntil(() => Volatile.Read(ref most) >= 3, 2000); // the three calls meet, or none is answered
+            Interlocked.Decrement(ref inFlight);
+            return met ? JsonDocument.Parse($$"""{"surfaces":[{"id":"surface-{{id}}"}]}""") : null;
+        });
+        check(together is { Count: 3 } && together["surface-ws-3"] == ("ws-3", "3") && most == 3, "the workspaces' panes are asked of wmux at once");
         var cache = new KeptReading<(string Id, string Title)>("workspaces");
         cache.Apply(Workspaces(a, panes), t0);
         cache.Apply(Workspaces("""{"workspaces":[{"title":"no ID"}]}"""), t0.AddSeconds(30));

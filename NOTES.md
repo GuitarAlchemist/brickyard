@@ -1113,8 +1113,9 @@ path.
 - (Fixed on fix/link-first-line) A window that starts after the gateway posted its link never got it: the brain kept
   no pairing for a new connection. It now keeps the last code in memory and gives it to a new connection after the
   hello, with the seconds it has left, while it lives a second more.
-- The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
-  second, and there is one per workspace.
+- The shelf's sessions took about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
+  second, and there is one per workspace. On fix/link-first-line the workspaces' list-surfaces calls go at once, up to
+  eight together, for the shelf and the agents' office alike; the gain is not yet measured against the live wmux.
 
 ## To verify
 

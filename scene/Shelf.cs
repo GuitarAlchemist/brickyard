@@ -504,15 +504,16 @@ internal sealed class Shelf
             {
                 if (workspaces is not null && workspaces.RootElement.TryGetProperty("workspaces", out var ws))
                 {
-                    foreach (var w in ws.EnumerateArray())
+                    var listed = ws.EnumerateArray().Select(w => (Id: Text(w, "id"), Title: Text(w, "title"))).ToList();
+                    var answers = Each(listed.Select(w => w.Id).ToList(), id => Run("list-surfaces", "--workspace", id));
+                    for (var i = 0; i < listed.Count; i++)
                     {
-                        var title = Text(w, "title");
-                        using var surfaces = Run("list-surfaces", "--workspace", Text(w, "id"));
+                        using var surfaces = answers[i];
                         if (surfaces is not null && surfaces.RootElement.TryGetProperty("surfaces", out var ss))
                         {
                             foreach (var surface in ss.EnumerateArray())
                             {
-                                workspaceOfSurface[Text(surface, "id")] = title;
+                                workspaceOfSurface[Text(surface, "id")] = listed[i].Title;
                             }
                         }
                     }
@@ -595,7 +596,7 @@ internal sealed class Shelf
                 return null;
             }
 
-            var workspaceOf = new Dictionary<string, (string, string)>();
+            var listed = new List<(string Id, string Title)>();
             foreach (var w in ws.EnumerateArray())
             {
                 var (id, title) = (Text(w, "id"), Text(w, "title"));
@@ -604,25 +605,63 @@ internal sealed class Shelf
                     return null; // a workspace without an ID: the answer is not one
                 }
 
-                using var surfaces = surfacesOf(id);
-                if (Listed(surfaces, "surfaces") is not { } ss)
-                {
-                    return null; // a workspace whose panes are unknown: the reading is incomplete
-                }
-
-                foreach (var surface in ss.EnumerateArray())
-                {
-                    var surfaceId = Text(surface, "id");
-                    if (surfaceId.Length == 0)
-                    {
-                        return null; // a pane without an ID cannot be placed
-                    }
-
-                    workspaceOf[surfaceId] = (id, title);
-                }
+                listed.Add((id, title));
             }
 
-            return workspaceOf;
+            var answers = Each(listed.Select(w => w.Id).ToList(), surfacesOf);
+            try
+            {
+                var workspaceOf = new Dictionary<string, (string, string)>();
+                for (var i = 0; i < listed.Count; i++)
+                {
+                    if (Listed(answers[i], "surfaces") is not { } ss)
+                    {
+                        return null; // a workspace whose panes are unknown: the reading is incomplete
+                    }
+
+                    foreach (var surface in ss.EnumerateArray())
+                    {
+                        var surfaceId = Text(surface, "id");
+                        if (surfaceId.Length == 0)
+                        {
+                            return null; // a pane without an ID cannot be placed
+                        }
+
+                        workspaceOf[surfaceId] = listed[i];
+                    }
+                }
+
+                return workspaceOf;
+            }
+            finally
+            {
+                foreach (var answer in answers)
+                {
+                    answer?.Dispose();
+                }
+            }
+        }
+
+        // Each workspace's panes, asked of wmux at once rather than one after the other: each call costs it about half a
+        // second, and nine workspaces kept the shelf's sessions about ten seconds from showing.
+        private static JsonDocument?[] Each(IReadOnlyList<string> ids, Func<string, JsonDocument?> surfacesOf)
+        {
+            var answers = new JsonDocument?[ids.Count];
+            try
+            {
+                Parallel.For(0, ids.Count, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i => answers[i] = surfacesOf(ids[i]));
+            }
+            catch (AggregateException e) when (e.InnerExceptions.Count == 1)
+            {
+                foreach (var answer in answers)
+                {
+                    answer?.Dispose();
+                }
+
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(e.InnerExceptions[0]);
+            }
+
+            return answers;
         }
 
         // The array named in an answer whose root is an object, or null.
