@@ -20,6 +20,7 @@ type scene struct {
 	addr     string
 	conn     net.Conn
 	hello    []byte                     // the line each new connection starts with, if any: what a window must know whatever it missed
+	recall   func() map[string]any      // a line each new connection gets after hello, made then, as a pairing code with the seconds it has left; nil for none
 	asked    func(event map[string]any) // what the window asks for, such as {"language":"fr+en"}, or nil
 	launch   func()                     // starts the window, when the brain may (startScene)
 	wanted   bool                       // the window should be on screen
@@ -74,6 +75,31 @@ func (s *scene) greet(event map[string]any) {
 	s.hello = append(line, '\n')
 }
 
+// lastPairing keeps the gateway's last pairing code, so that a window started after it came still shows it while it
+// lives (recall). The code is a credential: it stays in memory, never in a log or the journal.
+type lastPairing struct {
+	mu    sync.Mutex
+	rows  []string
+	until time.Time
+}
+
+func (p *lastPairing) set(rows []string, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rows, p.until = rows, now.Add(pairingSeconds*time.Second)
+}
+
+// line is the pairing line for a window that connects now, or nil when no code lives a second more.
+func (p *lastPairing) line(now time.Time) map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	left := p.until.Sub(now).Seconds()
+	if p.rows == nil || left < 1 {
+		return nil
+	}
+	return map[string]any{"pairing": map[string]any{"rows": p.rows, "seconds": left}}
+}
+
 // read hands each JSON line the window writes back on c to asked, until c closes.
 func (s *scene) read(c net.Conn) {
 	lines := bufio.NewScanner(c)
@@ -108,6 +134,12 @@ func (s *scene) send(event map[string]any) {
 		}
 		s.conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 		out := append(line, '\n')
+		if fresh && s.recall != nil {
+			if event := s.recall(); event != nil {
+				later, _ := json.Marshal(event)
+				out = append(append(later, '\n'), out...)
+			}
+		}
 		if fresh && s.hello != nil {
 			out = append(append([]byte(nil), s.hello...), out...)
 		}

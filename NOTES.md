@@ -1110,8 +1110,9 @@ path.
   expired. IX and brutal proposed `POST /pair/new`, a new code on demand; the user has not decided.
 - When a phone in the room hears a sentence without « Delta », the computer's copy is ignored and its caption shows,
   while the phone's copy, which needs no wake word, goes to Claude.
-- A window that starts after the gateway posted its link never gets it: the brain keeps no pairing for a new
-  connection.
+- (Fixed on fix/link-first-line) A window that starts after the gateway posted its link never got it: the brain kept
+  no pairing for a new connection. It now keeps the last code in memory and gives it to a new connection after the
+  hello, with the seconds it has left, while it lives a second more.
 - The shelf's sessions take about ten seconds to appear with nine wmux workspaces: each wmux call costs about half a
   second, and there is one per workspace.
 

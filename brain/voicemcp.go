@@ -280,7 +280,10 @@ func runMCP(c mcpConfig) {
 		}
 		logf("guests' microphone: on %v, as the window asked", on)
 	}
+	var pairing lastPairing // a window started later still shows the code while it lives
+	s.recall = func() map[string]any { return pairing.line(time.Now()) }
 	rm.pair = func(rows []string) { // the journal says that a link came, never which
+		pairing.set(rows, time.Now())
 		s.send(map[string]any{"pairing": map[string]any{"rows": rows, "seconds": pairingSeconds}})
 		m.note("pairing", map[string]any{"seconds": pairingSeconds})
 		logf("remote: a pairing link came; Delta's window shows its QR code behind the phone icon")
