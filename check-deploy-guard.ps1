@@ -34,6 +34,8 @@ try {
     Expect 'a deploy with -HotReload does not take a published window to a checkout' @() @('-HotReload') 'the live window runs from the published scene'
     Expect 'the same checkout, spelt with another case and a slash, keeps the window' @('-scene-source', ($here.ToUpperInvariant() + '\')) @('-HotReload') 'DEPLOY GUARD ok'
     Expect 'a published window stays published' @() @() 'DEPLOY GUARD ok'
+    Expect 'the =X and -- spellings Go takes are read too' @("--scene-source=C:\elsewhere\scene") @('-HotReload') 'the live window runs from C:\elsewhere\scene'
+    Expect 'the same checkout spelt -scene-source=X keeps the window' @("-scene-source=$here") @('-HotReload') 'DEPLOY GUARD ok'
     Expect '-MoveWindow moves it on purpose' @('-scene-source', 'C:\elsewhere\scene') @('-HotReload', '-MoveWindow') 'DEPLOY GUARD ok'
 } finally {
     Remove-Item -Recurse -Force $tmp

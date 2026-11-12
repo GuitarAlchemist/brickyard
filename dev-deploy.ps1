@@ -28,8 +28,11 @@ $PluginData = (Resolve-Path $PluginData).Path
 
 if ($McpJson -and -not $MoveWindow) {
     $before = @((Get-Content (Resolve-Path $McpJson).Path -Raw | ConvertFrom-Json).mcpServers.delta.args)
-    $i = [Array]::IndexOf($before, '-scene-source')
-    $runs = if ($i -ge 0 -and $i + 1 -lt $before.Count) { $before[$i + 1] } else { '' }
+    $runs = '' # Go's flag package takes -scene-source X, --scene-source X and both with =X
+    for ($i = 0; $i -lt $before.Count; $i++) {
+        if ($before[$i] -match '^--?scene-source=(.+)$') { $runs = $Matches[1] }
+        elseif ($before[$i] -match '^--?scene-source$' -and $i + 1 -lt $before.Count) { $runs = $before[$i + 1] }
+    }
     $would = if ($HotReload) { Join-Path $root 'scene' } else { '' }
     $same = ($runs -eq '' -and $would -eq '') -or ($runs -ne '' -and $would -ne '' -and
         [IO.Path]::GetFullPath($runs).TrimEnd('\') -ieq [IO.Path]::GetFullPath($would).TrimEnd('\'))
@@ -90,7 +93,8 @@ if ($Triage) {
 $kept = New-Object System.Collections.Generic.List[string]
 $old = @($server.args)
 for ($i = 0; $i -lt $old.Count; $i++) {
-    if ($old[$i] -eq '-scene-source') { $i++; continue }
+    if ($old[$i] -match '^--?scene-source$') { $i++; continue } # its value follows it
+    if ($old[$i] -match '^--?scene-source=') { continue }
     $kept.Add($old[$i])
 }
 if ($HotReload) {
