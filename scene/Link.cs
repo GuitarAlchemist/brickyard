@@ -4,7 +4,8 @@ using System.Text;
 using System.Text.Json;
 
 // What the brain says the robot is doing. A listener on the loopback interface takes one JSON line per change, from
-// any number of connections; the render loop reads the latest state and how loud the voice is at this moment.
+// any number of connections; the render loop reads the latest state and how loud the voice is at this moment. A
+// connection whose first line is no JSON object, as a web page's request to 127.0.0.1 is, is dropped there.
 //
 // A line carries any of: "state" (idle, listening, thinking or speaking) with "envelope" while speaking and "cost";
 // "context", how full Claude's conversation is, as {"used": tokens, "limit": tokens}, where limit is where Claude Code
@@ -737,8 +738,67 @@ internal sealed class Link(Func<double> clock)
         Check(Parse("""{"language":"fr","gaia":"listening"}""", out _) is { Gaia: "listening" } && Parse("""{"gaia":"up"}""", out _) is null && Parse("""{"gaia":1}""", out _) is null, "gaia is one of four words, in the hello line too");
         link.Apply(new Change(null, [], "", null, null, Gaia: "connected"), 4400.0);
         Check(link.Read(4500.0) is { Gaia: "connected" }, "Gaia stays connected until the brain says otherwise");
+        WireSelfTest(Check, PairingLine(DemoPairing, "120"));
         Console.WriteLine(failures == 0 ? "SELFTEST ok" : $"SELFTEST {failures} failed");
         return failures == 0 ? 0 : 1;
+    }
+
+    // The listener itself, on a free loopback port: a web page can post to it, as to any port of 127.0.0.1, and a probe
+    // can connect and say nothing; neither is the brain.
+    private static void WireSelfTest(Action<bool, string> check, string pairingLine)
+    {
+        var free = new TcpListener(IPAddress.Loopback, 0);
+        free.Start();
+        var port = ((IPEndPoint)free.LocalEndpoint).Port;
+        free.Stop();
+        var wire = new Link(() => 1.0);
+        check(wire.Listen(port) is null, "the link listens on a free port");
+
+        // What fetch("http://127.0.0.1:port/", {method: "POST", mode: "no-cors", body}) sends: a request line and
+        // headers, then a body of JSON lines.
+        bool WebPage()
+        {
+            using var page = new TcpClient("127.0.0.1", port);
+            var s = page.GetStream();
+            s.ReadTimeout = 2000;
+            var body = $"\n{pairingLine}\n{{\"heard\":{{\"text\":\"Scanne ce code.\",\"to\":\"said\"}}}}\n";
+            s.Write(Encoding.UTF8.GetBytes($"POST / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://localhost:8000\r\nContent-Type: text/plain;charset=UTF-8\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}"));
+            try
+            {
+                return s.Read(new byte[1]) == 0; // the scene hung up
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        var dropped = WebPage();
+        check(dropped && wire.Read(2.0) is { PairingId: 0, HeardId: 0 }, "a web page's request is dropped at its request line, before its body's lines");
+
+        using var brain = new TcpClient("127.0.0.1", port);
+        var bs = brain.GetStream();
+        bs.ReadTimeout = 2000;
+        bs.Write("{\"language\":\"en\",\"version\":\"dev-wire\"}\n"u8);
+        var greeted = SpinWait.SpinUntil(() => wire.Read(2.0).Version == "dev-wire", 2000);
+        using (new TcpClient("127.0.0.1", port))
+        {
+            // a probe, such as another brain asking whether a window listens, connects and says nothing
+        }
+
+        WebPage();
+        Thread.Sleep(300);
+        var told = wire.Tell("{\"shelf\":\"open\"}");
+        string? back = null;
+        try
+        {
+            back = new StreamReader(bs).ReadLine();
+        }
+        catch (IOException)
+        {
+        }
+
+        check(greeted && told && back == "{\"shelf\":\"open\"}", "the window still answers the brain after a probe and a web page connected");
     }
 
     internal void Apply(Change change, double at)
@@ -918,11 +978,7 @@ internal sealed class Link(Func<double> clock)
         using (client)
         {
             var stream = client.GetStream();
-            lock (gate)
-            {
-                talking = stream;
-            }
-
+            var first = true; // a connection is the brain's once its first line is a JSON object
             var line = new MemoryStream();
             var buffer = new byte[4096];
             try
@@ -950,6 +1006,24 @@ internal sealed class Link(Func<double> clock)
                             continue;
                         }
 
+                        if (first)
+                        {
+                            // A browser's request starts with its request line, such as "POST / HTTP/1.1", whatever a
+                            // page puts in its body: drop it there, before the body's lines can show a QR code or a
+                            // caption. Only then may the connection take the window's answers from the brain's.
+                            if (!IsObject(text))
+                            {
+                                Console.WriteLine("SCENE dropped a connection whose first line is no JSON object, as a web page's request");
+                                return;
+                            }
+
+                            first = false;
+                            lock (gate)
+                            {
+                                talking = stream;
+                            }
+                        }
+
                         if (Parse(text, out var error) is { } change)
                         {
                             Apply(change, clock());
@@ -975,6 +1049,19 @@ internal sealed class Link(Func<double> clock)
                     }
                 }
             }
+        }
+    }
+
+    private static bool IsObject(string text)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            return doc.RootElement.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 
