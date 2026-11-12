@@ -50,6 +50,34 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// gitEnvProbe makes TestTheTestsDropAHooksGitVariables, run again in a child, report the GIT_* variables it sees.
+const gitEnvProbe = "DELTA_REMOTE_GIT_ENV_PROBE"
+
+// Whatever runs the tests, they run again here with the variables a pre-commit hook sets, so that dropping them from
+// TestMain fails the suite instead of reaching a repository.
+func TestTheTestsDropAHooksGitVariables(t *testing.T) {
+	if os.Getenv(gitEnvProbe) != "" {
+		for _, kv := range os.Environ() {
+			if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(strings.ToUpper(name), "GIT_") {
+				t.Errorf("%s reached the tests", name)
+			}
+		}
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	child := exec.Command(exe, "-test.run=^"+t.Name()+"$", "-test.v")
+	child.Env = append(os.Environ(), gitEnvProbe+"=1",
+		"GIT_DIR="+filepath.Join(dir, "no-repository"), "GIT_INDEX_FILE="+filepath.Join(dir, "index"), "GIT_WORK_TREE="+dir)
+	out, err := child.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: "+t.Name()) {
+		t.Fatalf("run again with a hook's GIT_* variables, this test did not pass (%v):\n%s", err, out)
+	}
+}
+
 type fakeStart struct {
 	PID  int
 	Exe  string
