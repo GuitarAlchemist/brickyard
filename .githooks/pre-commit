@@ -7,6 +7,10 @@ set -e
 root=$(git rev-parse --show-toplevel)
 staged=$(git diff --cached --name-only)
 touches() { printf '%s\n' "$staged" | grep -q -E "$1"; }
+# git gives a hook GIT_DIR and GIT_INDEX_FILE, naming the commit's repository and index. Past this point no git command
+# of the hook's own runs: a test that runs git in a folder of its own would act on the commit's repository instead
+# (on 2026-11-11 one made a commit there and set core.bare in the shared config), so none of them reaches the checks.
+for name in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$name"; done
 
 if touches '^brain/'; then
 	cd "$root/brain"
