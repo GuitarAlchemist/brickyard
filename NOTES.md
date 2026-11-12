@@ -1083,6 +1083,27 @@ prints the path. Its exit is 0 only if each has it. Do not read the command line
 check that Delta still hears. `check.ps1` runs `check-ears-flag.ps1 -SelfTest`, which fails if a verdict prints the
 path.
 
+## The window's link refuses a web page, and the window says when its memory climbs (2026-11-12)
+
+On fix/link-first-line, after the ears' path (e928fcb), the last loopback port open to web pages is closed:
+
+- The link on 127.0.0.1:8805 took any JSON line from any connection. A page's `fetch(..., {mode: "no-cors"})` posting
+  to it had its body's lines applied, a pairing QR code and a caption in Delta's name among them (the selftest showed
+  both before the fix). A connection is now dropped unless its first line is a JSON object, which a browser's request
+  line never is; only then does it take the window's answers, so a probe that connects and says nothing, as
+  start-delta.ps1's Test-Port and a second brain do, no longer cuts the brain's back channel. The brain on 8807 already
+  refused any request with an Origin; whisper-server answers only under its path. Not tried from a real browser
+  against the live window.
+- MemoryWatch writes `SCENE memory at …`, then `SCENE memory peak: … between A s and B s` or `SCENE memory grows: …`
+  when the working set's peak or the private bytes pass the last line's by a quarter and 256 MB. The live window of
+  2026-11-10 peaked at 4.6 GB of working set over a day with 460 MB private, across a 7-hour sleep of the computer;
+  the next peak will be placed in the log.
+- dev-deploy.ps1 stops before building when it would move the window from the config's -scene-source (another
+  checkout, or the published scene without modules); -MoveWindow does it on purpose. check-deploy-guard.ps1 runs it on
+  made-up configs, building nothing.
+- The window has Delta's face as its icon (Tray.FacePixels), and a small amber brain beats in the bottom left while
+  Claude thinks (Panel.Brain).
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
