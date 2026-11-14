@@ -14,5 +14,6 @@
     <Compile Include="../scene/OfficeSelection.cs" Link="OfficeSelection.cs" />
     <Compile Include="../scene/WidgetPicking.cs" Link="WidgetPicking.cs" />
     <Compile Include="../scene/WallSource.cs" Link="WallSource.cs" />
+    <None Include="testdata/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

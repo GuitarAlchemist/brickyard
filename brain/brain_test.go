@@ -107,6 +107,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("BRAIN_FAKE_WHISPER") != "" {
 		fakeWhisper()
 	}
+	if os.Getenv("BRAIN_FAKE_IX") != "" {
+		fakeIX() // ixatelier_test.go
+	}
 	if os.Getenv("BRAIN_FAKE_PIPER") == "" {
 		os.Exit(m.Run())
 	}

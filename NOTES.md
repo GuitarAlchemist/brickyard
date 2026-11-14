@@ -1107,6 +1107,33 @@ On fix/link-first-line, after the ears' path (e928fcb), the last loopback port o
   made-up configs, building nothing.
 - The window has Delta's face as its icon (Tray.FacePixels), and a small amber brain beats in the bottom left while
   Claude thinks (Panel.Brain).
+- Live on 2026-11-14, with the readings on their timer: "the working set peaked at 4938 MB between 1080 s and 27479 s;
+  now working set 4921 MB, private 4912 MB, managed 4500 MB", the first reading after the computer slept from 02:27 to
+  09:47; minutes later the window was back at 448 MB private. The climb is managed, at the wake, and the GC gives it
+  back: something catches up on the hours asleep and allocates as it goes. Not found yet.
+
+## The IX workshop: a knot IX computed, on a stand in the hall (2026-11-14)
+
+IX does the mathematics, Delta draws. `brain -ix-knot figure-eight -ix-mcp <ix-mcp.exe>` starts IX's MCP server (the
+executable Claude Code runs over stdio) for one conversation (initialize, initialized, tools/call ix_knot with
+geometry: true), checks the answer and writes `%LOCALAPPDATA%\delta\ix-atelier.json`, format delta-ix-geometry v1
+(brain/ixatelier.go): the knot's id, names, closure, crossings, writhe and Jones polynomial, the rope's radius and its
+3D path, rounded to 1e-4. Bounds, checked on both sides: 8 ropes and 4096 points at most, coordinates within ±1000, the
+radius in (0, 100], texts of 96 characters without control characters, crossings and writhe within ±64, 512 KB. When IX
+cannot answer (no ix-mcp, a process that stops, a tool error, no answer in 30 s) the document says why instead, so the
+stand never shows an old knot as new. No daemon: ix-mcp lives for the call.
+
+The stand is drawn by the office's widget module (modules/AgentOffice/IxAtelier.cs), which reads the document at most
+once a second (DELTA_IX_ATELIER overrides its place): a plinth between Gaia and the cabinet, in the whole hall's view
+(key 4), the knot 0.8 m high in beads along IX's path, amber where the path passes in front of the knot's plane and
+blue behind, swinging 70° either side of its face every 16 s, and a plaque with what IX says (FR/EN). A refused
+document shows "Géométrie refusée" and why; an absent one the command to run. Since it is the module, a new build of
+it copied over the window's modules\office\AgentOffice.Module.dll is reloaded without restarting the window; a new
+document is redrawn the same way. Checks: brain/ixatelier_test.go (IX's answer recorded in
+testdata/ix-knot-figure-eight.json, 14 damaged answers, a fake ix-mcp over stdio that answers, refuses, exits or stays
+mute) and widget-tests' Atelier, on widget-tests/testdata/ix-atelier-figure-eight.json, which a Go test keeps equal to
+the brain's document. Live on 2026-11-14: the module reloaded in the running window (reload 1, same pid), tree
++ix-atelier.
 
 ## Known problems
 

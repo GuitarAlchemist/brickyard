@@ -22,6 +22,8 @@ try
     }
 
     if (args.Length != 2) throw new ArgumentException("Expected the paths to the v0.1 and v0.2 office module images.");
+    // The office also draws the IX workshop from a document on this machine; these checks give it one of their own.
+    Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", Path.Combine(Path.GetTempPath(), "delta-no-atelier-" + Guid.NewGuid().ToString("N"), "ix-atelier.json"));
     Expansion(Check);
     Stage(Check);
     Activities(Check);
@@ -31,6 +33,7 @@ try
     Office(Check, args[0]);
     Enclosures(Check, args[0]);
     Aisles(Check, args[0]);
+    Atelier(Check, args[0]);
     Reload(Check, args[0], args[1]);
 }
 catch (Exception e)
@@ -430,6 +433,113 @@ static void Reload(Action<bool, string> check, string v1, string v2)
     }
     finally
     {
+        try { Directory.Delete(dir, true); } catch (IOException) { }
+    }
+}
+
+// The IX workshop's stand, drawn by the office's module from the document brain -ix-knot writes (format
+// delta-ix-geometry v1; testdata/ix-atelier-figure-eight.json is the brain's document for IX's figure-eight, which
+// brain/ixatelier_test.go keeps equal to what the brain writes): the knot and what IX says of it, a refusal for each
+// document that breaks the bounds, IX unavailable, and never an old knot once the document says otherwise.
+static void Atelier(Action<bool, string> check, string image)
+{
+    var dir = Path.Combine(Path.GetTempPath(), "delta-atelier-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    var doc = Path.Combine(dir, "ix-atelier.json");
+    var before = Environment.GetEnvironmentVariable("DELTA_IX_ATELIER");
+    Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", doc);
+    var figureEight = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "testdata", "ix-atelier-figure-eight.json"));
+    var stamp = DateTime.UtcNow;
+    void Write(string text)
+    {
+        File.WriteAllText(doc, text);
+        File.SetLastWriteTimeUtc(doc, stamp = stamp.AddSeconds(2)); // each document a time of its own, as a rename gives it
+    }
+
+    try
+    {
+        using var session = new WidgetModuleSession<IOfficeModule>(image, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
+        var office = session.Module;
+        var clock = 100.0;
+        office.Update(new("fr", false, []));
+        (WidgetTree Tree, string Plaque, WidgetInstance? Knot, Dictionary<string, Pose> Poses) Look()
+        {
+            clock += 1.5; // past the module's second between readings
+            var poses = new Dictionary<string, Pose>();
+            office.Pose(clock, poses);
+            var tree = Widgets.Expand(office.Scene());
+            poses.Clear();
+            office.Pose(clock + 0.1, poses);
+            var plaque = string.Join(" | ", Find(tree.Roots, "ix-atelier")?.Text.Select(t => t.Text) ?? []);
+            return (tree, plaque, Find(tree.Roots, "ix-atelier/knot"), poses);
+        }
+
+        var absent = Look();
+        check(absent.Tree.Valid && absent.Plaque.Contains("En attente d'IX") && absent.Knot is null && !absent.Poses.ContainsKey("ix-atelier/knot"),
+            $"without a document the stand waits for IX, with no knot ({absent.Plaque})");
+
+        Write(figureEight);
+        var revision = office.Revision;
+        var shown = Look();
+        var beads = shown.Knot?.Boxes ?? [];
+        static bool Is(Vector3 c, float r, float g, float b) => Near(c, new(r, g, b));
+        check(shown.Tree.Valid && office.Revision != revision, $"IX's figure-eight expands within the limits ({shown.Tree.Instances} instances, {shown.Tree.Boxes} boxes){string.Concat(shown.Tree.Problems.Take(3).Select(p => "; " + p))}");
+        check(shown.Plaque.Contains("Nœud en huit") && shown.Plaque.Contains("4_1 · 4 croisements · writhe 0") && shown.Plaque.Contains("Jones : t^-2 - t^-1 + 1 - t + t^2")
+            && shown.Plaque.Contains("calculé par IX"), $"the plaque says what IX says of it: {shown.Plaque}");
+        check(beads.Count > 150 && beads.Any(b => Is(b.Color, 1f, 0.62f, 0.2f)) && beads.Any(b => Is(b.Color, 0.3f, 0.55f, 1f)),
+            $"the rope is {beads.Count} beads along IX's path, amber in front of the knot's plane and blue behind");
+        var reach = beads.Count == 0 ? 0 : beads.Max(b => MathF.Max(MathF.Abs(b.Centre.X), MathF.Max(MathF.Abs(b.Centre.Y), MathF.Abs(b.Centre.Z))) + b.Size.X / 2);
+        check(reach is > 0.39f and < 0.44f, $"the knot stands 0.8 m at most, about its centre (reaches {reach:F3} m)");
+        var turned = new Dictionary<string, Pose>();
+        office.Pose(clock + 3.6, turned);
+        var swing = Enumerable.Range(0, 64).Select(i => { var p = new Dictionary<string, Pose>(); office.Pose(clock + 0.25 * i, p); return MathF.Atan2(p["ix-atelier/knot"].Transform.M13, p["ix-atelier/knot"].Transform.M11); }).ToList();
+        check(shown.Poses.TryGetValue("ix-atelier/knot", out var a) && turned.TryGetValue("ix-atelier/knot", out var b2) && !a.Transform.Equals(b2.Transform)
+            && swing.Max() > 1.1f && swing.Min() < -1.1f && swing.All(r => MathF.Abs(r) <= 1.23f),
+            $"the knot swings on its stand, 70° either side of its face ({swing.Min() * 180 / MathF.PI:F0}° to {swing.Max() * 180 / MathF.PI:F0}°)");
+
+        office.Update(new("en", false, []));
+        var english = Look();
+        check(english.Plaque.Contains("Figure-eight knot") && english.Plaque.Contains("amber in front"), $"in English: {english.Plaque}");
+        office.Update(new("fr", false, []));
+
+        Write("""{"format":"delta-ix-geometry","v":1,"source":"ix_knot","at":"2026-11-14T07:00:00Z","error":"IX unavailable: no ix-mcp on the PATH"}""");
+        var unavailable = Look();
+        check(unavailable.Tree.Valid && unavailable.Plaque.Contains("IX indisponible") && unavailable.Plaque.Contains("no ix-mcp") && unavailable.Knot is null
+            && !unavailable.Poses.ContainsKey("ix-atelier/knot"), $"a document that says IX was unavailable takes the knot away and says why ({unavailable.Plaque})");
+
+        var points = figureEight.IndexOf("\"points\":[", StringComparison.Ordinal) + "\"points\":[".Length;
+        var bad = new (string What, string Text)[]
+        {
+            ("another version", figureEight.Replace("\"v\":1", "\"v\":2")),
+            ("another format", figureEight.Replace("delta-ix-geometry", "ix-geometry")),
+            ("a flat point", figureEight.Insert(points, "[1,2],")),
+            ("a point far away", figureEight.Insert(points, "[1,2000,3],")),
+            ("a number as text", figureEight.Insert(points, "[1,\"2\",3],")),
+            ("too many points", figureEight.Insert(points, string.Concat(Enumerable.Repeat("[0,0,0],", 4096)))),
+            ("nine ropes", figureEight.Replace("\"ropes\":[", "\"ropes\":[" + string.Concat(Enumerable.Repeat("{\"closed\":false,\"points\":[[0,0,0],[1,1,1]]},", 8)))),
+            ("a control character", figureEight.Replace("Nœud en huit", "Nœud\\nen huit")),
+            ("crossings beyond", figureEight.Replace("\"crossings\":4", "\"crossings\":99")),
+            ("no radius", figureEight.Replace("\"radius\":0.28", "\"radius\":0")),
+            ("more than 512 KB", figureEight + new string(' ', 512 * 1024)),
+            ("not JSON", "IX is down"),
+        };
+        foreach (var (what, text) in bad)
+        {
+            Write(figureEight);
+            Look();
+            Write(text);
+            var refused = Look();
+            check(refused.Tree.Valid && refused.Plaque.Contains("Géométrie refusée") && refused.Knot is null && !refused.Poses.ContainsKey("ix-atelier/knot"),
+                $"{what}: refused, and the knot it replaced goes ({refused.Plaque})");
+        }
+
+        File.Delete(doc);
+        var gone = Look();
+        check(gone.Plaque.Contains("En attente d'IX") && gone.Knot is null, "a document taken away leaves the stand waiting");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", before);
         try { Directory.Delete(dir, true); } catch (IOException) { }
     }
 }

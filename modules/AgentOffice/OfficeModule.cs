@@ -28,15 +28,18 @@ public sealed class OfficeModule : IOfficeModule
 
     private OfficeState state = new("en", false, []);
     private bool initialized;
+    private int layoutRevision;
+    private readonly IxAtelier atelier = new(); // the IX workshop's stand in the hall, which this module also draws (IxAtelier.cs)
 
     public string Id => "agent-office";
 
-    public int Revision { get; private set; }
+    public int Revision => HashCode.Combine(layoutRevision, atelier.Revision);
 
     public void Initialize()
     {
         if (initialized) throw new InvalidOperationException("The office is already initialized.");
         initialized = true;
+        atelier.Poll(0);
     }
 
     public void Update(OfficeState next)
@@ -48,10 +51,16 @@ public sealed class OfficeModule : IOfficeModule
         foreach (var s in next.Sessions) { layout.Add(s.Id); layout.Add(s.Name); layout.Add(s.WorkspaceId); layout.Add(s.WorkspaceTitle); layout.Add(s.Started); }
         if (next.Sessions.Count > MaxDrawn) layout.Add(next.Selected); // beyond MaxDrawn, the selection chooses who is drawn
         state = next;
-        Revision = layout.ToHashCode();
+        layoutRevision = layout.ToHashCode();
     }
 
     public WidgetScene Scene()
+    {
+        var office = OfficeScene();
+        return new([.. office.Library, .. atelier.Library(state.Language)], [.. office.Roots, atelier.Root(state.Language)]);
+    }
+
+    private WidgetScene OfficeScene()
     {
         Ready();
         var roots = new List<UsePiece>();
@@ -122,6 +131,8 @@ public sealed class OfficeModule : IOfficeModule
     public void Pose(double seconds, IDictionary<string, Pose> poses)
     {
         Ready();
+        atelier.Poll(seconds);
+        atelier.Pose(seconds, poses);
         var t = (float)seconds;
         foreach (var s in Kept(state))
         {
