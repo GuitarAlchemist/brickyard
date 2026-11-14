@@ -16,6 +16,7 @@ var origamiSamples = []struct{ file, input, report string }{
 	{"testdata/origami/half-then-quarter.origami", "sequence", "testdata/ix-origami-half-then-quarter.json"},
 	{"testdata/origami/wrong-expectation.origami", "sequence", "testdata/ix-origami-wrong-expectation.json"},
 	{"testdata/origami/flipped-crease.fold", "fold", "testdata/ix-origami-flipped-crease.json"},
+	{"testdata/origami/crane.fold", "fold", "testdata/ix-origami-crane.json"}, // Rabbit Ear's layout, see NOTICE.md
 }
 
 func TestRecordIXOrigami(t *testing.T) {
@@ -73,7 +74,27 @@ func TestTheTableKeepsIXsVerdicts(t *testing.T) {
 		}
 		docs[i] = doc
 	}
-	half, wrong, flipped := docs[0], docs[1], docs[2]
+	half, wrong, flipped, crane := docs[0], docs[1], docs[2], docs[3]
+	// Rabbit Ear's crane holds its folded form at the top level and its crease pattern in the frame: the pattern is the
+	// unit square, the folded form the narrower shape, and the 838 orders IX checked come with it.
+	low, high := [2]float64{9, 9}, [2]float64{-9, -9}
+	for _, v := range crane.Folded {
+		low, high = [2]float64{min(low[0], v[0]), min(low[1], v[1])}, [2]float64{max(high[0], v[0]), max(high[1], v[1])}
+	}
+	square := 0
+	for _, v := range crane.Pattern.Vertices {
+		if (v[0] == 0 || v[0] == 1) && (v[1] == 0 || v[1] == 1) {
+			square++
+		}
+	}
+	if crane.Name != "crane" || !*crane.OK || len(crane.Findings) != 0 || crane.MaxLayers != 28 || len(crane.Pattern.Faces) != 59 ||
+		len(crane.Orders) != 838 || square != 4 || low[1] < 0.08 || high[1] > 0.92 {
+		t.Fatalf("crane: ok %v, %d findings, %d layers, %d faces, %d orders, %d corners of the square, folded within %v..%v",
+			*crane.OK, len(crane.Findings), crane.MaxLayers, len(crane.Pattern.Faces), len(crane.Orders), square, low, high)
+	}
+	if len(half.Orders) == 0 || half.Orders[0][2] == 0 {
+		t.Fatalf("half-then-quarter: the replayed fold's orders are kept, %v", half.Orders)
+	}
 	if half.Name != "half-then-quarter" || !*half.OK || half.Holds == nil || !*half.Holds || len(half.Findings) != 0 || half.MaxLayers != 4 ||
 		len(half.Pattern.Edges) != 12 || len(half.Folded) != len(half.Pattern.Vertices) || half.Input != "sequence" {
 		t.Fatalf("half-then-quarter: %+v", half)
@@ -152,6 +173,17 @@ func TestTheTableRefusesBadReports(t *testing.T) {
 		}},
 		{"a control character in the name", "control", 2, func(_, f map[string]any) { f["file_title"] = "flipped\ncrease" }},
 		{"a sequence without its replay", "no replayed sequence", 0, func(r, _ map[string]any) { delete(r, "sequence") }},
+		{"an order of a face beyond", "face order 3 is [0, 59, 1]", 3, func(_, f map[string]any) { f["faceOrders"].([]any)[3] = []any{0.0, 59.0, 1.0} }},
+		{"an order of a face with itself", "face order 0 is [2, 2, 1]", 3, func(_, f map[string]any) { f["faceOrders"].([]any)[0] = []any{2.0, 2.0, 1.0} }},
+		{"an order that is no side", "face order 1 is [0, 2, 2]", 3, func(_, f map[string]any) { f["faceOrders"].([]any)[1] = []any{0.0, 2.0, 2.0} }},
+		{"an order in fractions", "whole numbers", 3, func(_, f map[string]any) { f["faceOrders"].([]any)[1] = []any{0.0, 2.5, 1.0} }},
+		{"too many orders", "more than 4096", 3, func(_, f map[string]any) {
+			o := f["faceOrders"].([]any)
+			for len(o) <= origamiMaxOrders {
+				o = append(o, o...)
+			}
+			f["faceOrders"] = o
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

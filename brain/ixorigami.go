@@ -16,10 +16,13 @@ package main
 //	 "rejected_by": [IX's rules that rejected it], "max_layers",
 //	 "pattern": {"vertices": [[x, y]], "edges": [[a, b]], "assignment": ["M", "V", "B", ...], "faces": [[a, b, c, ...]]},
 //	 "folded": [[x, y]] (the folded frame's vertices, by the pattern's indices; absent when there is none),
+//	 "orders": [[f, g, s]] (the FOLD's faceOrders for the folded state, which IX's layer rules checked: s = 1 when
+//	           face f lies on the side face g's normal points to, -1 opposite; absent without faces or a folded state),
 //	 "findings": [{"rule", "where": "edge" or "vertex" or "", "ids": [...], "count", "value", "detail"}]}
 //
 // or {"format", "v": 1, "source", "at", "error"}. Bounds: 1024 vertices, 2048 edges, 1024 faces of at most 64
-// vertices, coordinates within ±16, 32 findings of 64 ids, texts of 120 characters.
+// vertices, 4096 face orders, coordinates within ±16, 32 findings of 64 ids, texts of 120 characters. "orders" came
+// after the first documents; a reader of v 1 that does not know it draws the fold without its layers.
 
 import (
 	"context"
@@ -30,6 +33,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +45,7 @@ const (
 	origamiMaxEdges    = 2048
 	origamiMaxFaces    = 1024
 	origamiMaxFaceSize = 64
+	origamiMaxOrders   = 4096
 	origamiMaxCoord    = 16
 	origamiMaxFindings = 32
 	origamiMaxIDs      = 64
@@ -77,18 +82,29 @@ type origamiDoc struct {
 	MaxLayers  int              `json:"max_layers,omitempty"`
 	Pattern    *origamiPattern  `json:"pattern,omitempty"`
 	Folded     [][2]float64     `json:"folded,omitempty"`
+	Orders     [][3]int         `json:"orders,omitempty"`
 	Findings   []origamiFinding `json:"findings,omitempty"`
 	Error      string           `json:"error,omitempty"`
 }
 
-// A FOLD object as far as the table draws it: the crease pattern at the top level, the folded state in file_frames[0].
+// A FOLD object as far as the table draws it: the crease pattern at the top level and the folded state in
+// file_frames[0], as IX's replayed sequences have them, or the other way round when the top level is classed
+// "foldedForm" and the frame "creasePattern", as Rabbit Ear's files have them (the frame inheriting the edges and faces).
+// faceOrders, [f, g, s], are the folded state's: s = 1 when face f lies on the side g's normal points to, -1 opposite.
 type foldObject struct {
 	Title      string       `json:"file_title"`
+	Classes    []string     `json:"frame_classes"`
 	Vertices   [][]float64  `json:"vertices_coords"`
 	Edges      [][]int      `json:"edges_vertices"`
 	Assignment []string     `json:"edges_assignment"`
 	Faces      [][]int      `json:"faces_vertices"`
+	Orders     [][]float64  `json:"faceOrders"`
 	Frames     []foldObject `json:"file_frames"`
+}
+
+// rabbitEarLayout: the folded form at the top level, the crease pattern in the first frame.
+func (f foldObject) rabbitEarLayout() bool {
+	return len(f.Frames) > 0 && slices.Contains(f.Classes, "foldedForm") && slices.Contains(f.Frames[0].Classes, "creasePattern")
 }
 
 // What ix_origami_check reports, as far as the table explains it.
@@ -170,7 +186,7 @@ func origamiFromIX(input string, given []byte, answer []byte, name string, now t
 	if fold.Title != "" && input == "fold" {
 		name = fold.Title
 	}
-	pattern, folded, err := origamiPatternOf(fold)
+	pattern, folded, orders, err := origamiPatternOf(fold)
 	if err != nil {
 		return origamiDoc{}, err
 	}
@@ -179,7 +195,7 @@ func origamiFromIX(input string, given []byte, answer []byte, name string, now t
 	}
 	doc := origamiDoc{
 		Format: origamiFormat, V: 1, Source: "ix_origami_check", At: now.UTC().Format(time.RFC3339), Name: name, Input: input,
-		OK: r.OK, MaxLayers: r.Layers.Cells.MaxLayers, Pattern: pattern, Folded: folded,
+		OK: r.OK, MaxLayers: r.Layers.Cells.MaxLayers, Pattern: pattern, Folded: folded, Orders: orders,
 	}
 	for _, rule := range r.RejectedBy {
 		if origamiTextOK("rule", rule) == nil && len(doc.RejectedBy) < origamiMaxFindings {
@@ -250,7 +266,47 @@ func origamiFromIX(input string, given []byte, answer []byte, name string, now t
 	return doc, nil
 }
 
-func origamiPatternOf(fold foldObject) (*origamiPattern, [][2]float64, error) {
+func origamiPatternOf(fold foldObject) (*origamiPattern, [][2]float64, [][3]int, error) {
+	creases, flat := fold.Vertices, [][]float64(nil) // the crease pattern's vertices, the folded state's
+	rawOrders := fold.Orders
+	if len(fold.Frames) > 0 {
+		flat, rawOrders = fold.Frames[0].Vertices, fold.Frames[0].Orders
+		if len(rawOrders) == 0 {
+			rawOrders = fold.Orders
+		}
+	}
+	if fold.rabbitEarLayout() {
+		creases, flat, rawOrders = fold.Frames[0].Vertices, fold.Vertices, fold.Orders
+	}
+	pattern, folded, err := origamiShapes(fold, creases, flat)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if folded == nil || len(pattern.Faces) == 0 {
+		return pattern, folded, nil, nil
+	}
+	if len(rawOrders) > origamiMaxOrders {
+		return nil, nil, nil, fmt.Errorf("%d face orders, more than %d", len(rawOrders), origamiMaxOrders)
+	}
+	var orders [][3]int
+	for i, o := range rawOrders {
+		whole := func(x float64) bool { return x == math.Trunc(x) && !math.IsInf(x, 0) }
+		if len(o) != 3 || !whole(o[0]) || !whole(o[1]) || !whole(o[2]) {
+			return nil, nil, nil, fmt.Errorf("face order %d is not [f, g, s] in whole numbers", i)
+		}
+		f, g, s := int(o[0]), int(o[1]), int(o[2])
+		if f < 0 || g < 0 || f >= len(pattern.Faces) || g >= len(pattern.Faces) || f == g || s < -1 || s > 1 {
+			return nil, nil, nil, fmt.Errorf("face order %d is [%d, %d, %d], not two of the %d faces and -1, 0 or 1", i, f, g, s, len(pattern.Faces))
+		}
+		if s != 0 { // 0: the file does not know
+			orders = append(orders, [3]int{f, g, s})
+		}
+	}
+	return pattern, folded, orders, nil
+}
+
+// origamiShapes: the crease pattern's vertices, edges and faces, and the folded state's vertices, checked.
+func origamiShapes(fold foldObject, creases, flat [][]float64) (*origamiPattern, [][2]float64, error) {
 	coords := func(what string, raw [][]float64) ([][2]float64, error) {
 		if len(raw) == 0 || len(raw) > origamiMaxVertices {
 			return nil, fmt.Errorf("%s: %d vertices, not 1 to %d", what, len(raw), origamiMaxVertices)
@@ -269,7 +325,7 @@ func origamiPatternOf(fold foldObject) (*origamiPattern, [][2]float64, error) {
 		}
 		return out, nil
 	}
-	vertices, err := coords("the crease pattern", fold.Vertices)
+	vertices, err := coords("the crease pattern", creases)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -305,8 +361,8 @@ func origamiPatternOf(fold foldObject) (*origamiPattern, [][2]float64, error) {
 		p.Faces = append(p.Faces, append([]int(nil), f...))
 	}
 	var folded [][2]float64
-	if len(fold.Frames) > 0 && len(fold.Frames[0].Vertices) > 0 {
-		if folded, err = coords("the folded state", fold.Frames[0].Vertices); err != nil {
+	if len(flat) > 0 {
+		if folded, err = coords("the folded state", flat); err != nil {
 			return nil, nil, err
 		}
 		if len(folded) != n {

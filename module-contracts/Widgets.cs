@@ -56,6 +56,11 @@ public sealed record BoxPiece(Vector3 Centre, Vector3 Size, Vector3 Color, uint 
 
 public sealed record TextPiece(string Text, Vector3 Centre, float Width, Vector3 Color) : Piece;
 
+// A smooth surface: triangles whose vertices carry their own normal and colour, such as a rope's strands or a sheet of
+// paper, drawn with the boxes of the same mesh in the given material. Each triangle winds about the normals of its
+// vertices (counter-clockwise seen from outside); Widgets.Expand refuses a degenerate one or one wound against them.
+public sealed record SurfacePiece(IReadOnlyList<ModuleTriangle> Triangles, uint Material = 0) : Piece;
+
 // An instance of a widget, named for its path; its arguments left out take their defaults. Click, when given, is what a
 // click on it, or on anything under it without a Click of its own, asks the host to show.
 public sealed record UsePiece(string Name, WidgetId Widget, Matrix4x4 Place, IReadOnlyDictionary<string, WidgetValue>? Args = null,
@@ -75,6 +80,9 @@ public sealed record Widget(WidgetId Id, IReadOnlyList<WidgetParam> Params, Func
 public sealed record WidgetLimits(int MaxDepth, int MaxInstances, int MaxBoxes, int MaxText, int MaxMeshes)
 {
     public static WidgetLimits Standard { get; } = new(8, 2048, 40000, 256, 512);
+
+    // The surfaces' triangles in all.
+    public int MaxTriangles { get; init; } = 120_000;
 }
 
 public sealed record WidgetProblem(string Path, string Widget, string Kind, string Message)
@@ -86,7 +94,11 @@ public sealed record WidgetProblem(string Path, string Widget, string Kind, stri
 // equal for every instance of the same widget with the same arguments.
 public sealed record WidgetInstance(string Path, WidgetId Widget, string Mesh, Matrix4x4 Local, string? Click,
     IReadOnlyList<BoxPiece> Boxes, IReadOnlyList<TextPiece> Text, IReadOnlyDictionary<string, Matrix4x4> Anchors,
-    IReadOnlyList<WidgetInstance> Children);
+    IReadOnlyList<WidgetInstance> Children)
+{
+    // Its smooth surfaces, part of the same mesh.
+    public IReadOnlyList<SurfacePiece> Surfaces { get; init; } = [];
+}
 
 // What a module shows: its library and the widgets it places at the root of the world.
 public sealed record WidgetScene(IReadOnlyList<Widget> Library, IReadOnlyList<UsePiece> Roots);
@@ -95,6 +107,8 @@ public sealed record WidgetScene(IReadOnlyList<Widget> Library, IReadOnlyList<Us
 public sealed record WidgetTree(IReadOnlyList<WidgetInstance> Roots, IReadOnlyList<WidgetProblem> Problems, int Instances, int Boxes, int Meshes)
 {
     public bool Valid => Problems.Count == 0;
+
+    public int Triangles { get; init; }
 }
 
 // A path's pose for a frame: Transform applies in the instance's own frame, before its placement, and moves everything
@@ -134,7 +148,7 @@ public static class Widgets
         private readonly List<WidgetProblem> problems = [];
         private readonly HashSet<string> meshes = [];
         private Dictionary<WidgetId, Widget> library = [];
-        private int instances, boxes, text;
+        private int instances, boxes, text, triangles;
         private bool spent;
 
         public WidgetTree Run()
@@ -145,7 +159,7 @@ public static class Widgets
             }
 
             var roots = Uses(scene.Roots.Select(u => (Piece)u).ToList(), "", 0, [], "");
-            return new(roots, problems, instances, boxes, meshes.Count);
+            return new(roots, problems, instances, boxes, meshes.Count) { Triangles = triangles };
         }
 
         private List<WidgetInstance> Uses(IReadOnlyList<Piece> pieces, string parent, int depth, List<string> stack, string parentPath)
@@ -183,6 +197,7 @@ public static class Widgets
 
             var ownBoxes = new List<BoxPiece>();
             var ownText = new List<TextPiece>();
+            var ownSurfaces = new List<SurfacePiece>();
             foreach (var piece in built.Pieces)
             {
                 switch (piece)
@@ -195,6 +210,11 @@ public static class Widgets
                         if (++text > limits.MaxText) { Spend(path, widget.Id, "too-much-text", $"more than {limits.MaxText} labels"); return Empty(); }
                         ownText.Add(t);
                         break;
+                    case SurfacePiece s when Surface(s, path, widget.Id):
+                        triangles += s.Triangles.Count;
+                        if (triangles > limits.MaxTriangles) { Spend(path, widget.Id, "too-many-triangles", $"more than {limits.MaxTriangles} triangles"); return Empty(); }
+                        ownSurfaces.Add(s with { Triangles = [.. s.Triangles] }); // a copy: what is checked is what is drawn
+                        break;
                 }
             }
 
@@ -205,7 +225,7 @@ public static class Widgets
                 else Problem(path, widget.Id, "bad-shape", $"anchor '{name}' is not finite");
             }
 
-            if ((ownBoxes.Count > 0 || ownText.Count > 0) && meshes.Add(key) && meshes.Count > limits.MaxMeshes)
+            if ((ownBoxes.Count > 0 || ownText.Count > 0 || ownSurfaces.Count > 0) && meshes.Add(key) && meshes.Count > limits.MaxMeshes)
             {
                 Spend(path, widget.Id, "too-many-meshes", $"more than {limits.MaxMeshes} distinct meshes");
                 return Empty();
@@ -236,9 +256,31 @@ public static class Widgets
                 children[at] = target with { Children = [.. target.Children, joined] };
             }
 
-            var mesh = ownBoxes.Count > 0 || ownText.Count > 0 ? key : "";
-            return new(path, widget.Id, mesh, use.Place, use.Click, ownBoxes, ownText, anchors, children);
+            var mesh = ownBoxes.Count > 0 || ownText.Count > 0 || ownSurfaces.Count > 0 ? key : "";
+            return new(path, widget.Id, mesh, use.Place, use.Click, ownBoxes, ownText, anchors, children) { Surfaces = ownSurfaces };
         }
+
+        // A surface's triangles: finite, within 16 m of the widget's origin, unit normals, colours in [0, 1], a known
+        // material, and each triangle wound about its vertices' normals and not degenerate.
+        private bool Surface(SurfacePiece s, string path, WidgetId id)
+        {
+            if (s.Triangles is null || s.Material > 5) { Problem(path, id, "bad-shape", "a surface needs its triangles and a known material"); return false; }
+            foreach (var t in s.Triangles)
+            {
+                var cross = Vector3.Cross(t.B.Position - t.A.Position, t.C.Position - t.A.Position);
+                if (!Corner(t.A) || !Corner(t.B) || !Corner(t.C) || cross.LengthSquared() < 1e-16f ||
+                    Vector3.Dot(cross, t.A.Normal) <= 0 || Vector3.Dot(cross, t.B.Normal) <= 0 || Vector3.Dot(cross, t.C.Normal) <= 0)
+                {
+                    Problem(path, id, "bad-shape", "a surface's triangle is degenerate, wound against its normals, or has a vertex out of bounds");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool Corner(ModuleVertex v) =>
+            Finite(v.Position) && v.Position.Length() < 16 && Finite(v.Normal) && MathF.Abs(v.Normal.LengthSquared() - 1) < 0.002f && Unit(v.Color);
 
         // Each parameter, given or defaulted, checked; or null, with the problems recorded.
         private Dictionary<string, WidgetValue>? Resolve(Widget widget, IReadOnlyDictionary<string, WidgetValue>? given, string path)

@@ -137,6 +137,7 @@ public sealed class OfficeModule : IOfficeModule
         atelier.Poll(seconds);
         origami.Poll(seconds);
         atelier.Pose(seconds, poses);
+        origami.Pose(seconds, poses);
         var t = (float)seconds;
         foreach (var s in Kept(state))
         {

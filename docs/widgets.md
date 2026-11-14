@@ -13,6 +13,9 @@ The model follows GA's Lego demo (ga-brutal, `Experiments/Brutal/Lego`, MIT). On
 - **Pieces:**
   - `BoxPiece`: centred, as `Boxes.Add` draws it, so it has the robot's rounded edges and materials.
   - `TextPiece`: a label in shallow boxes, as Gaia's.
+  - `SurfacePiece`: triangles whose vertices carry their own normal and colour, in a material, for what boxes draw
+    badly (a rope, a sheet of paper). Each is checked (finite, within 16 m, unit normals, colours in [0, 1], wound about
+    its normals, not degenerate) and counted against `MaxTriangles` (120 000).
   - `UsePiece`: another widget, or the same one with other arguments, named and placed.
   - `AttachPiece`: a widget fixed to an anchor of an instance this widget uses.
 - **Composition:**

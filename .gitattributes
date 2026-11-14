@@ -2,3 +2,5 @@
 *.go text eol=lf
 # Git runs hooks with sh, which a carriage return at the end of each line breaks.
 .githooks/* text eol=lf
+# The crane is Rabbit Ear's file byte for byte (brain/testdata/origami/NOTICE.md gives its sha256).
+brain/testdata/origami/crane.fold -text

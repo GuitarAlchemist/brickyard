@@ -26,6 +26,7 @@ try
     Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", Path.Combine(Path.GetTempPath(), "delta-no-atelier-" + Guid.NewGuid().ToString("N"), "ix-atelier.json"));
     Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", Path.Combine(Path.GetTempPath(), "delta-no-origami-" + Guid.NewGuid().ToString("N"), "ix-origami.json"));
     Expansion(Check);
+    Surfaces(Check);
     Stage(Check);
     Activities(Check);
     Known(Check);
@@ -95,6 +96,44 @@ static void Expansion(Action<bool, string> check)
     var glove = Find(attached.Roots, "root/arm/glove");
     check(attached.Valid && glove is not null && Matrix4x4.Decompose(glove.Local, out _, out _, out var at) && Near(at, new(0, -0.3f, 0)),
         "a widget fixed to an anchor becomes the anchored instance's child, in the anchor's frame");
+}
+
+// Smooth surfaces: triangles with their own normals and colours, checked as boxes are, counted against their own budget.
+static void Surfaces(Action<bool, string> check)
+{
+    WidgetId sheet = new("sheet", 1);
+    var up = Vector3.UnitZ;
+    ModuleVertex V(float x, float y, Vector3? normal = null, Vector3? color = null, float z = 0) => new(new(x, y, z), normal ?? up, color ?? new(0.9f, 0.9f, 0.8f));
+    ModuleTriangle Good() => new(V(0, 0), V(0.1f, 0), V(0, 0.1f));
+    WidgetTree Of(List<ModuleTriangle> triangles, uint material = 0, WidgetLimits? limits = null) =>
+        Widgets.Expand(One([new(sheet, [], _ => new([new SurfacePiece(triangles, material)]))], sheet), limits ?? WidgetLimits.Standard);
+
+    List<ModuleTriangle> given = [Good(), new(V(0.1f, 0), V(0.1f, 0.1f), V(0, 0.1f))];
+    var tree = Of(given);
+    var root = tree.Roots.Count == 1 ? tree.Roots[0] : null;
+    given.Clear();
+    check(tree.Valid && tree.Triangles == 2 && root is { Mesh.Length: > 0, Surfaces: [{ Triangles.Count: 2 }] },
+        $"a surface of two triangles expands into the instance's own mesh, counted ({tree.Triangles} triangles)");
+    check(root?.Surfaces[0].Triangles.Count == 2, "the instance keeps a copy of the triangles it checked, whatever becomes of the module's list");
+
+    var bad = new (string What, ModuleTriangle Triangle, uint Material)[]
+    {
+        ("wound against its normals", new(V(0, 0), V(0, 0.1f), V(0.1f, 0)), 0),
+        ("degenerate", new(V(0, 0), V(0.1f, 0), V(0.2f, 0)), 0),
+        ("a vertex 20 m away", new(V(0, 0), V(20f, 0), V(0, 0.1f)), 0),
+        ("a normal that is not a unit", new(V(0, 0, new Vector3(0, 0, 2)), V(0.1f, 0), V(0, 0.1f)), 0),
+        ("a colour beyond 1", new(V(0, 0, color: new Vector3(2, 0, 0)), V(0.1f, 0), V(0, 0.1f)), 0),
+        ("a vertex not finite", new(V(0, 0, z: float.NaN), V(0.1f, 0), V(0, 0.1f)), 0),
+        ("an unknown material", Good(), 9),
+    };
+    foreach (var (what, triangle, material) in bad)
+    {
+        var refused = Of([triangle], material);
+        check(!refused.Valid && refused.Problems.Any(p => p.Kind == "bad-shape"), $"a surface's triangle {what} is refused");
+    }
+
+    var spent = Of([Good(), Good(), Good()], 0, WidgetLimits.Standard with { MaxTriangles = 2 });
+    check(!spent.Valid && spent.Problems.Any(p => p.Kind == "too-many-triangles"), "more triangles than the budget stops the expansion");
 }
 
 static void Stage(Action<bool, string> check)
@@ -483,14 +522,26 @@ static void Atelier(Action<bool, string> check, string image)
         Write(figureEight);
         var revision = office.Revision;
         var shown = Look();
-        var beads = shown.Knot?.Boxes ?? [];
-        static bool Is(Vector3 c, float r, float g, float b) => Near(c, new(r, g, b));
-        check(shown.Tree.Valid && office.Revision != revision, $"IX's figure-eight expands within the limits ({shown.Tree.Instances} instances, {shown.Tree.Boxes} boxes){string.Concat(shown.Tree.Problems.Take(3).Select(p => "; " + p))}");
+        var rope = shown.Knot?.Surfaces.SelectMany(s => s.Triangles).SelectMany(t => new[] { t.A, t.B, t.C }).ToList() ?? [];
+        check(shown.Tree.Valid && office.Revision != revision, $"IX's figure-eight expands within the limits ({shown.Tree.Instances} instances, {shown.Tree.Boxes} boxes, {shown.Tree.Triangles} triangles){string.Concat(shown.Tree.Problems.Take(3).Select(p => "; " + p))}");
         check(shown.Plaque.Contains("Nœud en huit") && shown.Plaque.Contains("4_1 · 4 croisements · writhe 0") && shown.Plaque.Contains("Jones : t^-2 - t^-1 + 1 - t + t^2")
-            && shown.Plaque.Contains("calculé par IX"), $"the plaque says what IX says of it: {shown.Plaque}");
-        check(beads.Count > 150 && beads.Any(b => Is(b.Color, 1f, 0.62f, 0.2f)) && beads.Any(b => Is(b.Color, 0.3f, 0.55f, 1f)),
-            $"the rope is {beads.Count} beads along IX's path, amber in front of the knot's plane and blue behind");
-        var reach = beads.Count == 0 ? 0 : beads.Max(b => MathF.Max(MathF.Abs(b.Centre.X), MathF.Max(MathF.Abs(b.Centre.Y), MathF.Abs(b.Centre.Z))) + b.Size.X / 2);
+            && shown.Plaque.Contains("chemin calculé par IX") && shown.Plaque.Contains("pas simulée"), $"the plaque says what IX says of it, and what is drawn: {shown.Plaque}");
+        check(shown.Knot is { Boxes.Count: 0 } && rope.Count > 3 * 20000 && rope.Count(v => v.Color.X > v.Color.Z * 1.4f && v.Color.Y > v.Color.Z) > rope.Count * 3 / 4
+            && rope.Any(v => v.Color.X > v.Color.Y * 3),
+            $"the rope is a smooth hemp surface of {rope.Count / 3} triangles, no beads, with its ends whipped in red twine");
+
+        // The rope goes through IX's points: each of them, scaled as the stand scales the knot, has the rope's surface
+        // within the rope's radius, and the rope is never further from them than that.
+        var document = System.Text.Json.JsonDocument.Parse(figureEight).RootElement;
+        var ix = document.GetProperty("ropes")[0].GetProperty("points").EnumerateArray().Select(p => new Vector3(p[0].GetSingle(), p[1].GetSingle(), p[2].GetSingle())).ToArray();
+        var (low, high) = (ix.Aggregate(Vector3.Min), ix.Aggregate(Vector3.Max));
+        var scale = 0.8f / MathF.Max(high.X - low.X, MathF.Max(high.Y - low.Y, high.Z - low.Z));
+        var radius = document.GetProperty("radius").GetSingle() * scale;
+        var near = ix.Where((_, i) => i % 6 == 0).Select(p => rope.Min(v => Vector3.Distance(v.Position, (p - ((low + high) / 2)) * scale))).Max();
+        var far = rope.Where((_, i) => i % 97 == 0).Select(v => ix.Min(p => Vector3.Distance(v.Position, (p - ((low + high) / 2)) * scale))).Max();
+        check(rope.Count > 0 && near < radius && far < radius * 1.6f,
+            $"the rope follows IX's path: every point IX gives has the rope within {near * 1000:F1} mm, under its radius {radius * 1000:F1} mm, and no part of the rope strays more than {far * 1000:F1} mm");
+        var reach = rope.Count == 0 ? 0 : rope.Max(v => MathF.Max(MathF.Abs(v.Position.X), MathF.Max(MathF.Abs(v.Position.Y), MathF.Abs(v.Position.Z))));
         check(reach is > 0.39f and < 0.44f, $"the knot stands 0.8 m at most, about its centre (reaches {reach:F3} m)");
         var turned = new Dictionary<string, Pose>();
         office.Pose(clock + 3.6, turned);
@@ -501,7 +552,7 @@ static void Atelier(Action<bool, string> check, string image)
 
         office.Update(new("en", false, []));
         var english = Look();
-        check(english.Plaque.Contains("Figure-eight knot") && english.Plaque.Contains("amber in front"), $"in English: {english.Plaque}");
+        check(english.Plaque.Contains("Figure-eight knot") && english.Plaque.Contains("three-strand rope"), $"in English: {english.Plaque}");
         office.Update(new("fr", false, []));
 
         Write("""{"format":"delta-ix-geometry","v":1,"source":"ix_knot","at":"2026-11-14T07:00:00Z","error":"IX unavailable: no ix-mcp on the PATH"}""");
@@ -558,7 +609,7 @@ static void Origami(Action<bool, string> check, string image)
     var before = Environment.GetEnvironmentVariable("DELTA_IX_ORIGAMI");
     Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", doc);
     string Fixture(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "testdata", $"ix-origami-{name}.json"));
-    var (flipped, half, wrong) = (Fixture("flipped-crease"), Fixture("half-then-quarter"), Fixture("wrong-expectation"));
+    var (flipped, half, wrong, crane) = (Fixture("flipped-crease"), Fixture("half-then-quarter"), Fixture("wrong-expectation"), Fixture("crane"));
     var stamp = DateTime.UtcNow;
     void Write(string text)
     {
@@ -572,17 +623,33 @@ static void Origami(Action<bool, string> check, string image)
         var office = session.Module;
         var clock = 100.0;
         office.Update(new("fr", false, []));
-        (WidgetTree Tree, string Plaque, WidgetInstance? Pattern, WidgetInstance? Folded) Look()
+        (WidgetTree Tree, string Plaque, WidgetInstance? Pattern, WidgetInstance? Folded, WidgetInstance? Model, Dictionary<string, Pose> Poses) Look()
         {
             clock += 1.5;
             office.Pose(clock, new Dictionary<string, Pose>());
             var tree = Widgets.Expand(office.Scene());
+            var poses = new Dictionary<string, Pose>();
+            office.Pose(clock + 0.1, poses);
             var plaque = string.Join(" | ", Find(tree.Roots, "ix-origami")?.Text.Select(t => t.Text) ?? []);
-            return (tree, plaque, Find(tree.Roots, "ix-origami/pattern"), Find(tree.Roots, "ix-origami/folded"));
+            return (tree, plaque, Find(tree.Roots, "ix-origami/pattern"), Find(tree.Roots, "ix-origami/folded"), Find(tree.Roots, "ix-origami/model"), poses);
         }
 
-        static bool Has(WidgetInstance? board, float r, float g, float b) => board?.Boxes.Any(x => Near(x.Color, new(r, g, b))) == true;
-        static float Reach(WidgetInstance? board) => board is null ? 0 : board.Boxes.Skip(1).Max(x => MathF.Max(MathF.Abs(x.Centre.X), MathF.Abs(x.Centre.Y - 0.18f)));
+        static IEnumerable<ModuleVertex> Corners(WidgetInstance? w) => w?.Surfaces.SelectMany(s => s.Triangles).SelectMany(t => new[] { t.A, t.B, t.C }) ?? [];
+        static bool Has(WidgetInstance? board, float r, float g, float b) =>
+            board?.Boxes.Any(x => Near(x.Color, new(r, g, b))) == true || Corners(board).Any(v => Near(v.Color, new(r, g, b)));
+        static float Reach(WidgetInstance? board) => Corners(board).Select(v => MathF.Max(MathF.Abs(v.Position.X), MathF.Abs(v.Position.Y - 0.18f))).DefaultIfEmpty(0).Max();
+        static bool Cream(Vector3 c) => c.Y > c.X * 0.9f; // the sheet's back; its front, kami red, has little green
+        // The model's sides seen from in front (+z) and from behind: the colour of the highest upward side and of the lowest
+        // downward side, and how many layers it has.
+        static (Vector3 Front, Vector3 Back, int Layers) Sides(WidgetInstance? model)
+        {
+            var triangles = model?.Surfaces.SelectMany(s => s.Triangles).ToList() ?? [];
+            if (triangles.Count == 0) return (default, default, 0);
+            var upward = triangles.Where(t => t.A.Normal.Z > 0).ToList();
+            var downward = triangles.Where(t => t.A.Normal.Z < 0).ToList();
+            var layers = upward.Select(t => MathF.Round(t.A.Position.Z * 10000)).Distinct().Count();
+            return (upward.MaxBy(t => t.A.Position.Z)!.A.Color, downward.MinBy(t => t.A.Position.Z)!.A.Color, layers);
+        }
 
         var absent = Look();
         check(absent.Tree.Valid && absent.Plaque.Contains("En attente d'IX") && absent.Pattern is null, $"without a document the table waits for IX ({absent.Plaque})");
@@ -592,10 +659,44 @@ static void Origami(Action<bool, string> check, string image)
         check(refused.Tree.Valid && refused.Plaque.Contains("Origami · flipped-crease") && refused.Plaque.Contains("Refusé par IX : adjacency")
             && refused.Plaque.Contains("Couches : l'ordre déclaré contredit le pli à l'arête 7") && refused.Plaque.Contains("Maekawa : |M − V| ≠ 2 au sommet 3")
             && refused.Plaque.Contains("pas simulé"), $"IX's refusal and each finding in words: {refused.Plaque}");
-        check(refused.Pattern is not null && refused.Folded is not null && Has(refused.Pattern, 1f, 0.62f, 0.2f) && Has(refused.Pattern, 0.2f, 0.45f, 0.95f)
+        check(refused.Pattern is not null && Has(refused.Pattern, 1f, 0.62f, 0.2f) && Has(refused.Pattern, 0.2f, 0.45f, 0.95f)
             && !Has(refused.Pattern, 0.9f, 0.22f, 0.18f), "the pattern's valleys are blue, and the edge and the vertex at fault amber (no mountain is left in it)");
-        check(Reach(refused.Folded) < Reach(refused.Pattern) * 0.6f, $"the folded state, at the pattern's scale, is the quarter it folds to ({Reach(refused.Folded):F3} m against {Reach(refused.Pattern):F3} m)");
+        check(refused.Model is not null && refused.Folded is null && refused.Poses.ContainsKey("ix-origami/model"),
+            "with its faces and their orders, the folded state stands as a paper model on the table, turning, in place of a flat board");
 
+        // A document without the orders (as the first ones were) draws the folded state flat on a board, as before.
+        var unordered = System.Text.Json.Nodes.JsonNode.Parse(flipped)!.AsObject();
+        unordered.Remove("orders");
+        Write(unordered.ToJsonString());
+        var flat = Look();
+        check(flat.Model is null && flat.Folded is not null && !flat.Poses.ContainsKey("ix-origami/model") && Reach(flat.Folded) < Reach(flat.Pattern) * 0.6f,
+            $"without orders, the folded state lies on a board at the pattern's scale, the quarter it folds to ({Reach(flat.Folded):F3} m against {Reach(flat.Pattern):F3} m)");
+
+        // A valley fold in half brings the top half down over the bottom (IX's order puts face 1 over face 0, against
+        // face 1's normal, which the fold turned over): from in front the flap shows the sheet's back, and from behind
+        // so does the half that stayed; the red front is inside. The orders read the other way round would show red.
+        Write(wrong);
+        var valley = Sides(Look().Model);
+        check(valley.Layers == 2 && Cream(valley.Front) && Cream(valley.Back),
+            $"a valley fold in half: two layers, the sheet's back outside on both sides (front {valley.Front}, behind {valley.Back})");
+
+        Write(crane);
+        var bird = Look();
+        var (_, _, layers) = Sides(bird.Model);
+        var paper = Corners(bird.Model).ToList();
+        var height = paper.Count == 0 ? 0 : paper.Max(v => v.Position.Y) - paper.Min(v => v.Position.Y);
+        var width = paper.Count == 0 ? 0 : paper.Max(v => v.Position.X) - paper.Min(v => v.Position.X);
+        check(bird.Tree.Valid && bird.Plaque.Contains("Origami · crane") && bird.Plaque.Contains("Valide selon IX") && bird.Plaque.Contains("28 couches au plus")
+            && bird.Plaque.Contains("l'ordre de couches d'IX"), $"Rabbit Ear's crane, valid according to IX: {bird.Plaque}");
+        check(layers >= 28 && paper.Any(v => Cream(v.Color)) && paper.Any(v => !Cream(v.Color)) && MathF.Max(width, height) is > 0.35f and < 0.37f,
+            $"the crane in paper: {paper.Count / 3} triangles on {layers} layers (IX finds 28 in one place), both sides of the sheet, {width:F3} × {height:F3} m");
+        var pinBox = Find(bird.Tree.Roots, "ix-origami")?.Boxes.FirstOrDefault(b => MathF.Abs(b.Size.X - 0.005f) < 1e-4f);
+        var mount = bird.Model?.Local.Translation ?? default;
+        var lowest = paper.Count == 0 ? 0 : mount.Y + paper.Min(v => v.Position.Y);
+        check(pinBox is not null && MathF.Abs(pinBox.Centre.Y + (pinBox.Size.Y / 2) - mount.Y) < 1e-4f && MathF.Abs(lowest - 0.86f) < 0.002f,
+            $"the crane sits on a pin through the paper's centre, which it turns about, its lowest point 3 cm over the foot (at {lowest:F3} m)");
+
+        Write(flipped);
         office.Update(new("en", false, []));
         var english = Look();
         check(english.Plaque.Contains("Rejected by IX: adjacency") && english.Plaque.Contains("Layers: the stated order contradicts the crease at edge 7"), $"in English: {english.Plaque}");
@@ -628,7 +729,19 @@ static void Origami(Action<bool, string> check, string image)
             ("a finding placed nowhere known", flipped.Replace("\"where\":\"edge\"", "\"where\":\"face\"")),
             ("more than 1 MB", flipped + new string(' ', 1 << 20)),
             ("not JSON", "IX is down"),
+            ("an order of a face beyond", Damaged(flipped, d => d["orders"]![0] = new System.Text.Json.Nodes.JsonArray(0, 99, 1))),
+            ("an order that is no side", Damaged(flipped, d => d["orders"]![0] = new System.Text.Json.Nodes.JsonArray(0, 1, 2))),
+            ("an order of a face with itself", Damaged(flipped, d => d["orders"]![0] = new System.Text.Json.Nodes.JsonArray(1, 1, 1))),
+            ("orders without faces", Damaged(flipped, d => d["pattern"]!.AsObject().Remove("faces"))),
+            ("a face of two vertices", Damaged(flipped, d => d["pattern"]!["faces"]![0] = new System.Text.Json.Nodes.JsonArray(0, 1))),
+            ("a face naming a vertex beyond", Damaged(flipped, d => d["pattern"]!["faces"]![0] = new System.Text.Json.Nodes.JsonArray(0, 1, 99))),
         };
+        static string Damaged(string text, Action<System.Text.Json.Nodes.JsonNode> damage)
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(text)!;
+            damage(node);
+            return node.ToJsonString();
+        }
         foreach (var (what, text) in bad)
         {
             Write(half);
@@ -645,12 +758,12 @@ static void Origami(Action<bool, string> check, string image)
         try
         {
             using var full = new WidgetModuleSession<IOfficeModule>(image, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
-            Write(flipped);
+            Write(crane);
             full.Module.Update(new("fr", false, [.. Enumerable.Range(0, 48).Select(i => new OfficeSession($"0000{i:x4}-aaaa-bbbb-cccc-{i:x12}", $"session {i}", OfficeActivity.Working, 1, $"w{i % 6}", $"ws {i % 6}", i))]));
             full.Module.Pose(500, new Dictionary<string, Pose>());
             var tree = Widgets.Expand(full.Module.Scene());
-            check(tree.Valid && Find(tree.Roots, "ix-atelier/knot") is not null && Find(tree.Roots, "ix-origami/folded") is not null,
-                $"48 stations, the knot and the table expand within the scene's budget ({tree.Instances} instances, {tree.Boxes} boxes){string.Concat(tree.Problems.Take(2).Select(p => "; " + p))}");
+            check(tree.Valid && Find(tree.Roots, "ix-atelier/knot") is not null && Find(tree.Roots, "ix-origami/model") is not null,
+                $"48 stations, the rope and the crane expand within the scene's budget ({tree.Instances} instances, {tree.Boxes} boxes, {tree.Triangles} triangles){string.Concat(tree.Problems.Take(2).Select(p => "; " + p))}");
         }
         finally
         {

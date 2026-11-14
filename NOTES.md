@@ -1147,6 +1147,33 @@ from the pattern and not simulated, which the plaque says. Samples in brain/test
 wrong-expectation (valid, "expect ply 3" not held), flipped-crease (one mountain made a valley: IX rejects it by
 adjacency at edge 7, and Maekawa fails at vertex 3).
 
+### A real rope, a paper crane (2026-11-14, later)
+
+The user found the beads and the boards "lego". Widgets now take smooth surfaces: `SurfacePiece`, triangles whose
+vertices carry their own normal and colour, checked by Widgets.Expand like boxes (finite, within 16 m, unit normals,
+colours in [0, 1], a known material, each triangle wound about its normals and not degenerate) and counted against a
+budget of their own (120 000 triangles); the scene draws them in the instance's mesh with no rounded edge
+(WidgetGeometry). This changes the contract and the scene: the module that uses it does not load in a window built
+before it, so it reaches the live window with one restart of the scene, and from then on by module reloads.
+
+- The knot is a laid rope: three strands twisted at 30° round IX's path (a Catmull-Rom curve through IX's points, with
+  frames that do not twist about it), hemp with its fibres and the grooves between strands darker, each end whipped
+  with red twine. The rope keeps IX's radius and depth, so a crossing shows which part is over as IX places it; IX's
+  figure-eight gives 34 800 triangles. Checked: every point IX gives has the rope within 3.2 mm (its radius is
+  21.7 mm), and no part of the rope strays 24.2 mm from IX's points.
+- The fold, when the document has its faces and the folded state's face orders, stands on the table as a paper model:
+  each face in its layer, 0.5 mm apart, in the order the FOLD's faceOrders give (f over g on the side g's normal
+  points to), sorted by the longest chain under each face; the sheet's front kami red and its back cream, each side
+  where the fold turns it. The layers' spacing and a slight tilt of each face's light are Delta's; the folded state is
+  IX's, flat. Without orders (the documents written before) the folded state stays on a board. The model turns 60°
+  either side every 20 s on a pin through the paper's centre. The document keeps v 1 and gains `orders` (4096 at most,
+  [f, g, ±1], refused when they name a face that is not there, a face with itself, or come without faces).
+- The crane: Rabbit Ear's traditional crane (Robby Kraft, MIT at the commit IX took it from; brain/testdata/origami/
+  NOTICE.md), which IX keeps as its fixture. Its FOLD holds the folded form at the top level and the crease pattern in
+  file_frames[0]; the brain reads that layout from frame_classes. IX finds it valid, 28 layers at most; 59 faces, 838
+  orders. A valley fold in half checks the side convention: both outsides show the sheet's back, the red inside.
+- Visual proof, off the live window: hidden scene on port 8899, view 4, scratchpad captures real-104304.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
