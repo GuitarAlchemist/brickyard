@@ -959,8 +959,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 21, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card and the thinking brain
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 21 }], // one image each
+            MaxSets = 22, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 22 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -1308,6 +1308,10 @@ internal static unsafe class Stage
         var filmHintSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? filmHintTexture = null;
         Panel.Card? filmHint = null;
+        var arcadeHintSet = device.AllocateDescriptorSet(descriptorPool, setLayout); // the way out of the cabinet's game
+        Texture? arcadeHintTexture = null;
+        Panel.Card? arcadeHint = null;
+        var arcadeHintDrawn = (Height: 0, Language: "");
         var filmDrawn = (Height: 0, Language: "");
         var wheelSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? wheelTexture = null;
@@ -1324,13 +1328,13 @@ internal static unsafe class Stage
             tour.Touch(at);
             if (cabinet.Playing)
             {
-                // At the cabinet every key is the game's, but Esc, which leaves it; the robot comes back a while after.
+                // At the cabinet every key is the game's, but Esc, which leaves it for the hall's first view (the
+                // player is not left facing the cabinet); the robot comes back a while after.
                 if (key == GlfwKey.Escape)
                 {
                     if (action == GlfwKeyAction.Press)
                     {
-                        cabinet.Leave();
-                        robotAt = at + 15.0;
+                        LeaveArcade(at);
                     }
                 }
                 else if (action != GlfwKeyAction.Repeat)
@@ -1439,7 +1443,7 @@ internal static unsafe class Stage
                 hazy = !hazy;
                 Console.WriteLine($"SCENE haze {(hazy ? "on" : "off")}");
             }
-            else if (key == GlfwKey.Home)
+            else if (key is GlfwKey.Home or GlfwKey.Enter) // back to the first view, from wherever the player got stuck
             {
                 camera.Reset();
             }
@@ -1792,6 +1796,16 @@ internal static unsafe class Stage
             cabinet.Play();
         }
 
+        // Out of the game, by Esc or a click away from the cabinet: the camera flies back to the hall's first view.
+        void LeaveArcade(double at)
+        {
+            cabinet.Leave();
+            robotAt = at + 15.0;
+            looking = locked = false;
+            Grab(window);
+            camera.Reset();
+        }
+
         window.OnMouseButton += (w, button, action, mods) => Guard("a click", () =>
         {
             ctrlAlone = false;
@@ -1804,6 +1818,17 @@ internal static unsafe class Stage
                 }
 
                 return;
+            }
+
+            // In the game, a left click away from the cabinet leaves it, as Esc does; one on it is the game's.
+            if (cabinet.Playing && action == GlfwButtonAction.Press && button == 0 && !locked)
+            {
+                var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
+                if (officeView is not { } seen || !cabinet.Hit(seen, extent.Width, extent.Height, cx, cy))
+                {
+                    LeaveArcade(clock.Elapsed.TotalSeconds);
+                    return;
+                }
             }
 
             if (wheel.Open)
@@ -2262,6 +2287,13 @@ internal static unsafe class Stage
                     filmTitleTexture = Upload(filmTitle, filmTitleSet, filmTitleTexture);
                     filmHint = Panel.Hint(Words.Say("Any key: skip", "Une touche : passer"), extent.Height);
                     filmHintTexture = Upload(filmHint, filmHintSet, filmHintTexture);
+                }
+
+                if (cabinet.Playing && arcadeHintDrawn != (extent.Height, Words.Language))
+                {
+                    arcadeHintDrawn = (extent.Height, Words.Language);
+                    arcadeHint = Panel.Hint(Words.Say("Esc, or a click away from the cabinet: leave the game", "Échap, ou un clic hors de la borne : quitter le jeu"), extent.Height);
+                    arcadeHintTexture = Upload(arcadeHint, arcadeHintSet, arcadeHintTexture);
                 }
 
                 if (wheel.Shown > 0f && !splashing && wheelDrawn != (wheel.Pick, extent.Width, extent.Height, Words.Language))
@@ -2753,6 +2785,14 @@ internal static unsafe class Stage
                     Quad(meterSet, (extent.Width - dot) / 2, (extent.Height - dot) / 2, dot, dot, new SN.Vector4(1f, 1f, 1f, 0.8f));
                 }
 
+                if (hud && cabinet.Playing && !film.Playing && arcadeHint is not null && arcadeHintTexture is not null && meterTexture is not null)
+                {
+                    var margin = CardMargin();
+                    var (left, top) = ((extent.Width - arcadeHint.Width) / 2, extent.Height - arcadeHint.Height - margin);
+                    Quad(meterSet, left - margin / 2, top - margin / 4, arcadeHint.Width + margin, arcadeHint.Height + margin / 2, new SN.Vector4(0f, 0f, 0f, 0.55f));
+                    Quad(arcadeHintSet, left, top, arcadeHint.Width, arcadeHint.Height, SN.Vector4.One);
+                }
+
                 if (keysShown && !film.Playing && wheel.Shown <= 0f && keysCard is not null && keysTexture is not null)
                 {
                     Quad(keysSet, CardMargin(), extent.Height - keysCard.Height - CardMargin(), keysCard.Width, keysCard.Height, SN.Vector4.One);
@@ -3059,6 +3099,7 @@ internal static unsafe class Stage
         leaseDotTexture?.Dispose();
         filmTitleTexture?.Dispose();
         filmHintTexture?.Dispose();
+        arcadeHintTexture?.Dispose();
         wheelTexture?.Dispose();
         keysTexture?.Dispose();
         arcadeGpu?.Dispose();
