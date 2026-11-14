@@ -42,7 +42,19 @@ public sealed class IxOrigami
         public (int F, int G, int S)[] Orders { get; init; } = [];
 
         public bool Modelled => Folded is not null && Faces.Length > 0 && Orders.Length > 0;
+
+        // Delta's illustrative 3D pose, not IX's: parts turned about a ridge (brain/ixorigami.go, origamiPose).
+        public Posing? Pose { get; init; }
     }
+
+    // A ridge through two vertices of the folded state, its up side to the left from A to B, and parts of the faces turned
+    // about it: each to To degrees from up, towards the side of the stack its layers are on; a Spread part's two halves
+    // of layers each towards their own side.
+    public sealed record Posing((int A, int B) Ridge, PosePart[] Parts);
+
+    public sealed record PosePart(int[] Faces, float To, bool Spread);
+
+    public const int MaxParts = 8;
 
     public sealed record Reading(Standing Standing, Fold? Fold, string Why, string Hash);
 
@@ -160,6 +172,36 @@ public sealed class IxOrigami
                 }
             }
 
+            Posing? pose = null;
+            if (root.TryGetProperty("pose"u8, out var po))
+            {
+                if (po.ValueKind != JsonValueKind.Object || orders.Count == 0 || !po.TryGetProperty("ridge"u8, out var rr) || rr.ValueKind != JsonValueKind.Array
+                    || rr.GetArrayLength() != 2 || Index(rr[0], vertices.Length) is not { } ridgeA || Index(rr[1], vertices.Length) is not { } ridgeB
+                    || SN.Vector2.Distance(folded![ridgeA], folded[ridgeB]) < 1e-6f)
+                    return Refuse("a pose without the orders, or without a ridge through two vertices apart", hash);
+                if (!po.TryGetProperty("parts"u8, out var pl) || pl.ValueKind != JsonValueKind.Array || pl.GetArrayLength() is < 1 or > MaxParts)
+                    return Refuse($"a pose of not 1 to {MaxParts} parts", hash);
+                var taken = new HashSet<int>();
+                var parts = new List<PosePart>();
+                foreach (var part in pl.EnumerateArray())
+                {
+                    if (part.ValueKind != JsonValueKind.Object || !part.TryGetProperty("faces"u8, out var pf) || pf.ValueKind != JsonValueKind.Array
+                        || pf.GetArrayLength() is < 1 or > MaxFaces || !part.TryGetProperty("to"u8, out var to) || to.ValueKind != JsonValueKind.Number
+                        || to.GetDouble() is not (>= 0 and <= 180))
+                        return Refuse($"pose part {parts.Count} has no faces, or turns beyond 0 to 180°", hash);
+                    var ids = new List<int>();
+                    foreach (var x in pf.EnumerateArray())
+                    {
+                        if (Index(x, faces.Count) is not { } face || !taken.Add(face)) return Refuse($"pose part {parts.Count} names a face not there or in another part", hash);
+                        ids.Add(face);
+                    }
+
+                    parts.Add(new([.. ids], (float)to.GetDouble(), part.TryGetProperty("spread"u8, out var sp) && sp.ValueKind == JsonValueKind.True));
+                }
+
+                pose = new((ridgeA, ridgeB), [.. parts]);
+            }
+
             var findings = new List<Finding>();
             if (root.TryGetProperty("findings"u8, out var fs))
             {
@@ -188,7 +230,7 @@ public sealed class IxOrigami
                 }
             }
 
-            var fold = new Fold(name, okay.GetBoolean(), holds, [.. rejected], layers, vertices, [.. edges], [.. assignment], folded, [.. findings]) { Faces = [.. faces], Orders = [.. orders] };
+            var fold = new Fold(name, okay.GetBoolean(), holds, [.. rejected], layers, vertices, [.. edges], [.. assignment], folded, [.. findings]) { Faces = [.. faces], Orders = [.. orders], Pose = pose };
             return new(Standing.Shown, fold, "", hash);
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
@@ -301,11 +343,13 @@ public sealed class IxOrigami
             if (fold.Modelled)
             {
                 // On a pin through the paper's centre, its lowest point 3 cm over the foot; the model turns about the pin.
-                var pin = Clearance + Shape(fold).Drop;
+                var pin = Clearance + Drop(fold);
                 pieces.Add(new BoxPiece(new(0.2f, Top + 0.005f, 0), new(0.14f, 0.01f, 0.09f), Steel, 3));
                 pieces.Add(new BoxPiece(new(0.2f, Top + 0.01f + (pin / 2), 0), new(0.005f, pin, 0.005f), Steel, 3));
                 pieces.Add(new UsePiece("model", ModelId, SN.Matrix4x4.CreateTranslation(0.2f, Top + 0.01f + pin, 0), new Dictionary<string, WidgetValue> { ["doc"] = reading.Hash }));
-                pieces.Add(new TextPiece(Say("folded in IX's layer order", "plié dans l'ordre de couches d'IX"), new(0.2f, Top + 0.012f, 0.205f), 0.24f, Grey));
+                var said = fold.Pose is null ? Say("folded in IX's layer order", "plié dans l'ordre de couches d'IX")
+                    : Say("IX's layers · wings opened by Delta, illustrative", "couches d'IX · ailes ouvertes par Delta, illustratif");
+                pieces.Add(new TextPiece(said, new(0.2f, Top + 0.012f, 0.205f), Math.Clamp(said.Length * 0.0068f, 0.1f, 0.36f), Grey));
             }
             else if (fold.Folded is not null)
             {
@@ -394,9 +438,12 @@ public sealed class IxOrigami
 
     private const float Clearance = 0.03f; // between the model's lowest point and its foot
 
-    // Where the folded model sits in its own frame: the scale that makes its largest extent Model, the paper's centre (its
-    // faces' centroid, weighted by area) at the origin, and how far the lowest point is below that centre, scaled.
-    private static (float Scale, SN.Vector2 Centre, float Drop) Shape(Fold fold)
+    // How far the model's lowest point is below its centre, posed or flat.
+    private static float Drop(Fold fold) => Folding(fold) is { Count: > 0 } t ? -t.Min(x => MathF.Min(x.A.Position.Y, MathF.Min(x.B.Position.Y, x.C.Position.Y))) : 0;
+
+    // Where the folded model sits in its own frame: the scale that makes its flat extent Model, and the paper's centre
+    // (its faces' centroid, weighted by area) at the origin.
+    private static (float Scale, SN.Vector2 Centre) Shape(Fold fold)
     {
         var at = fold.Folded!;
         var used = fold.Faces.SelectMany(f => f).Select(i => at[i]).ToArray();
@@ -414,17 +461,18 @@ public sealed class IxOrigami
             }
         }
 
-        var centre = weight > 1e-12f ? sum / weight : (low + high) / 2;
-        return (scale, centre, (centre.Y - low.Y) * scale);
+        return (scale, weight > 1e-12f ? sum / weight : (low + high) / 2);
     }
 
     // The folded model, about the paper's centre (Shape), as paper: each face of the folded state in its layer, Ply apart in the
     // order IX checked (Layers), the sheet's front kami red and its back cream, each side where the fold turns it. The
     // folded state is flat, as IX states it; the layers' spacing and a slight tilt of each face's light are Delta's, so
-    // that the layers read. Nothing here is simulated.
-    public static IReadOnlyList<Piece> Sheet(Fold? fold)
+    // that the layers read. With a pose, its parts turn about the ridge and the ridge is levelled, back up: an
+    // illustration, which the table says. Nothing here is simulated.
+    public static IReadOnlyList<Piece> Sheet(Fold? fold) => fold is { Modelled: true } ? [new SurfacePiece(Folding(fold))] : [];
+
+    private static List<ModuleTriangle> Folding(Fold fold)
     {
-        if (fold is not { Modelled: true }) return [];
         var at = fold.Folded!;
         static float Area(SN.Vector2[] v, int[] face)
         {
@@ -442,10 +490,12 @@ public sealed class IxOrigami
         var front = fold.Faces.Select((f, i) => up[i] * (Area(fold.Vertices, f) >= 0 ? 1 : -1) > 0).ToArray(); // the sheet's front faces +z
         var (layer, _) = Layers(fold.Faces.Length, fold.Orders, up);
         var top = Math.Max(1, layer.Max());
-        var (scale, centre, _) = Shape(fold);
+        var (scale, centre) = Shape(fold);
+        var place = Posed(fold, layer, top, scale, centre);
         var triangles = new List<ModuleTriangle>();
         for (var i = 0; i < fold.Faces.Length; i++)
         {
+            var m = place[i];
             var face = fold.Faces[i];
             var z = (layer[i] - (top / 2f)) * Ply;
             var lift = (float)layer[i] / top;
@@ -453,8 +503,9 @@ public sealed class IxOrigami
             upper *= 0.8f + (0.2f * lift); // a layer deep in the stack is in the shade of those over it
             lower *= 0.8f + (0.2f * (1 - lift));
             var tilt = new SN.Vector2(MathF.Sin(i * 12.9898f) * 0.08f, MathF.Sin(i * 78.233f) * 0.08f);
-            var (nUp, nDown) = (SN.Vector3.Normalize(new(tilt, 1)), SN.Vector3.Normalize(new(tilt, -1)));
-            SN.Vector3 P(SN.Vector2 p, float dz) => new((p.X - centre.X) * scale, (p.Y - centre.Y) * scale, z + dz);
+            var nUp = SN.Vector3.Normalize(SN.Vector3.TransformNormal(new(tilt, 1), m));
+            var nDown = SN.Vector3.Normalize(SN.Vector3.TransformNormal(new(tilt, -1), m));
+            SN.Vector3 P(SN.Vector2 p, float dz) => SN.Vector3.Transform(new((p.X - centre.X) * scale, (p.Y - centre.Y) * scale, z + dz), m);
             for (var k = 1; k < face.Length - 1; k++)
             {
                 var (a, b, c) = (at[face[0]], at[face[k]], at[face[k + 1]]);
@@ -466,7 +517,41 @@ public sealed class IxOrigami
             }
         }
 
-        return [new SurfacePiece(triangles)];
+        return triangles;
+    }
+
+    // Each face's place in the model: the identity when flat; posed, its part's turn about the ridge, then the turn that
+    // puts the ridge level with its up side up. The turn takes a part from the side of the ridge it stands on (up or
+    // down) to To degrees from up, towards the side of the stack its layers are on (+z or -z).
+    private static SN.Matrix4x4[] Posed(Fold fold, int[] layer, int top, float scale, SN.Vector2 centre)
+    {
+        var place = Enumerable.Repeat(SN.Matrix4x4.Identity, fold.Faces.Length).ToArray();
+        if (fold.Pose is not { } pose) return place;
+        var at = fold.Folded!;
+        SN.Vector2 M(SN.Vector2 p) => (p - centre) * scale;
+        SN.Vector2 Middle(int f) => fold.Faces[f].Aggregate(SN.Vector2.Zero, (s, v) => s + at[v]) / fold.Faces[f].Length;
+        var (a, b) = (M(at[pose.Ridge.A]), M(at[pose.Ridge.B]));
+        var along = SN.Vector2.Normalize(b - a);
+        var up = new SN.Vector2(-along.Y, along.X); // left of the ridge, from A to B
+        var axis = new SN.Vector3(up.Y, -up.X, 0); // up × z: a turn by θ takes up to cos θ up + sin θ z
+        var pivot = new SN.Vector3(a, 0);
+        var level = SN.Matrix4x4.CreateRotationZ((MathF.PI / 2) - MathF.Atan2(up.Y, up.X));
+        foreach (var part in pose.Parts)
+        {
+            var side = part.Faces.Average(f => SN.Vector2.Dot(M(Middle(f)) - a, up)) >= 0 ? 1 : -1;
+            var sorted = part.Faces.Select(f => layer[f]).Order().ToArray();
+            var median = (sorted[(sorted.Length - 1) / 2] + sorted[sorted.Length / 2]) / 2f;
+            var stack = part.Faces.Average(f => layer[f]) >= top / 2f ? 1 : -1;
+            foreach (var f in part.Faces)
+            {
+                var toward = part.Spread ? (layer[f] > median ? 1 : -1) : stack;
+                var turn = side > 0 ? toward * part.To : -toward * (180 - part.To);
+                place[f] = SN.Matrix4x4.CreateTranslation(-pivot) * SN.Matrix4x4.CreateFromAxisAngle(axis, turn * MathF.PI / 180f) * SN.Matrix4x4.CreateTranslation(pivot);
+            }
+        }
+
+        for (var f = 0; f < place.Length; f++) place[f] *= level;
+        return place;
     }
 
     // Each face's layer, 0 at the bottom (-z): the longest chain of faces under it by the orders, where face F is over

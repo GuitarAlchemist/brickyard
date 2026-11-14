@@ -242,7 +242,7 @@ public sealed class IxAtelier
         var pitch = 2 * MathF.PI * offset / MathF.Tan(Lay * MathF.PI / 180f);
         var triangles = new List<ModuleTriangle>();
         var length = knot.Ropes.Sum(r => r.Zip(r.Skip(1), (a, b) => SN.Vector3.Distance(a, b)).Sum()) * scale;
-        var step = MathF.Max(pitch / 24, length / MaxRings);
+        var step = MathF.Max(pitch / 40, length / MaxRings);
         foreach (var path in knot.Ropes)
         {
             var axis = Resample(Smooth([.. path.Select(p => (p - centre) * scale)]), step);
@@ -259,12 +259,28 @@ public sealed class IxAtelier
                     centres[j] = axis[j] + (offset * outward[j]);
                 }
 
+                // Each strand is Yarns yarns twisted the other way: a ridge round it per yarn, which the light catches,
+                // the grooves between yarns darker, each yarn its own tone, and the fibres a grain on it.
+                var along = new float[axis.Length];
+                for (var j = 1; j < axis.Length; j++) along[j] = along[j - 1] + SN.Vector3.Distance(centres[j - 1], centres[j]);
+                var yarnPitch = pitch * 0.6f;
+                float Phase(int j, float around) => (Yarns * around) - (2 * MathF.PI * along[j] / yarnPitch);
                 var shade = k switch { 0 => 1f, 1 => 0.95f, _ => 1.04f };
-                Tube(triangles, centres, strand, 10, (j, normal, around) =>
+                Tube(triangles, centres, 16, (j, around) =>
                 {
+                    var phase = Phase(j, around);
+                    var sin = MathF.Sin(phase);
+                    return (strand * (1 + (Relief * MathF.Cos(phase))), -strand * Relief * Yarns * sin, strand * Relief * 2 * MathF.PI / yarnPitch * sin);
+                }, (j, normal, around) =>
+                {
+                    var phase = Phase(j, around);
                     var groove = SN.Vector3.Dot(normal, outward[j]); // 1 on the rope's outside, -1 where the strands press together
-                    var fibre = 0.92f + (0.08f * MathF.Sin((3 * around) + (j * 1.7f)));
-                    return Hemp * (shade * fibre * (0.5f + (0.5f * Smooth01((groove + 0.7f) / 1.4f))));
+                    var yarn = (int)MathF.Floor(phase / (2 * MathF.PI)) & 3;
+                    var tone = yarn switch { 0 => 1f, 1 => 0.9f, 2 => 1.06f, _ => 0.95f };
+                    var crest = 0.6f + (0.4f * (0.5f + (0.5f * MathF.Cos(phase))));
+                    var grain = 0.93f + (0.07f * MathF.Sin((j * 12.9898f) + (around * 78.233f) + (k * 3.1f)) * MathF.Sin(j * 4.1414f));
+                    var c = Hemp * (shade * tone * crest * grain * (0.45f + (0.55f * Smooth01((groove + 0.7f) / 1.4f))));
+                    return SN.Vector3.Clamp(c, SN.Vector3.Zero, SN.Vector3.One);
                 });
             }
 
@@ -276,9 +292,11 @@ public sealed class IxAtelier
     }
 
     public const float Lay = 30f; // the strands' angle to the rope, in degrees
-    private const int MaxRings = 1500; // along all the ropes, for the strands
+    private const int MaxRings = 1000; // along all the ropes, for the strands: 3 strands of 16 sides, 96 000 triangles at most
+    private const int Yarns = 4; // to a strand
+    private const float Relief = 0.1f; // of a yarn's ridge, against the strand's radius
 
-    private static readonly SN.Vector3 Hemp = new(0.76f, 0.63f, 0.43f), Twine = new(0.62f, 0.13f, 0.1f);
+    private static readonly SN.Vector3 Hemp = new(0.74f, 0.62f, 0.45f), Twine = new(0.62f, 0.13f, 0.1f);
 
     private static float Smooth01(float x) => Math.Clamp(x, 0, 1) is var c ? c * c * (3 - (2 * c)) : 0;
 
@@ -335,16 +353,21 @@ public sealed class IxAtelier
         return (t, n, b);
     }
 
-    // A tube of the given radius along centres, its triangles wound about its outward normals; colour(ring, normal,
-    // angle) colours each vertex.
-    private static void Tube(List<ModuleTriangle> into, SN.Vector3[] centres, float radius, int sides, Func<int, SN.Vector3, float, SN.Vector3> colour)
+    // A tube along centres, its triangles wound about its outward normals. shape(ring, angle) gives its radius there and
+    // the radius's rate of change round the tube and along it, so that a relief (a strand's yarns) lights as relief;
+    // colour(ring, normal, angle) colours each vertex.
+    private static void Tube(List<ModuleTriangle> into, SN.Vector3[] centres, int sides, Func<int, float, (float R, float Around, float Along)> shape,
+        Func<int, SN.Vector3, float, SN.Vector3> colour)
     {
-        var (_, n, b) = Frames(centres);
+        var (t, n, b) = Frames(centres);
         ModuleVertex At(int j, int k)
         {
             var around = 2 * MathF.PI * k / sides;
-            var normal = (MathF.Cos(around) * n[j]) + (MathF.Sin(around) * b[j]);
-            return new(centres[j] + (radius * normal), normal, colour(j, normal, around));
+            var (c, s) = (MathF.Cos(around), MathF.Sin(around));
+            var outward = (c * n[j]) + (s * b[j]);
+            var (r, dAround, dAlong) = shape(j, around);
+            var normal = SN.Vector3.Normalize(outward - (dAround / r * ((-s * n[j]) + (c * b[j]))) - (dAlong * t[j]));
+            return new(centres[j] + (r * outward), normal, colour(j, outward, around));
         }
 
         for (var j = 0; j < centres.Length - 1; j++)
@@ -372,7 +395,7 @@ public sealed class IxAtelier
     {
         var reach = Math.Min(axis.Length - 1, Math.Max(1, (int)MathF.Ceiling(4 * radius / step)));
         var (from, to) = atEnd ? (axis.Length - 1 - reach, axis.Length - 1) : (0, reach);
-        var count = (to - from) * 6;
+        var count = (to - from) * 3;
         var centres = new SN.Vector3[count + 1];
         var span = SN.Vector3.Distance(axis[from], axis[to]);
         for (var i = 0; i <= count; i++)
@@ -383,8 +406,8 @@ public sealed class IxAtelier
         }
 
         var turns = Math.Max(4, (int)(span / 0.0018f));
-        var wrap = radius * 1.05f;
-        Tube(into, centres, wrap, 12, (i, _, _) => Twine * (0.8f + (0.2f * MathF.Abs(MathF.Sin(MathF.PI * turns * i / count)))));
+        var wrap = radius * 1.12f;
+        Tube(into, centres, 12, (_, _) => (wrap, 0, 0), (i, _, _) => Twine * (0.8f + (0.2f * MathF.Abs(MathF.Sin(MathF.PI * turns * i / count)))));
         var (end, tangent) = atEnd ? (centres[^1], t[to]) : (centres[0], -t[from]);
         var (cn, cb) = (n[atEnd ? to : from], b[atEnd ? to : from]);
         for (var k = 0; k < 12; k++)

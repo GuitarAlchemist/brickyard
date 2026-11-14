@@ -680,16 +680,28 @@ static void Origami(Action<bool, string> check, string image)
         check(valley.Layers == 2 && Cream(valley.Front) && Cream(valley.Back),
             $"a valley fold in half: two layers, the sheet's back outside on both sides (front {valley.Front}, behind {valley.Back})");
 
+        // The crane flat, as IX checked it (its document without Delta's pose).
+        Write(Damaged(crane, d => d.AsObject().Remove("pose")));
+        var flatBird = Look();
+        var (_, _, layers) = Sides(flatBird.Model);
+        var sheet = Corners(flatBird.Model).ToList();
+        var height = sheet.Count == 0 ? 0 : sheet.Max(v => v.Position.Y) - sheet.Min(v => v.Position.Y);
+        var width = sheet.Count == 0 ? 0 : sheet.Max(v => v.Position.X) - sheet.Min(v => v.Position.X);
+        var thin = sheet.Count == 0 ? 1 : sheet.Max(v => v.Position.Z) - sheet.Min(v => v.Position.Z);
+        check(flatBird.Tree.Valid && flatBird.Plaque.Contains("Origami · crane") && flatBird.Plaque.Contains("Valide selon IX") && flatBird.Plaque.Contains("28 couches au plus")
+            && flatBird.Plaque.Contains("l'ordre de couches d'IX"), $"Rabbit Ear's crane, valid according to IX: {flatBird.Plaque}");
+        check(layers >= 28 && sheet.Any(v => Cream(v.Color)) && sheet.Any(v => !Cream(v.Color)) && MathF.Max(width, height) is > 0.35f and < 0.37f && thin < 0.03f,
+            $"the crane flat in paper: {sheet.Count / 3} triangles on {layers} layers (IX finds 28 in one place), both sides of the sheet, {width:F3} × {height:F3} m, {thin * 1000:F0} mm thick");
+
+        // With Delta's pose, its wings open about its back, one to each side, and the table says the pose is illustrative.
         Write(crane);
         var bird = Look();
-        var (_, _, layers) = Sides(bird.Model);
         var paper = Corners(bird.Model).ToList();
-        var height = paper.Count == 0 ? 0 : paper.Max(v => v.Position.Y) - paper.Min(v => v.Position.Y);
-        var width = paper.Count == 0 ? 0 : paper.Max(v => v.Position.X) - paper.Min(v => v.Position.X);
-        check(bird.Tree.Valid && bird.Plaque.Contains("Origami · crane") && bird.Plaque.Contains("Valide selon IX") && bird.Plaque.Contains("28 couches au plus")
-            && bird.Plaque.Contains("l'ordre de couches d'IX"), $"Rabbit Ear's crane, valid according to IX: {bird.Plaque}");
-        check(layers >= 28 && paper.Any(v => Cream(v.Color)) && paper.Any(v => !Cream(v.Color)) && MathF.Max(width, height) is > 0.35f and < 0.37f,
-            $"the crane in paper: {paper.Count / 3} triangles on {layers} layers (IX finds 28 in one place), both sides of the sheet, {width:F3} × {height:F3} m");
+        var (front, behind) = paper.Count == 0 ? (0f, 0f) : (paper.Max(v => v.Position.Z), paper.Min(v => v.Position.Z));
+        var lifted = paper.Where(v => MathF.Abs(v.Position.Z) > 0.1f).ToList();
+        check(bird.Tree.Valid && bird.Plaque.Contains("ailes ouvertes par Delta, illustratif") && front > 0.15f && behind < -0.15f
+            && lifted.Count > 0 && lifted.All(v => v.Position.Y > -0.05f) && paper.Count == sheet.Count,
+            $"the crane posed: its wings out {front:F2} m in front and {-behind:F2} m behind, held up, the same {paper.Count / 3} triangles, said to be illustrative");
         var pinBox = Find(bird.Tree.Roots, "ix-origami")?.Boxes.FirstOrDefault(b => MathF.Abs(b.Size.X - 0.005f) < 1e-4f);
         var mount = bird.Model?.Local.Translation ?? default;
         var lowest = paper.Count == 0 ? 0 : mount.Y + paper.Min(v => v.Position.Y);
@@ -735,6 +747,11 @@ static void Origami(Action<bool, string> check, string image)
             ("orders without faces", Damaged(flipped, d => d["pattern"]!.AsObject().Remove("faces"))),
             ("a face of two vertices", Damaged(flipped, d => d["pattern"]!["faces"]![0] = new System.Text.Json.Nodes.JsonArray(0, 1))),
             ("a face naming a vertex beyond", Damaged(flipped, d => d["pattern"]!["faces"]![0] = new System.Text.Json.Nodes.JsonArray(0, 1, 99))),
+            ("a pose turned beyond 180°", Damaged(crane, d => d["pose"]!["parts"]![0]!["to"] = 200)),
+            ("a pose naming a face beyond", Damaged(crane, d => d["pose"]!["parts"]![0]!["faces"]![0] = 59)),
+            ("a pose naming a face twice", Damaged(crane, d => d["pose"]!["parts"]![1]!["faces"]![0] = 0)),
+            ("a pose about one point", Damaged(crane, d => d["pose"]!["ridge"] = new System.Text.Json.Nodes.JsonArray(9, 12))),
+            ("a pose without the orders", Damaged(crane, d => d.AsObject().Remove("orders"))),
         };
         static string Damaged(string text, Action<System.Text.Json.Nodes.JsonNode> damage)
         {

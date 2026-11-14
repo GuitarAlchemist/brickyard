@@ -1174,6 +1174,25 @@ before it, so it reaches the live window with one restart of the scene, and from
   orders. A valley fold in half checks the side convention: both outsides show the sheet's back, the red inside.
 - Visual proof, off the live window: hidden scene on port 8899, view 4, scratchpad captures real-104304.
 
+Live the same morning, the window did not restart on the fast-forward: `dotnet watch` applied the contract's new type
+and fields as a hot reload, and every tree was then refused « too-many-triangles: more than 0 », the static
+`WidgetLimits.Standard` keeping the new property's default. Stopping scene.exe let the brain start a new `dotnet watch`,
+and the window came back with the module (same brain, no `/mcp` reconnect).
+
+The user then found the rope "plastic" and the crane "flat":
+
+- Each strand is now four yarns laid the other way: a relief of 10% of the strand's radius that the normals follow, so
+  the light catches each yarn; the grooves between yarns darker, each yarn its own tone, a grain on the fibres. 3
+  strands of 16 sides, rings every 3.3 mm: 84 000 triangles for the figure-eight.
+- The crane opens: a pose beside the fold (`brain/testdata/origami/crane.pose.json`, carried by the document as
+  `pose`) names a ridge (the back, vertices 15 and 9) and parts of the faces: the two wings, found as the faces reached
+  from each wing's tip without crossing the ridge (the lower one: 7 faces) or those reaching the upper tip (3), turned
+  to 80° from up, each towards the side of the stack its layers are on (layers 4–5 and 32–35: opposite sides); the body
+  under the back spread 20° apart by its two halves of layers. The ridge is then levelled. It is Delta's illustration,
+  not IX's: IX checks the flat fold, the table says « ailes ouvertes par Delta, illustratif », and the flat crane is what
+  a document without a pose shows. A pose that names a face not there or twice, turns beyond 0–180°, or comes without
+  the orders is refused, by the brain and by the module.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

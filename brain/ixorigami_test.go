@@ -122,6 +122,9 @@ func TestTheTableModuleIsTestedOnTheBrainsDocuments(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if doc.Pose, err = origamiPoseFor(s.file, doc); err != nil {
+			t.Fatal(err)
+		}
 		body, _ := json.Marshal(doc)
 		body = append(body, '\n')
 		fixture := filepath.Join("..", "widget-tests", "testdata", "ix-origami-"+strings.TrimSuffix(filepath.Base(s.file), filepath.Ext(s.file))+".json")
@@ -135,6 +138,46 @@ func TestTheTableModuleIsTestedOnTheBrainsDocuments(t *testing.T) {
 		if err != nil || !bytes.Equal(kept, body) {
 			t.Fatalf("%s is not the brain's document (%v); DELTA_UPDATE_FIXTURES=1 writes it", fixture, err)
 		}
+	}
+}
+
+// The crane's pose is read from beside its fold; a pose that names what is not there, or turns too far, is refused,
+// and a fold without one has none.
+func TestTheTablePosesOnlyWhatIsThere(t *testing.T) {
+	given, report := origamiOf(t, 3)
+	doc, err := origamiFromIX("fold", given, report, "crane", origamiTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pose, err := origamiPoseFor(origamiSamples[3].file, doc)
+	if err != nil || pose == nil || pose.Ridge != [2]int{15, 9} || len(pose.Parts) != 3 || !pose.Parts[2].Spread || pose.Parts[0].To != 80 {
+		t.Fatalf("crane's pose: %+v, %v", pose, err)
+	}
+	if none, err := origamiPoseFor(origamiSamples[2].file, doc); none != nil || err != nil {
+		t.Fatalf("a fold without a pose file: %+v, %v", none, err)
+	}
+	dir := t.TempDir()
+	for _, c := range []struct{ name, pose, want string }{
+		{"a ridge vertex beyond", `{"ridge":[15,99],"parts":[{"faces":[0],"to":80}]}`, "not two apart"},
+		{"a ridge of one point", `{"ridge":[9,12],"parts":[{"faces":[0],"to":80}]}`, "not two apart"},
+		{"a face beyond", `{"ridge":[15,9],"parts":[{"faces":[59],"to":80}]}`, "names face 59"},
+		{"a face in two parts", `{"ridge":[15,9],"parts":[{"faces":[0],"to":80},{"faces":[0],"to":80}]}`, "already in a part"},
+		{"too far", `{"ridge":[15,9],"parts":[{"faces":[0],"to":200}]}`, "not 0 to 180"},
+		{"no parts", `{"ridge":[15,9],"parts":[]}`, "not 1 to 8"},
+		{"an unknown field", `{"ridge":[15,9],"parts":[{"faces":[0],"to":80}],"simulated":true}`, "not one"},
+	} {
+		file := filepath.Join(dir, "crane.fold")
+		if err := os.WriteFile(filepath.Join(dir, "crane.pose.json"), []byte(c.pose), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := origamiPoseFor(file, doc); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", c.name, err, c.want)
+		}
+	}
+	flat := doc
+	flat.Orders = nil
+	if _, err := origamiPoseFor(origamiSamples[3].file, flat); err == nil {
+		t.Error("a pose without the orders to layer the faces is refused")
 	}
 }
 

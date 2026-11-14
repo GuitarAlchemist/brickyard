@@ -18,6 +18,8 @@ package main
 //	 "folded": [[x, y]] (the folded frame's vertices, by the pattern's indices; absent when there is none),
 //	 "orders": [[f, g, s]] (the FOLD's faceOrders for the folded state, which IX's layer rules checked: s = 1 when
 //	           face f lies on the side face g's normal points to, -1 opposite; absent without faces or a folded state),
+//	 "pose": {"note", "ridge": [a, b], "parts": [{"name", "faces": [...], "to", "spread"}]} (Delta's illustrative 3D
+//	         pose, from <name>.pose.json beside the fold: see origamiPose; IX checks the flat fold, not it),
 //	 "findings": [{"rule", "where": "edge" or "vertex" or "", "ids": [...], "count", "value", "detail"}]}
 //
 // or {"format", "v": 1, "source", "at", "error"}. Bounds: 1024 vertices, 2048 edges, 1024 faces of at most 64
@@ -25,6 +27,7 @@ package main
 // after the first documents; a reader of v 1 that does not know it draws the fold without its layers.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -83,6 +86,7 @@ type origamiDoc struct {
 	Pattern    *origamiPattern  `json:"pattern,omitempty"`
 	Folded     [][2]float64     `json:"folded,omitempty"`
 	Orders     [][3]int         `json:"orders,omitempty"`
+	Pose       *origamiPose     `json:"pose,omitempty"`
 	Findings   []origamiFinding `json:"findings,omitempty"`
 	Error      string           `json:"error,omitempty"`
 }
@@ -372,6 +376,75 @@ func origamiShapes(fold foldObject, creases, flat [][]float64) (*origamiPattern,
 	return p, folded, nil
 }
 
+// An illustrative 3D pose of a flat-folded model, Delta's and not IX's: parts of its faces turned about a ridge (a line
+// through two vertices of the folded state), each to To degrees from the side of the ridge it stands on, towards the
+// side of the stack its layers are on; a Spread part has its two halves of layers turned apart. It comes from a file
+// beside the fold, <name>.pose.json, and the table says it is illustrative.
+type origamiPose struct {
+	Note  string        `json:"note,omitempty"`
+	Ridge [2]int        `json:"ridge"`
+	Parts []origamiPart `json:"parts"`
+}
+
+type origamiPart struct {
+	Name   string  `json:"name,omitempty"`
+	Faces  []int   `json:"faces"`
+	To     float64 `json:"to"`
+	Spread bool    `json:"spread,omitempty"`
+}
+
+const origamiMaxParts = 8
+
+// origamiPoseFor reads the pose beside file, checked against the document: nil when there is none.
+func origamiPoseFor(file string, doc origamiDoc) (*origamiPose, error) {
+	body, err := os.ReadFile(strings.TrimSuffix(file, filepath.Ext(file)) + ".pose.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > 64<<10 {
+		return nil, fmt.Errorf("the pose is larger than %d bytes", 64<<10)
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	var pose origamiPose
+	if err := dec.Decode(&pose); err != nil {
+		return nil, fmt.Errorf("the pose is not one: %v", err)
+	}
+	if doc.Pattern == nil || doc.Folded == nil || len(doc.Orders) == 0 {
+		return nil, errors.New("a pose needs the folded state's faces and orders")
+	}
+	if err := origamiTextOK("pose's note", pose.Note); err != nil {
+		return nil, err
+	}
+	n, faces := len(doc.Folded), len(doc.Pattern.Faces)
+	a, b := pose.Ridge[0], pose.Ridge[1]
+	if a < 0 || b < 0 || a >= n || b >= n || math.Hypot(doc.Folded[a][0]-doc.Folded[b][0], doc.Folded[a][1]-doc.Folded[b][1]) < 1e-6 {
+		return nil, fmt.Errorf("the ridge [%d, %d] is not two apart of the %d vertices", a, b, n)
+	}
+	if len(pose.Parts) == 0 || len(pose.Parts) > origamiMaxParts {
+		return nil, fmt.Errorf("%d parts, not 1 to %d", len(pose.Parts), origamiMaxParts)
+	}
+	taken := map[int]bool{}
+	for i, p := range pose.Parts {
+		if err := origamiTextOK("part's name", p.Name); err != nil {
+			return nil, err
+		}
+		if len(p.Faces) == 0 || math.IsNaN(p.To) || p.To < 0 || p.To > 180 {
+			return nil, fmt.Errorf("part %d has no faces, or turns to %v, not 0 to 180 degrees", i, p.To)
+		}
+		for _, f := range p.Faces {
+			if f < 0 || f >= faces || taken[f] {
+				return nil, fmt.Errorf("part %d names face %d, not one of the %d or already in a part", i, f, faces)
+			}
+			taken[f] = true
+		}
+	}
+	return &pose, nil
+}
+
 func origamiTextOK(what, s string) error {
 	if len([]rune(s)) > origamiMaxText || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return fmt.Errorf("the %s is longer than %d characters or holds a control character", what, origamiMaxText)
@@ -478,6 +551,9 @@ func runIXOrigami(file, exe, out string, stdout, stderr io.Writer) int {
 	doc, err := origamiFromIX(input, given, answer, name, now)
 	if err != nil {
 		return fail("IX's report refused: " + err.Error())
+	}
+	if doc.Pose, err = origamiPoseFor(file, doc); err != nil {
+		fmt.Fprintf(stderr, "ix-origami: the pose beside %s is left out: %v\n", file, err) // IX's verdict stands without it
 	}
 	if err := write(doc); err != nil {
 		fmt.Fprintf(stderr, "ix-origami: %v\n", err)
