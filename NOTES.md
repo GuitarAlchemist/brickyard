@@ -1219,6 +1219,28 @@ and bricks of 42 × 15 cm, twice real ones. A first step towards real:
 Hidden at 1920 × 1080, 55 fps as before. Next, if the user keeps it: side walls, the robot's props in real materials,
 and light that is computed (shadows and occlusion by ray queries on the RTX 5080) rather than painted.
 
+## Shadows and occlusion by ray queries (2026-11-14)
+
+The user asked for the ray tracing. On a GPU that offers `VK_KHR_acceleration_structure` and `VK_KHR_ray_query` (with
+buffer device addresses), the Low quality now traces its shadows and its ambient occlusion instead of painting them:
+
+- `RayScene` builds one bottom-level structure per `Mesh` the first time it is drawn (its vertices as they are, 68-byte
+  stride, no index buffer; disposed with the mesh), and each frame a top-level structure of what the previous frame
+  drew, one instance per draw with its model rows. `Draw` remembers each draw; `Record` builds at the start of the next
+  frame's command buffer, behind a barrier to the fragment shader. One instance buffer, structure and scratch per
+  frame in flight; meshes gone are kept a few frames before their structure goes.
+- The fragment shader, compiled for Vulkan 1.3 with `GL_EXT_ray_query` (`#define RAYS`), reads the structure at binding
+  4. The key light's shadow is three rays in a 0.035 cone, mixed by interleaved-gradient noise (soft edges, slight
+  grain); the occlusion is five cosine rays of 0.7 m. The scan's own occlusion multiplies it.
+- `--no-rays` builds no structure at all (and the scene runs on GPUs without the extensions as before); `--rays-off`
+  starts with the painted light and R toggles it while running (`SCENE rays traced` / `SCENE rays off: the shadows painted`).
+
+Seen hidden at 1920 × 1080: the Gaia stand casts on the floor, the clocks, the pillar and the cabinet on
+the wall, where the painted light drew only a disc under each. 55 fps either way at 1080p. At 3840 × 2160 with
+`--immediate` the frame stays at 60 fps (p50 16.68 ms traced against 16.63 ms painted, p95 19.1 against 18.1): the
+present still paces it, so the trace's own cost is not isolated here, only shown to be below the frame's slack.
+This is a renderer's approximation of light, not a validated light simulation. DLSS (Streamline) is not used.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

@@ -66,13 +66,14 @@ internal struct Vertex(SN.Vector3 pos, SN.Vector3 normal, SN.Vector3 color, Mate
     public SN.Vector4 Edge = edge;
 }
 
-// What the Low shader reads once a frame, 32 bytes: the camera's position, the haze's density per metre (0: none), and
-// whether the photographed materials are there (1) or drawn in their flat colours (0).
+// What the Low shader reads once a frame, 32 bytes: the camera's position, the haze's density per metre (0: none),
+// whether the photographed materials are there (1) or drawn in their flat colours (0), and whether the shadows and the
+// ambient occlusion are traced (1) or painted (0).
 [StructLayout(LayoutKind.Sequential)]
-internal struct Frame(SN.Vector3 eye, float haze, bool photographed)
+internal struct Frame(SN.Vector3 eye, float haze, bool photographed, bool traced)
 {
     public SN.Vector4 Eye = new(eye, haze);
-    public SN.Vector4 Options = new(photographed ? 1f : 0f, 0f, 0f, 0f);
+    public SN.Vector4 Options = new(photographed ? 1f : 0f, traced ? 1f : 0f, 0f, 0f);
 }
 
 // What each draw pushes, 128 bytes: the part's clip transform, the three rows of its world transform (for the light)
@@ -236,6 +237,76 @@ internal static unsafe class Stage
             return mix(at, last, clamp(w, 0.0, 1.0));
         }
 
+        #ifdef RAYS
+        layout(set = 0, binding = 4) uniform accelerationStructureEXT hallRays; // RayScene: last frame's meshes
+
+        // How far along dir, from origin, the first surface is; tmax when none is nearer.
+        float reach(vec3 origin, vec3 dir, float tmax, bool any)
+        {
+            rayQueryEXT q;
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | (any ? gl_RayFlagsTerminateOnFirstHitEXT : 0u), 0xFFu, origin, 0.0, dir, tmax);
+            while (rayQueryProceedEXT(q))
+            {
+            }
+
+            return rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT ? tmax : rayQueryGetIntersectionTEXT(q, true);
+        }
+
+        // Interleaved gradient noise: a different turn for each pixel, the same every frame, so nothing crawls.
+        float grain(vec2 p)
+        {
+            return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+        }
+
+        void across(vec3 n, out vec3 t, out vec3 b)
+        {
+            t = normalize(cross(n, abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+            b = cross(n, t);
+        }
+
+        // The key light's share that reaches p: three rays into a light about 4° across, each pixel's turned its way.
+        float keyShadow(vec3 p, vec3 face, vec3 keyDir)
+        {
+            if (dot(face, keyDir) < -0.05)
+            {
+                return 0.0;
+            }
+
+            vec3 t, b;
+            across(keyDir, t, b);
+            float turn = grain(gl_FragCoord.xy) * 6.2831853;
+            float lit = 0.0;
+            for (int i = 0; i < 3; i++)
+            {
+                float a = turn + float(i) * 2.3999632;
+                float r = sqrt((float(i) + 0.5) / 3.0) * 0.035;
+                lit += reach(p, normalize(keyDir + (cos(a) * t + sin(a) * b) * r), 40.0, true) >= 40.0 ? 1.0 : 0.0;
+            }
+
+            return lit / 3.0;
+        }
+
+        // How open p is to the hall around it: five rays over the hemisphere, cosine-weighted, each counting how far it
+        // goes within 0.7 m; 1 in the open, less in corners, under things and between them.
+        float openness(vec3 p, vec3 face)
+        {
+            vec3 t, b;
+            across(face, t, b);
+            float turn = grain(gl_FragCoord.yx + 31.0) * 6.2831853;
+            float shift = grain(gl_FragCoord.xy + 7.0);
+            float open = 0.0;
+            for (int i = 0; i < 5; i++)
+            {
+                float u = (float(i) + shift) / 5.0;
+                float a = turn + float(i) * 2.3999632;
+                vec3 d = normalize(t * (cos(a) * sqrt(u)) + b * (sin(a) * sqrt(u)) + face * sqrt(1.0 - u));
+                open += reach(p, d, 0.7, false) / 0.7;
+            }
+
+            return open / 5.0;
+        }
+        #endif
+
         // Per material: its reflectance head-on (a metal's is its colour), its gloss (Blinn-Phong's exponent), whether
         // it is a metal, and how much a grazing view adds to its reflection, little on rough surfaces.
         const vec4 materials[6] = vec4[](
@@ -329,6 +400,17 @@ internal static unsafe class Stage
             // dark where it meets the floor.
             float shade = 1.0;
             float ao = 1.0;
+            #ifdef RAYS
+            if (frame.options.y > 0.5)
+            {
+                // Traced: whatever stands between the surface and the key light shades it, and whatever is near it
+                // keeps the hall's light from it, each mesh as it is drawn.
+                vec3 p = vWorld + face * 0.004;
+                shade = keyShadow(p, face, keyDir);
+                ao = mix(0.3, 1.0, openness(p, face));
+            }
+            else
+            #endif
             if (face.y > 0.9 && vWorld.y < 0.01)
             {
                 vec2 p = vWorld.xz;
@@ -642,9 +724,27 @@ internal static unsafe class Stage
         bool anisotropic = offeredFeatures.Features.SamplerAnisotropy;
         var enabledFeatures = new VkPhysicalDeviceFeatures2 { Next = canWait ? &presentIdFeature : null };
         enabledFeatures.Features.SamplerAnisotropy = offeredFeatures.Features.SamplerAnisotropy;
+
+        // Ray queries (RayScene), when the GPU offers them and the Low lighting is drawn: the key light's shadows and
+        // the ambient occlusion traced through the hall instead of painted. --no-rays leaves them out.
+        var rayTraced = quality == Quality.Low && !args.Contains("--no-rays") && RayScene.Offered(physical, DeviceExtensions(physical));
+        RayScene.Features(out var rayV12, out var rayStructures, out var rayQueries);
+        rayV12.BufferDeviceAddress = true;
+        rayStructures.AccelerationStructure = true;
+        rayQueries.RayQuery = true;
+        if (rayTraced)
+        {
+            rayQueries.Next = enabledFeatures.Next;
+            rayStructures.Next = &rayQueries;
+            rayV12.Next = &rayStructures;
+            enabledFeatures.Next = &rayV12;
+        }
+
+        Mesh.RayTraced = rayTraced;
+        string[] deviceExtensions = canWait ? ["VK_KHR_swapchain", "VK_KHR_present_id", "VK_KHR_present_wait"] : ["VK_KHR_swapchain"];
         var device = physical.CreateDevice(new Device.CreateInfo
         {
-            Extensions = canWait ? ["VK_KHR_swapchain", "VK_KHR_present_id", "VK_KHR_present_wait"] : ["VK_KHR_swapchain"],
+            Extensions = rayTraced ? [.. deviceExtensions, .. RayScene.Extensions] : [.. deviceExtensions],
             QueueCreateInfos = new ReadOnlySpan<VkDeviceQueueCreateInfo>(&queueInfo, 1),
             Next = &enabledFeatures,
         });
@@ -917,7 +1017,8 @@ internal static unsafe class Stage
         var compileClock = Stopwatch.StartNew();
         var vertexModule = Shader(device, VertexShader, ShaderKind.VertexShader, "scene.vert");
         var fragmentModule = quality == Quality.Low
-            ? Shader(device, LowFragmentShader, ShaderKind.FragmentShader, "low.frag")
+            ? Shader(device, rayTraced ? LowFragmentShader.Replace("#version 450", "#version 460\n#extension GL_EXT_ray_query : require\n#define RAYS 1") : LowFragmentShader,
+                ShaderKind.FragmentShader, rayTraced ? "low-rays.frag" : "low.frag", vulkan13: rayTraced)
             : Shader(device, FragmentShader, ShaderKind.FragmentShader, "scene.frag");
         Console.WriteLine($"SCENE shaders compiled in {compileClock.Elapsed.TotalMilliseconds:F0} ms");
 
@@ -934,6 +1035,9 @@ internal static unsafe class Stage
                 new VkDescriptorSetLayoutBinding { Binding = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 2, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 3, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                .. (rayTraced
+                    ? new[] { new VkDescriptorSetLayoutBinding { Binding = 4, DescriptorType = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit } }
+                    : []),
             ],
         }, null);
         var framePool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
@@ -943,6 +1047,7 @@ internal static unsafe class Stage
             [
                 new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight },
                 new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 3 * FramesInFlight },
+                .. (rayTraced ? new[] { new VkDescriptorPoolSize { Type = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = FramesInFlight } } : []),
             ],
         }, null);
         var frameSize = new ByteSize((nuint)(frameStep * FramesInFlight));
@@ -958,6 +1063,18 @@ internal static unsafe class Stage
             device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = frameSets[i], DescriptorCount = 1, DescriptorType = VkDescriptorType.UniformBuffer, BufferInfo = &bufferInfo }], []);
         }
 
+        // Each frame's top-level structure (RayScene), bound once: rebuilt in place each frame, the handle stays.
+        var rays = rayTraced ? new RayScene(device, physical, FramesInFlight) : null;
+        Rays = rays;
+        for (var i = 0; i < FramesInFlight && rays is not null; i++)
+        {
+            var top = rays.Top(i);
+            var structureInfo = new VkWriteDescriptorSetAccelerationStructureKHR { AccelerationStructureCount = 1, AccelerationStructures = &top };
+            device.UpdateDescriptorSets([new VkWriteDescriptorSet { Next = &structureInfo, DstSet = frameSets[i], DstBinding = 4, DescriptorCount = 1, DescriptorType = VkDescriptorType.AccelerationStructureKHR }], []);
+        }
+
+        Console.WriteLine(rays is not null ? "SCENE rays: shadows and ambient occlusion traced (VK_KHR_ray_query); R toggles them"
+            : $"SCENE rays: none ({(quality != Quality.Low ? "the Flat lighting" : args.Contains("--no-rays") ? "--no-rays" : "the GPU offers no ray queries")})");
         var layout = device.CreatePipelineLayout([frameLayout], [pushRange], null);
         var pipeline = Pipeline(device, layout, renderPass, samples, vertexModule, fragmentModule);
 
@@ -1433,6 +1550,7 @@ internal static unsafe class Stage
         var modalDrill = args.Contains("--modal-drill"); // the window's measuring run of a held title bar and a dragged border (ModalDrill.cs)
         var keysShown = args.Contains("--keys"); // F1: the camera's keys
         var hazy = !args.Contains("--no-fog"); // B: the Low lighting's haze
+        var raysOn = !args.Contains("--rays-off"); // R: traced shadows and occlusion, or painted (with rays offered)
         var looking = false; // the right button is held
         var locked = false; // Ctrl and a click lock the view to the mouse, the Observatory's click; again, or the right button, frees it
         var ctrlAlone = false; // Ctrl down with nothing else since: let go, it crouches
@@ -1587,6 +1705,11 @@ internal static unsafe class Stage
             {
                 hazy = !hazy;
                 Console.WriteLine($"SCENE haze {(hazy ? "on" : "off")}");
+            }
+            else if (key == GlfwKey.R && rays is not null)
+            {
+                raysOn = !raysOn;
+                Console.WriteLine($"SCENE rays {(raysOn ? "traced" : "off: the shadows painted")}");
             }
             else if (key is GlfwKey.Home or GlfwKey.Enter) // back to the first view, from wherever the player got stuck
             {
@@ -2665,12 +2788,13 @@ internal static unsafe class Stage
                 return true;
             }
 
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed);
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed, rays is not null && raysOn);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
 
             var cb = commands[slot];
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+            rays?.Record(cb, slot);
             if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
             cabinet.WallParsec = wall.Showing == WallSource.Kind.Parsec;
             if (wall.Showing == WallSource.Kind.Pong && arcade is not null) pongWall?.UploadAfterFence(cb, slot, arcade.Frame);
@@ -2708,7 +2832,6 @@ internal static unsafe class Stage
             {
                 cb.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
                 cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
-                Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 clocks.Draw((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)), DateTimeOffset.Now);
                 cabinet.DrawMeshes((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)));
                 if (gaiaModule is not null) Draw(cb, layout, gaiaModule.Surface, new Push(SN.Matrix4x4.Identity, viewProj, default));
@@ -2733,6 +2856,10 @@ internal static unsafe class Stage
                         Draw(cb, layout, item.Surface, new Push(item.World, viewProj, item.Glow));
                     }
                 }
+
+                // The hall last: what stands in front of the floor and the wall is already in the depth buffer, so
+                // their fragments hidden behind it are never shaded (nor their rays traced).
+                Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
 
                 // The Pong screen binds its own pipeline and descriptor set, so it comes after every mesh drawn with ours.
                 chestView = worlds[Robot.Torso] * viewProj;
@@ -3262,6 +3389,8 @@ internal static unsafe class Stage
         device.DestroySampler(sampler, null);
         device.DestroySampler(materialSampler, null);
         materials.Dispose();
+        rays?.Dispose();
+        Rays = null;
         device.DestroyShaderModule(splashVertex, null);
         device.DestroyShaderModule(splashFragment, null);
         device.DestroyPipeline(pipeline, null);
@@ -3335,8 +3464,12 @@ internal static unsafe class Stage
     [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
     private static extern uint TimeEndPeriod(uint milliseconds);
 
+    // The hall for ray queries, when they are traced: each mesh drawn is remembered for the next frame's structure.
+    private static RayScene? Rays;
+
     private static void Draw(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
     {
+        Rays?.Remember(mesh, push);
         cb.PushConstants(layout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(Push)));
         cb.BindVertexBuffer(0, mesh.Buffer);
         cb.Draw(mesh.Count, 1, 0, 0);
@@ -3386,10 +3519,16 @@ internal static unsafe class Stage
         SubresourceRange = new VkImageSubresourceRange { AspectMask = aspect, LevelCount = 1, LayerCount = 1 },
     };
 
-    internal static VkShaderModule Shader(Device device, string source, ShaderKind kind, string name)
+    internal static VkShaderModule Shader(Device device, string source, ShaderKind kind, string name, bool vulkan13 = false)
     {
         var compiler = ShaderC.CreateCompiler();
         var options = ShaderC.CreateCompilerOptions();
+        if (vulkan13)
+        {
+            options.SetTargetEnv(TargetEnv.Vulkan, (uint)EnvVersion.Vulkan_1_3); // ray queries need SPIR-V 1.4 and later
+            options.SetTargetSpirv(SpirvVersion._1_6);
+        }
+
         using var result = compiler.Compile(Encoding.UTF8.GetBytes(source), kind, Utf8.GetBytes(name + "\0"), Utf8.GetBytes("main\0"), options);
         var module = device.CreateShaderModule(new VkShaderModuleCreateInfo { CodeSize = result.GetLength(), Code = (int*)result.GetBytes() }, null);
         options.Dispose();

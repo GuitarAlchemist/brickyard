@@ -21,13 +21,17 @@ internal sealed unsafe class Mesh : IDisposable
         Buffer = device.CreateBuffer(new VkBufferCreateInfo
         {
             Size = size,
-            Usage = VkBufferUsageFlags.VertexBufferBit,
+            Usage = RayTraced
+                ? VkBufferUsageFlags.VertexBufferBit | VkBufferUsageFlags.ShaderDeviceAddressBit | VkBufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKHR
+                : VkBufferUsageFlags.VertexBufferBit,
             SharingMode = VkSharingMode.Exclusive,
         }, null);
         var allocated = false;
         try
         {
-            memory = device.AllocateMemory(physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
+            memory = RayTraced
+                ? Gpu.Allocate(device, physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit)
+                : device.AllocateMemory(physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
             allocated = true;
             device.BindBufferMemory(Buffer, memory, memoryOffset: ByteSize.Zero);
             var mapped = device.MapMemory<Vertex>(new MapInfo(memory) { Region = new MapRegion { Size = size } });
@@ -43,9 +47,18 @@ internal sealed unsafe class Mesh : IDisposable
         Interlocked.Increment(ref liveCount);
     }
 
+    // Set once at start-up when the scene traces rays (RayScene): every mesh's vertices then also feed the GPU's
+    // acceleration structures, by their device address.
+    public static bool RayTraced { get; set; }
+
     public VkBuffer Buffer { get; }
 
     public int Count { get; }
+
+    public bool Disposed => disposed;
+
+    // The mesh's bottom-level structure, once RayScene built it; disposed with the mesh.
+    internal Blas? Blas { get; set; }
 
     public void Dispose()
     {
@@ -53,6 +66,9 @@ internal sealed unsafe class Mesh : IDisposable
         {
             return;
         }
+
+        Blas?.Dispose();
+        Blas = null;
 
         device.DestroyBuffer(Buffer, null);
         device.FreeMemory(memory, null);
