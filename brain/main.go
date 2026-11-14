@@ -70,8 +70,9 @@ func main() {
 	lang := flag.String("lang", "", "the language Delta hears and speaks: en, the default, or fr (with -mcp, \"language\" in delta.json)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	ixKnotName := flag.String("ix-knot", "", "ask IX for this catalogue knot (figure-eight, overhand…) with its 3D path, write it for the hall's IX workshop, then exit (ixatelier.go)")
-	ixMCP := flag.String("ix-mcp", "", "with -ix-knot, IX's MCP server executable (default: ix-mcp on the PATH)")
-	ixOut := flag.String("ix-out", "", "with -ix-knot, where to write the document (default: %LOCALAPPDATA%\\delta\\ix-atelier.json)")
+	ixOrigami := flag.String("ix-origami", "", "ask IX to check this fold, a .origami sequence or a FOLD object, write its verdict for the hall's origami table, then exit (ixorigami.go)")
+	ixMCP := flag.String("ix-mcp", "", "with -ix-knot or -ix-origami, IX's MCP server executable (default: ix-mcp on the PATH)")
+	ixOut := flag.String("ix-out", "", "with -ix-knot or -ix-origami, where to write the document (default: %LOCALAPPDATA%\\delta\\ix-atelier.json or ix-origami.json)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -79,6 +80,9 @@ func main() {
 	}
 	if *ixKnotName != "" {
 		os.Exit(runIXKnot(*ixKnotName, *ixMCP, *ixOut, os.Stdout, os.Stderr))
+	}
+	if *ixOrigami != "" {
+		os.Exit(runIXOrigami(*ixOrigami, *ixMCP, *ixOut, os.Stdout, os.Stderr))
 	}
 	if *whisperModel == "" && *whisper != "" {
 		*whisperModel = filepath.Join(filepath.Dir(*whisper), "ggml-large-v3-turbo-q5_0.bin")

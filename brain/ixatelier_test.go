@@ -190,6 +190,12 @@ func fakeIX() {
 		switch {
 		case msg.Method == "initialize":
 			result = map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "fake-ix"}}
+		case msg.Method == "tools/call" && mode == "answer" && msg.Params.Name == "ix_origami_check" && (msg.Params.Arguments["sequence"] != nil || msg.Params.Arguments["fold"] != nil):
+			answer, err := os.ReadFile(os.Getenv("BRAIN_FAKE_IX_ORIGAMI"))
+			if err != nil {
+				os.Exit(4)
+			}
+			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": string(answer)}}}
 		case msg.Method == "tools/call" && mode == "refuse":
 			result = map[string]any{"isError": true, "content": []any{map[string]any{"type": "text", "text": "unknown knot"}}}
 		case msg.Method == "tools/call" && msg.Params.Name == "ix_knot" && msg.Params.Arguments["name"] == "figure-eight" && msg.Params.Arguments["geometry"] == true:

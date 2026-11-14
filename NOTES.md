@@ -1133,7 +1133,19 @@ document is redrawn the same way. Checks: brain/ixatelier_test.go (IX's answer r
 testdata/ix-knot-figure-eight.json, 14 damaged answers, a fake ix-mcp over stdio that answers, refuses, exits or stays
 mute) and widget-tests' Atelier, on widget-tests/testdata/ix-atelier-figure-eight.json, which a Go test keeps equal to
 the brain's document. Live on 2026-11-14: the module reloaded in the running window (reload 1, same pid), tree
-+ix-atelier.
++ix-atelier, and the user saw it with key 4.
+
+The origami table stands beside it. `brain -ix-origami <file> -ix-mcp <ix-mcp.exe>` sends a `.origami` sequence (IX
+replays it) or a FOLD object to ix_origami_check and writes `%LOCALAPPDATA%\delta\ix-origami.json`, format
+delta-ix-origami v1 (brain/ixorigami.go): the name, IX's verdict (ok), whether a sequence's expectations held, the
+rules that rejected it, the crease pattern (vertices, edges, M/V/B/F/U/C/J, faces), the folded frame's vertices, and
+the findings, each IX's rule with the edges or vertices it names (adjacency, crease_orientation, maekawa, kawasaki,
+taco-taco and the like, cyclic, isometry, structure, a failed expectation). The table (IxOrigami.cs) shows the
+pattern and the folded state on two boards, mountains red, valleys blue, what a finding names amber, and the verdict
+and findings in words. The folded state is where IX's folded frame puts the creases: still, flat, not interpolated
+from the pattern and not simulated, which the plaque says. Samples in brain/testdata/origami: half-then-quarter (valid),
+wrong-expectation (valid, "expect ply 3" not held), flipped-crease (one mountain made a valley: IX rejects it by
+adjacency at edge 7, and Maekawa fails at vertex 3).
 
 ## Known problems
 

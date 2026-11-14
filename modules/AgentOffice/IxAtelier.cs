@@ -35,15 +35,9 @@ public sealed class IxAtelier
     // What the stand shows: a knot, or why there is none. Hash names the document's content, for the widgets' meshes.
     public sealed record Reading(Standing Standing, Knot? Knot, string Why, string Hash);
 
-    private readonly string path;
-    private double checkedAt = double.NegativeInfinity;
-    private (DateTime Time, long Length) seen = (default, -2);
+    private readonly DocumentWatch watch = new(DocumentWatch.Place("DELTA_IX_ATELIER", "ix-atelier.json"), MaxBytes);
 
-    public IxAtelier(string? path = null) =>
-        this.path = path ?? (Environment.GetEnvironmentVariable("DELTA_IX_ATELIER") is { Length: > 0 } set ? set
-            : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "ix-atelier.json"));
-
-    public string Path => path;
+    public string Path => watch.Path;
 
     public Reading Current { get; private set; } = new(Standing.Absent, null, "", "absent");
 
@@ -52,24 +46,10 @@ public sealed class IxAtelier
     // At most once a second: reads the document again when its time or length changed; true when what it shows changed.
     public bool Poll(double seconds)
     {
-        if (seconds - checkedAt < 1 && seconds >= checkedAt) return false;
-        checkedAt = seconds;
-        Reading next;
-        try
-        {
-            var info = new FileInfo(path);
-            var now = info.Exists ? (info.LastWriteTimeUtc, info.Length) : (default, -1L);
-            if (now == seen) return false;
-            if (!info.Exists) next = new(Standing.Absent, null, "", "absent");
-            else if (info.Length > MaxBytes) next = Refuse($"{info.Length} bytes, more than {MaxBytes}", $"big-{info.Length}");
-            else next = Read(File.ReadAllBytes(path));
-            seen = now;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return false; // being replaced: the next poll reads it whole
-        }
-
+        if (watch.Poll(seconds) is not var (exists, length, bytes)) return false;
+        var next = !exists ? new(Standing.Absent, null, "", "absent")
+            : bytes is null ? Refuse($"{length} bytes, more than {MaxBytes}", $"big-{length}")
+            : Read(bytes);
         if (next.Hash == Current.Hash) return false;
         Current = next;
         Revision++;

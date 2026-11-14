@@ -188,6 +188,11 @@ func writeAtelier(path string, doc atelierDoc) error {
 	if err != nil {
 		return err
 	}
+	return writeDocument(path, body)
+}
+
+// writeDocument writes a document whole beside its place, then moves it there.
+func writeDocument(path string, body []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -207,10 +212,15 @@ func defaultAtelierPath() string {
 	return filepath.Join(dir, "delta", "ix-atelier.json")
 }
 
-// ixKnot asks ix-mcp for a catalogue knot with its geometry, in one short MCP conversation over stdio (newline-delimited
-// JSON-RPC): initialize, initialized, tools/call ix_knot; the text of the call's answer is the knot. The process is
-// closed after it, or killed when ctx ends.
+// ixKnot asks ix-mcp for a catalogue knot with its geometry.
 func ixKnot(ctx context.Context, exe, name string) ([]byte, error) {
+	return ixCall(ctx, exe, "ix_knot", map[string]any{"name": name, "geometry": true})
+}
+
+// ixCall calls one of IX's tools in one short MCP conversation with ix-mcp over stdio (newline-delimited JSON-RPC):
+// initialize, initialized, tools/call; the text of the call's answer is IX's. The process is closed after it, or
+// killed when ctx ends.
+func ixCall(ctx context.Context, exe, tool string, arguments any) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, exe)
 	cmd.WaitDelay = 2 * time.Second
 	stdin, err := cmd.StdinPipe()
@@ -230,11 +240,15 @@ func ixKnot(ctx context.Context, exe, name string) ([]byte, error) {
 		_ = stdin.Close()
 		_ = cmd.Wait()
 	}()
-	args, _ := json.Marshal(map[string]any{"name": name, "geometry": true})
+	args, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, err
+	}
+	call, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": json.RawMessage(args)}})
 	for _, line := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"delta-brain","version":"` + version + `"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ix_knot","arguments":` + string(args) + `}}`,
+		string(call),
 	} {
 		if _, err := io.WriteString(stdin, line+"\n"); err != nil {
 			return nil, fmt.Errorf("IX unavailable: it stopped reading (%v)%s", err, ixSaid(&stderr))
@@ -260,7 +274,7 @@ func ixKnot(ctx context.Context, exe, name string) ([]byte, error) {
 			continue // initialize's answer, a notification or a log line
 		}
 		if msg.Error != nil {
-			return nil, fmt.Errorf("IX refused ix_knot: %s", msg.Error.Message)
+			return nil, fmt.Errorf("IX refused %s: %s", tool, msg.Error.Message)
 		}
 		var result struct {
 			IsError bool `json:"isError"`
@@ -270,10 +284,10 @@ func ixKnot(ctx context.Context, exe, name string) ([]byte, error) {
 			} `json:"content"`
 		}
 		if err := json.Unmarshal(msg.Result, &result); err != nil || len(result.Content) == 0 {
-			return nil, errors.New("IX answered ix_knot without content")
+			return nil, fmt.Errorf("IX answered %s without content", tool)
 		}
 		if result.IsError {
-			return nil, fmt.Errorf("IX refused ix_knot: %s", result.Content[0].Text)
+			return nil, fmt.Errorf("IX refused %s: %s", tool, result.Content[0].Text)
 		}
 		return []byte(result.Content[0].Text), nil
 	}
@@ -322,6 +336,18 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// ixExecutable is ix-mcp: the one given, else the one on the PATH.
+func ixExecutable(exe string) (string, error) {
+	if exe != "" {
+		return exe, nil
+	}
+	found, err := exec.LookPath("ix-mcp")
+	if err != nil {
+		return "", errors.New("IX unavailable: no ix-mcp on the PATH; pass -ix-mcp with its path")
+	}
+	return found, nil
+}
+
 // runIXKnot is brain -ix-knot: the knot, or why there is none, written for the stand. 0 when the knot is there.
 func runIXKnot(name, exe, out string, stdout, stderr io.Writer) int {
 	now := time.Now()
@@ -336,12 +362,9 @@ func runIXKnot(name, exe, out string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ix-knot: %s; the stand says so (%s)\n", why, out)
 		return 1
 	}
-	if exe == "" {
-		found, err := exec.LookPath("ix-mcp")
-		if err != nil {
-			return fail("IX unavailable: no ix-mcp on the PATH; pass -ix-mcp with its path")
-		}
-		exe = found
+	exe, err := ixExecutable(exe)
+	if err != nil {
+		return fail(err.Error())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ixCallSeconds*time.Second)
 	defer cancel()

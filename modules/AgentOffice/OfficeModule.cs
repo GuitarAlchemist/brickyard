@@ -30,16 +30,18 @@ public sealed class OfficeModule : IOfficeModule
     private bool initialized;
     private int layoutRevision;
     private readonly IxAtelier atelier = new(); // the IX workshop's stand in the hall, which this module also draws (IxAtelier.cs)
+    private readonly IxOrigami origami = new(); // and its origami table (IxOrigami.cs)
 
     public string Id => "agent-office";
 
-    public int Revision => HashCode.Combine(layoutRevision, atelier.Revision);
+    public int Revision => HashCode.Combine(layoutRevision, atelier.Revision, origami.Revision);
 
     public void Initialize()
     {
         if (initialized) throw new InvalidOperationException("The office is already initialized.");
         initialized = true;
         atelier.Poll(0);
+        origami.Poll(0);
     }
 
     public void Update(OfficeState next)
@@ -57,7 +59,8 @@ public sealed class OfficeModule : IOfficeModule
     public WidgetScene Scene()
     {
         var office = OfficeScene();
-        return new([.. office.Library, .. atelier.Library(state.Language)], [.. office.Roots, atelier.Root(state.Language)]);
+        return new([.. office.Library, .. atelier.Library(state.Language), .. origami.Library(state.Language)],
+            [.. office.Roots, atelier.Root(state.Language), origami.Root(state.Language)]);
     }
 
     private WidgetScene OfficeScene()
@@ -132,6 +135,7 @@ public sealed class OfficeModule : IOfficeModule
     {
         Ready();
         atelier.Poll(seconds);
+        origami.Poll(seconds);
         atelier.Pose(seconds, poses);
         var t = (float)seconds;
         foreach (var s in Kept(state))

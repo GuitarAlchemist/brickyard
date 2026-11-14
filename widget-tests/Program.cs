@@ -24,6 +24,7 @@ try
     if (args.Length != 2) throw new ArgumentException("Expected the paths to the v0.1 and v0.2 office module images.");
     // The office also draws the IX workshop from a document on this machine; these checks give it one of their own.
     Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", Path.Combine(Path.GetTempPath(), "delta-no-atelier-" + Guid.NewGuid().ToString("N"), "ix-atelier.json"));
+    Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", Path.Combine(Path.GetTempPath(), "delta-no-origami-" + Guid.NewGuid().ToString("N"), "ix-origami.json"));
     Expansion(Check);
     Stage(Check);
     Activities(Check);
@@ -34,6 +35,7 @@ try
     Enclosures(Check, args[0]);
     Aisles(Check, args[0]);
     Atelier(Check, args[0]);
+    Origami(Check, args[0]);
     Reload(Check, args[0], args[1]);
 }
 catch (Exception e)
@@ -540,6 +542,124 @@ static void Atelier(Action<bool, string> check, string image)
     finally
     {
         Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", before);
+        try { Directory.Delete(dir, true); } catch (IOException) { }
+    }
+}
+
+// The IX workshop's origami table, on the brain's documents for IX's reports on three folds (brain/ixorigami_test.go
+// keeps them equal): IX's verdict and each finding in words, the crease pattern and the folded state on two boards with
+// the edges and vertices at fault in amber, IX unavailable, a refusal for each document that breaks the bounds, and the
+// whole office still within the scene's budget with both stands and 48 stations.
+static void Origami(Action<bool, string> check, string image)
+{
+    var dir = Path.Combine(Path.GetTempPath(), "delta-origami-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    var doc = Path.Combine(dir, "ix-origami.json");
+    var before = Environment.GetEnvironmentVariable("DELTA_IX_ORIGAMI");
+    Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", doc);
+    string Fixture(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "testdata", $"ix-origami-{name}.json"));
+    var (flipped, half, wrong) = (Fixture("flipped-crease"), Fixture("half-then-quarter"), Fixture("wrong-expectation"));
+    var stamp = DateTime.UtcNow;
+    void Write(string text)
+    {
+        File.WriteAllText(doc, text);
+        File.SetLastWriteTimeUtc(doc, stamp = stamp.AddSeconds(2));
+    }
+
+    try
+    {
+        using var session = new WidgetModuleSession<IOfficeModule>(image, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
+        var office = session.Module;
+        var clock = 100.0;
+        office.Update(new("fr", false, []));
+        (WidgetTree Tree, string Plaque, WidgetInstance? Pattern, WidgetInstance? Folded) Look()
+        {
+            clock += 1.5;
+            office.Pose(clock, new Dictionary<string, Pose>());
+            var tree = Widgets.Expand(office.Scene());
+            var plaque = string.Join(" | ", Find(tree.Roots, "ix-origami")?.Text.Select(t => t.Text) ?? []);
+            return (tree, plaque, Find(tree.Roots, "ix-origami/pattern"), Find(tree.Roots, "ix-origami/folded"));
+        }
+
+        static bool Has(WidgetInstance? board, float r, float g, float b) => board?.Boxes.Any(x => Near(x.Color, new(r, g, b))) == true;
+        static float Reach(WidgetInstance? board) => board is null ? 0 : board.Boxes.Skip(1).Max(x => MathF.Max(MathF.Abs(x.Centre.X), MathF.Abs(x.Centre.Y - 0.18f)));
+
+        var absent = Look();
+        check(absent.Tree.Valid && absent.Plaque.Contains("En attente d'IX") && absent.Pattern is null, $"without a document the table waits for IX ({absent.Plaque})");
+
+        Write(flipped);
+        var refused = Look();
+        check(refused.Tree.Valid && refused.Plaque.Contains("Origami · flipped-crease") && refused.Plaque.Contains("Refusé par IX : adjacency")
+            && refused.Plaque.Contains("Couches : l'ordre déclaré contredit le pli à l'arête 7") && refused.Plaque.Contains("Maekawa : |M − V| ≠ 2 au sommet 3")
+            && refused.Plaque.Contains("pas simulé"), $"IX's refusal and each finding in words: {refused.Plaque}");
+        check(refused.Pattern is not null && refused.Folded is not null && Has(refused.Pattern, 1f, 0.62f, 0.2f) && Has(refused.Pattern, 0.2f, 0.45f, 0.95f)
+            && !Has(refused.Pattern, 0.9f, 0.22f, 0.18f), "the pattern's valleys are blue, and the edge and the vertex at fault amber (no mountain is left in it)");
+        check(Reach(refused.Folded) < Reach(refused.Pattern) * 0.6f, $"the folded state, at the pattern's scale, is the quarter it folds to ({Reach(refused.Folded):F3} m against {Reach(refused.Pattern):F3} m)");
+
+        office.Update(new("en", false, []));
+        var english = Look();
+        check(english.Plaque.Contains("Rejected by IX: adjacency") && english.Plaque.Contains("Layers: the stated order contradicts the crease at edge 7"), $"in English: {english.Plaque}");
+        office.Update(new("fr", false, []));
+
+        Write(half);
+        var valid = Look();
+        check(valid.Plaque.Contains("Valide selon IX") && valid.Plaque.Contains("4 couches au plus") && !Has(valid.Pattern, 1f, 0.62f, 0.2f)
+            && Has(valid.Pattern, 0.9f, 0.22f, 0.18f) && Has(valid.Pattern, 0.2f, 0.45f, 0.95f), $"a fold IX finds valid: mountains red, valleys blue, nothing amber ({valid.Plaque})");
+
+        Write(wrong);
+        var expectation = Look();
+        check(expectation.Plaque.Contains("Pli valide, attente non tenue") && expectation.Plaque.Contains("Attendu « ply 3 », obtenu 2 (ligne 4)"),
+            $"an expectation the sequence does not hold: {expectation.Plaque}");
+
+        Write("""{"format":"delta-ix-origami","v":1,"source":"ix_origami_check","at":"2026-11-14T07:00:00Z","error":"IX unavailable: no ix-mcp on the PATH"}""");
+        var unavailable = Look();
+        check(unavailable.Plaque.Contains("IX indisponible") && unavailable.Pattern is null, $"IX unavailable takes the fold away and says why ({unavailable.Plaque})");
+
+        var bad = new (string What, string Text)[]
+        {
+            ("another version", flipped.Replace("\"v\":1", "\"v\":2")),
+            ("an edge beyond the pattern", flipped.Replace("\"ids\":[7]", "\"ids\":[99]")),
+            ("a vertex far away", flipped.Replace("\"vertices\":[[0.5,0]", "\"vertices\":[[0.5,40]")),
+            ("a vertex in 3D", flipped.Replace("\"vertices\":[[0.5,0]", "\"vertices\":[[0.5,0,0]")),
+            ("an unknown assignment", flipped.Replace("\"assignment\":[\"B\"", "\"assignment\":[\"X\"")),
+            ("an edge without its assignment", flipped.Replace("\"assignment\":[\"B\",", "\"assignment\":[")),
+            ("a folded state of other vertices", flipped.Replace("\"folded\":[[0.5,0],", "\"folded\":[")),
+            ("no verdict", flipped.Replace("\"ok\":false,", "")),
+            ("a finding placed nowhere known", flipped.Replace("\"where\":\"edge\"", "\"where\":\"face\"")),
+            ("more than 1 MB", flipped + new string(' ', 1 << 20)),
+            ("not JSON", "IX is down"),
+        };
+        foreach (var (what, text) in bad)
+        {
+            Write(half);
+            Look();
+            Write(text);
+            var no = Look();
+            check(no.Tree.Valid && no.Plaque.Contains("Pli refusé") && no.Pattern is null, $"{what}: refused, and the fold it replaced goes ({no.Plaque})");
+        }
+
+        // The budget: 48 stations, the knot and the table together still expand.
+        var atelierBefore = Environment.GetEnvironmentVariable("DELTA_IX_ATELIER");
+        Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", Path.Combine(dir, "ix-atelier.json"));
+        File.WriteAllText(Path.Combine(dir, "ix-atelier.json"), File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "testdata", "ix-atelier-figure-eight.json")));
+        try
+        {
+            using var full = new WidgetModuleSession<IOfficeModule>(image, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
+            Write(flipped);
+            full.Module.Update(new("fr", false, [.. Enumerable.Range(0, 48).Select(i => new OfficeSession($"0000{i:x4}-aaaa-bbbb-cccc-{i:x12}", $"session {i}", OfficeActivity.Working, 1, $"w{i % 6}", $"ws {i % 6}", i))]));
+            full.Module.Pose(500, new Dictionary<string, Pose>());
+            var tree = Widgets.Expand(full.Module.Scene());
+            check(tree.Valid && Find(tree.Roots, "ix-atelier/knot") is not null && Find(tree.Roots, "ix-origami/folded") is not null,
+                $"48 stations, the knot and the table expand within the scene's budget ({tree.Instances} instances, {tree.Boxes} boxes){string.Concat(tree.Problems.Take(2).Select(p => "; " + p))}");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", atelierBefore);
+        }
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", before);
         try { Directory.Delete(dir, true); } catch (IOException) { }
     }
 }

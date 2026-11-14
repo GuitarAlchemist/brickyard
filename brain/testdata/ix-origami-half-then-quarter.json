@@ -1,0 +1,311 @@
+{
+ "converse_conflicts": [],
+ "counts": {
+  "assignment": {
+   "B": 8,
+   "M": 1,
+   "V": 3
+  },
+  "edges": 12,
+  "faceOrders": 6,
+  "faces": 4,
+  "vertices": 9
+ },
+ "crease_orientation": {
+  "checked": 4,
+  "violations": []
+ },
+ "isometry": {
+  "max_length_change": 0.0,
+  "max_length_change_at_scale_1": 0.0,
+  "ok": true,
+  "scale": 1.0
+ },
+ "layers": {
+  "adjacency": {
+   "checked": 4,
+   "unstated": [],
+   "violations": []
+  },
+  "cells": {
+   "cyclic": [],
+   "max_layers": 4,
+   "multi_layer": 1
+  },
+  "taco_taco": {
+   "checked": 2,
+   "undetermined": 0,
+   "violations": []
+  },
+  "taco_tortilla": {
+   "checked": 0,
+   "undetermined": 0,
+   "violations": []
+  },
+  "tortilla_tortilla": {
+   "checked": 0,
+   "undetermined": 0,
+   "violations": []
+  }
+ },
+ "local_theorems": {
+  "applicable": 1,
+  "kawasaki_failing": [],
+  "kawasaki_max_abs_alt_sum": 0.0,
+  "maekawa_failing": [],
+  "maekawa_m_minus_v": {
+   "-2": 1
+  },
+  "skipped_border": 8,
+  "skipped_isolated": 0,
+  "skipped_other_creases": 0
+ },
+ "ok": true,
+ "orientation": {
+  "down": 2,
+  "up": 2
+ },
+ "overlap": {
+  "cells": 1,
+  "overlapping_pairs": 6,
+  "overlapping_unstated": 0,
+  "stated_and_overlapping": 6,
+  "stated_not_overlapping": 0
+ },
+ "rejected_by": [],
+ "sequence": {
+  "expectations": [
+   {
+    "expect": "ok",
+    "got": "ok",
+    "holds": true,
+    "line": 6
+   },
+   {
+    "expect": "ply 4",
+    "got": "4",
+    "holds": true,
+    "line": 7
+   }
+  ],
+  "fold": {
+   "edges_assignment": [
+    "B",
+    "V",
+    "B",
+    "B",
+    "V",
+    "B",
+    "V",
+    "M",
+    "B",
+    "B",
+    "B",
+    "B"
+   ],
+   "edges_vertices": [
+    [
+     0,
+     1
+    ],
+    [
+     0,
+     3
+    ],
+    [
+     0,
+     4
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ],
+    [
+     2,
+     6
+    ],
+    [
+     3,
+     5
+    ],
+    [
+     3,
+     7
+    ],
+    [
+     4,
+     5
+    ],
+    [
+     5,
+     8
+    ],
+    [
+     6,
+     7
+    ],
+    [
+     7,
+     8
+    ]
+   ],
+   "faces_vertices": [
+    [
+     0,
+     1,
+     2,
+     3
+    ],
+    [
+     4,
+     0,
+     3,
+     5
+    ],
+    [
+     2,
+     6,
+     7,
+     3
+    ],
+    [
+     7,
+     8,
+     5,
+     3
+    ]
+   ],
+   "file_creator": "ix-origami sequence replay",
+   "file_frames": [
+    {
+     "faceOrders": [
+      [
+       0,
+       1,
+       1
+      ],
+      [
+       0,
+       2,
+       1
+      ],
+      [
+       0,
+       3,
+       -1
+      ],
+      [
+       1,
+       2,
+       -1
+      ],
+      [
+       1,
+       3,
+       1
+      ],
+      [
+       2,
+       3,
+       -1
+      ]
+     ],
+     "frame_classes": [
+      "foldedForm"
+     ],
+     "frame_inherit": true,
+     "frame_parent": 0,
+     "vertices_coords": [
+      [
+       0.5,
+       0.0
+      ],
+      [
+       1.0,
+       0.0
+      ],
+      [
+       1.0,
+       0.5
+      ],
+      [
+       0.5,
+       0.5
+      ],
+      [
+       1.0,
+       0.0
+      ],
+      [
+       1.0,
+       0.5
+      ],
+      [
+       1.0,
+       0.0
+      ],
+      [
+       0.5,
+       0.0
+      ],
+      [
+       1.0,
+       0.0
+      ]
+     ]
+    }
+   ],
+   "file_spec": 1.2,
+   "file_title": "half-then-quarter",
+   "frame_classes": [
+    "creasePattern"
+   ],
+   "vertices_coords": [
+    [
+     0.5,
+     0.0
+    ],
+    [
+     1.0,
+     0.0
+    ],
+    [
+     1.0,
+     0.5
+    ],
+    [
+     0.5,
+     0.5
+    ],
+    [
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.5
+    ],
+    [
+     1.0,
+     1.0
+    ],
+    [
+     0.5,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "holds": true,
+  "name": "half-then-quarter"
+ },
+ "structure": [],
+ "tacos_on_opposite_sides": 0
+}
