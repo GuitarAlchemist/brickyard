@@ -20,6 +20,9 @@ package main
 //	           face f lies on the side face g's normal points to, -1 opposite; absent without faces or a folded state),
 //	 "pose": {"note", "ridge": [a, b], "parts": [{"name", "faces": [...], "to", "spread"}]} (Delta's illustrative 3D
 //	         pose, from <name>.pose.json beside the fold: see origamiPose; IX checks the flat fold, not it),
+//	 "motion": {"note", "frames": [[[x, y, z]]]} (the sheet folding: each frame the pattern's vertices in 3D, from
+//	           <name>.motion.json beside the fold, refused unless every face keeps its shape in every frame: see
+//	           origamiMotionFor; Delta's, from a closed form such as tools/miura's, not IX's),
 //	 "findings": [{"rule", "where": "edge" or "vertex" or "", "ids": [...], "count", "value", "detail"}]}
 //
 // or {"format", "v": 1, "source", "at", "error"}. Bounds: 1024 vertices, 2048 edges, 1024 faces of at most 64
@@ -87,6 +90,7 @@ type origamiDoc struct {
 	Folded     [][2]float64     `json:"folded,omitempty"`
 	Orders     [][3]int         `json:"orders,omitempty"`
 	Pose       *origamiPose     `json:"pose,omitempty"`
+	Motion     *origamiMotion   `json:"motion,omitempty"`
 	Findings   []origamiFinding `json:"findings,omitempty"`
 	Error      string           `json:"error,omitempty"`
 }
@@ -445,6 +449,87 @@ func origamiPoseFor(file string, doc origamiDoc) (*origamiPose, error) {
 	return &pose, nil
 }
 
+// The sheet folding, Delta's and not IX's: frames of the pattern's vertices in 3D, in the pattern's units, from a
+// closed form (tools/miura). Every face keeps its shape in every frame (its vertices as far apart as in the pattern,
+// within origamiRigid), so the sheet only folds: nothing stretches, nothing is cut or glued. Between frames the table
+// turns each face rigidly. Whether faces pass through one another mid-fold is not checked.
+type origamiMotion struct {
+	Note   string         `json:"note,omitempty"`
+	Frames [][][3]float64 `json:"frames"`
+}
+
+const (
+	origamiMaxFrames      = 64
+	origamiMaxMotionFaces = 256
+	origamiRigid          = 1e-3 // how far a face's vertices may come apart or together, in the pattern's units
+)
+
+// origamiMotionFor reads the motion beside file, checked against the document: nil when there is none.
+func origamiMotionFor(file string, doc origamiDoc) (*origamiMotion, error) {
+	body, err := os.ReadFile(strings.TrimSuffix(file, filepath.Ext(file)) + ".motion.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > origamiMaxInput {
+		return nil, fmt.Errorf("the motion is larger than %d bytes", origamiMaxInput)
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	var m origamiMotion
+	if err := dec.Decode(&m); err != nil {
+		return nil, fmt.Errorf("the motion is not one: %v", err)
+	}
+	if err := origamiMotionOK(&m, doc); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// origamiMotionOK checks a motion against the pattern and rounds its coordinates as the document keeps them.
+func origamiMotionOK(m *origamiMotion, doc origamiDoc) error {
+	if err := origamiTextOK("motion's note", m.Note); err != nil {
+		return err
+	}
+	if doc.Pattern == nil || len(doc.Pattern.Faces) == 0 || len(doc.Pattern.Faces) > origamiMaxMotionFaces {
+		return fmt.Errorf("a motion needs the pattern's faces, 1 to %d of them", origamiMaxMotionFaces)
+	}
+	if len(m.Frames) < 2 || len(m.Frames) > origamiMaxFrames {
+		return fmt.Errorf("%d frames, not 2 to %d", len(m.Frames), origamiMaxFrames)
+	}
+	v := doc.Pattern.Vertices
+	for k, frame := range m.Frames {
+		if len(frame) != len(v) {
+			return fmt.Errorf("frame %d has %d vertices, the pattern %d", k, len(frame), len(v))
+		}
+		for i := range frame {
+			for c := range 3 {
+				x := frame[i][c]
+				if math.IsNaN(x) || math.IsInf(x, 0) || math.Abs(x) > origamiMaxCoord {
+					return fmt.Errorf("frame %d: vertex %d lies beyond ±%d", k, i, origamiMaxCoord)
+				}
+				frame[i][c] = round4(x)
+			}
+		}
+		for f, face := range doc.Pattern.Faces {
+			for a := 0; a < len(face); a++ {
+				for b := a + 1; b < len(face); b++ {
+					p, q := frame[face[a]], frame[face[b]]
+					got := math.Sqrt((p[0]-q[0])*(p[0]-q[0]) + (p[1]-q[1])*(p[1]-q[1]) + (p[2]-q[2])*(p[2]-q[2]))
+					want := math.Hypot(v[face[a]][0]-v[face[b]][0], v[face[a]][1]-v[face[b]][1])
+					if math.Abs(got-want) > origamiRigid {
+						return fmt.Errorf("frame %d: face %d's vertices %d and %d are %.4f apart, %.4f in the pattern: the face does not keep its shape",
+							k, f, face[a], face[b], got, want)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func origamiTextOK(what, s string) error {
 	if len([]rune(s)) > origamiMaxText || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return fmt.Errorf("the %s is longer than %d characters or holds a control character", what, origamiMaxText)
@@ -554,6 +639,9 @@ func runIXOrigami(file, exe, out string, stdout, stderr io.Writer) int {
 	}
 	if doc.Pose, err = origamiPoseFor(file, doc); err != nil {
 		fmt.Fprintf(stderr, "ix-origami: the pose beside %s is left out: %v\n", file, err) // IX's verdict stands without it
+	}
+	if doc.Motion, err = origamiMotionFor(file, doc); err != nil {
+		fmt.Fprintf(stderr, "ix-origami: the motion beside %s is left out: %v\n", file, err)
 	}
 	if err := write(doc); err != nil {
 		fmt.Fprintf(stderr, "ix-origami: %v\n", err)

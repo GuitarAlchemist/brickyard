@@ -708,6 +708,68 @@ static void Origami(Action<bool, string> check, string image)
         check(pinBox is not null && MathF.Abs(pinBox.Centre.Y + (pinBox.Size.Y / 2) - mount.Y) < 1e-4f && MathF.Abs(lowest - 0.86f) < 0.002f,
             $"the crane sits on a pin through the paper's centre, which it turns about, its lowest point 3 cm over the foot (at {lowest:F3} m)");
 
+        // A Miura-ori with its motion (tools/miura): one sheet that folds and unfolds, each face an instance that the
+        // poses turn rigidly. Wherever it is in its cycle the faces meet at their shared corners: nothing is torn apart.
+        var miura = Fixture("miura-4x3");
+        Write(miura);
+        var sheetLook = Look();
+        var faceIds = Enumerable.Range(0, 12).Select(i => $"ix-origami/model/f{i}").ToArray();
+        var faceInstances = faceIds.Select(p => Find(sheetLook.Tree.Roots, p)).ToArray();
+        check(sheetLook.Tree.Valid && faceInstances.All(f => f is not null && f.Surfaces.Count == 1) && Find(sheetLook.Tree.Roots, "ix-origami/model/f12") is null
+            && sheetLook.Plaque.Contains("Origami · miura-ori 4x3") && sheetLook.Plaque.Contains("Valide selon IX") && sheetLook.Plaque.Contains("12 couches au plus")
+            && sheetLook.Plaque.Contains("le pliage : formule exacte, de Delta") && sheetLook.Plaque.Contains("une seule feuille, pliée"),
+            $"the Miura-ori stands as one sheet of 12 faces, the plaque saying the motion is Delta's and the flat fold IX's: {sheetLook.Plaque}");
+        List<Vector3>[] Posed(double seconds)
+        {
+            var poses = new Dictionary<string, Pose>();
+            office.Pose(seconds, poses);
+            return [.. faceIds.Select((p, i) => Corners(faceInstances[i]).Select(v => Vector3.Transform(v.Position, poses.TryGetValue(p, out var pose) ? pose.Transform : Matrix4x4.Identity)).ToList())];
+        }
+        // How many of the faces' corners meet no other face's corner within 1 mm, the widest gap at those that do (the
+        // paper's two sides, 0.1 mm apart, included), and the sheet's extent and depth.
+        (int Alone, float Gap, float Extent, float Depth) Shape(List<Vector3>[] faces)
+        {
+            var (alone, gap) = (0, 0f);
+            for (var f = 0; f < faces.Length; f++)
+            {
+                // A face's corners once each: its front and back, 0.2 mm apart, are one corner.
+                var corners = new List<Vector3>();
+                foreach (var c in faces[f]) if (!corners.Any(d => Vector3.Distance(c, d) < 0.001f)) corners.Add(c);
+                foreach (var c in corners)
+                {
+                    var nearest = faces.Where((_, g) => g != f).SelectMany(g => g).Min(d => Vector3.Distance(c, d));
+                    if (nearest < 0.001f) gap = MathF.Max(gap, nearest);
+                    else alone++;
+                }
+            }
+
+            var all = faces.SelectMany(f => f).ToList();
+            return (alone, gap, MathF.Max(all.Max(v => v.X) - all.Min(v => v.X), all.Max(v => v.Y) - all.Min(v => v.Y)), all.Max(v => v.Z) - all.Min(v => v.Z));
+        }
+        var cycle = 24 * 100.0;
+        var (flatAlone, flatGap, flatExtent, flatDepth) = Shape(Posed(cycle + 1));
+        var (midAlone, midGap, midExtent, midDepth) = Shape(Posed(cycle + 6.3));
+        var (foldAlone, foldGap, foldExtent, foldDepth) = Shape(Posed(cycle + 13));
+        check(flatAlone == 4 && flatGap < 0.0002f && MathF.Abs(flatExtent - 0.36f) < 0.002f && flatDepth < 0.0005f,
+            $"before it folds, the sheet lies flat, 0.36 m, its faces meeting at every corner but the sheet's own 4 ({flatAlone} alone, {flatGap * 1000:F2} mm apart at most, {flatDepth * 1000:F2} mm deep)");
+        check(midAlone == 4 && midGap < 0.0004f && midDepth > 0.02f && midExtent < flatExtent,
+            $"half folded, between two of the motion's frames, the faces still meet ({midAlone} corners alone, {midGap * 1000:F2} mm apart at most), {midDepth * 100:F1} cm deep, {midExtent:F3} m wide");
+        check(foldAlone <= 4 && foldGap < 0.0004f && foldExtent < flatExtent * 0.8f,
+            $"folded, the faces still meet ({foldAlone} corners alone, {foldGap * 1000:F2} mm apart at most) and the sheet has drawn in to {foldExtent:F3} m, {foldDepth * 100:F1} cm deep");
+        foreach (var (what, text) in new (string, string)[]
+        {
+            ("a frame that stretches a face", Damaged(miura, d => d["motion"]!["frames"]![2]![6]![2] = d["motion"]!["frames"]![2]![6]![2]!.GetValue<double>() + 0.05)),
+            ("a frame missing a vertex", Damaged(miura, d => d["motion"]!["frames"]![3]!.AsArray().RemoveAt(19))),
+            ("a motion of one frame", Damaged(miura, d => d["motion"]!["frames"] = new System.Text.Json.Nodes.JsonArray(d["motion"]!["frames"]![0]!.DeepClone()))),
+        })
+        {
+            Write(half);
+            Look();
+            Write(text);
+            var no = Look();
+            check(no.Tree.Valid && no.Plaque.Contains("Pli refusé") && no.Pattern is null, $"{what}: refused ({no.Plaque})");
+        }
+
         Write(flipped);
         office.Update(new("en", false, []));
         var english = Look();

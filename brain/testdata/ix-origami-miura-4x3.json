@@ -1,0 +1,79 @@
+{
+ "converse_conflicts": [],
+ "counts": {
+  "assignment": {
+   "B": 14,
+   "M": 8,
+   "V": 9
+  },
+  "edges": 31,
+  "faceOrders": 66,
+  "faces": 12,
+  "vertices": 20
+ },
+ "crease_orientation": {
+  "checked": 17,
+  "violations": []
+ },
+ "isometry": {
+  "max_length_change": 2.220446049250313e-16,
+  "max_length_change_at_scale_1": 3.3306690738754696e-16,
+  "ok": true,
+  "scale": 1.0000000000000002
+ },
+ "layers": {
+  "adjacency": {
+   "checked": 17,
+   "unstated": [],
+   "violations": []
+  },
+  "cells": {
+   "cyclic": [],
+   "max_layers": 12,
+   "multi_layer": 5
+  },
+  "taco_taco": {
+   "checked": 15,
+   "undetermined": 0,
+   "violations": []
+  },
+  "taco_tortilla": {
+   "checked": 36,
+   "undetermined": 0,
+   "violations": []
+  },
+  "tortilla_tortilla": {
+   "checked": 0,
+   "undetermined": 0,
+   "violations": []
+  }
+ },
+ "local_theorems": {
+  "applicable": 6,
+  "kawasaki_failing": [],
+  "kawasaki_max_abs_alt_sum": 8.881784197001252e-16,
+  "maekawa_failing": [],
+  "maekawa_m_minus_v": {
+   "-2": 3,
+   "2": 3
+  },
+  "skipped_border": 14,
+  "skipped_isolated": 0,
+  "skipped_other_creases": 0
+ },
+ "ok": true,
+ "orientation": {
+  "down": 6,
+  "up": 6
+ },
+ "overlap": {
+  "cells": 5,
+  "overlapping_pairs": 66,
+  "overlapping_unstated": 0,
+  "stated_and_overlapping": 66,
+  "stated_not_overlapping": 0
+ },
+ "rejected_by": [],
+ "structure": [],
+ "tacos_on_opposite_sides": 0
+}

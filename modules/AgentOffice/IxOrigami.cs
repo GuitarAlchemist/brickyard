@@ -12,7 +12,10 @@ namespace Delta.AgentOffice;
 // else %LOCALAPPDATA%\delta\ix-origami.json. A board leans on the table with the crease pattern, mountains red and
 // valleys blue; beside it the folded state, where IX's folded frame puts the faces, stands as a paper model with its
 // layers in the order the document's face orders give (Sheet), or, without them, lies flat on a second board. Nothing
-// is interpolated between pattern and model and nothing simulated; the plaque says so. The plaque gives IX's verdict
+// is interpolated between pattern and model and nothing simulated; the plaque says so. A document with a motion (the
+// sheet folding, Delta's closed form, every face kept rigid: Folds) shows instead the one sheet folding and unfolding,
+// each face an instance turned rigidly between the motion's frames; the plaque says the motion is Delta's and the flat
+// fold IX's. The plaque gives IX's verdict
 // and each of its findings in words, and the boards mark in amber the edges and vertices a finding names. A document that breaks the
 // bounds shows why, one that says IX was unavailable says so, and none at all gives the command.
 //
@@ -45,7 +48,16 @@ public sealed class IxOrigami
 
         // Delta's illustrative 3D pose, not IX's: parts turned about a ridge (brain/ixorigami.go, origamiPose).
         public Posing? Pose { get; init; }
+
+        // The sheet folding, Delta's and not IX's: each frame the pattern's vertices in 3D, every face keeping its shape
+        // (brain/ixorigami.go, origamiMotion). With it the table shows the one sheet folding, face by face (Folds).
+        public SN.Vector3[][]? Motion { get; init; }
+
+        public bool Moving => Motion is not null && Faces.Length > 0;
     }
+
+    public const int MaxFrames = 64, MaxMotionFaces = 256;
+    public const float Rigid = 2e-3f; // how far a face's vertices may come apart or together in a frame, in the pattern's units
 
     // A ridge through two vertices of the folded state, its up side to the left from A to B, and parts of the faces turned
     // about it: each to To degrees from up, towards the side of the stack its layers are on; a Spread part's two halves
@@ -202,6 +214,42 @@ public sealed class IxOrigami
                 pose = new((ridgeA, ridgeB), [.. parts]);
             }
 
+            SN.Vector3[][]? motion = null;
+            if (root.TryGetProperty("motion"u8, out var mo))
+            {
+                if (mo.ValueKind != JsonValueKind.Object || faces.Count is 0 or > MaxMotionFaces || !mo.TryGetProperty("frames"u8, out var fr)
+                    || fr.ValueKind != JsonValueKind.Array || fr.GetArrayLength() is < 2 or > MaxFrames)
+                    return Refuse($"a motion without faces (1 to {MaxMotionFaces}), or not of 2 to {MaxFrames} frames", hash);
+                var frames = new List<SN.Vector3[]>();
+                foreach (var frame in fr.EnumerateArray())
+                {
+                    if (frame.ValueKind != JsonValueKind.Array || frame.GetArrayLength() != vertices.Length) return Refuse($"motion frame {frames.Count} does not hold the pattern's {vertices.Length} vertices", hash);
+                    var at = new List<SN.Vector3>();
+                    foreach (var q in frame.EnumerateArray())
+                    {
+                        if (q.ValueKind != JsonValueKind.Array || q.GetArrayLength() != 3 || q.EnumerateArray().Any(c => c.ValueKind != JsonValueKind.Number || !double.IsFinite(c.GetDouble()) || Math.Abs(c.GetDouble()) > MaxCoord))
+                            return Refuse($"motion frame {frames.Count}: a vertex that is not 3 numbers within ±{MaxCoord}", hash);
+                        at.Add(new((float)q[0].GetDouble(), (float)q[1].GetDouble(), (float)q[2].GetDouble()));
+                    }
+
+                    foreach (var face in faces)
+                    {
+                        for (var a = 0; a < face.Length; a++)
+                        {
+                            for (var b = a + 1; b < face.Length; b++)
+                            {
+                                if (MathF.Abs(SN.Vector3.Distance(at[face[a]], at[face[b]]) - SN.Vector2.Distance(vertices[face[a]], vertices[face[b]])) > Rigid)
+                                    return Refuse($"motion frame {frames.Count} changes face {faces.IndexOf(face)}'s shape", hash);
+                            }
+                        }
+                    }
+
+                    frames.Add([.. at]);
+                }
+
+                motion = [.. frames];
+            }
+
             var findings = new List<Finding>();
             if (root.TryGetProperty("findings"u8, out var fs))
             {
@@ -230,7 +278,7 @@ public sealed class IxOrigami
                 }
             }
 
-            var fold = new Fold(name, okay.GetBoolean(), holds, [.. rejected], layers, vertices, [.. edges], [.. assignment], folded, [.. findings]) { Faces = [.. faces], Orders = [.. orders], Pose = pose };
+            var fold = new Fold(name, okay.GetBoolean(), holds, [.. rejected], layers, vertices, [.. edges], [.. assignment], folded, [.. findings]) { Faces = [.. faces], Orders = [.. orders], Pose = pose, Motion = motion };
             return new(Standing.Shown, fold, "", hash);
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
@@ -268,24 +316,51 @@ public sealed class IxOrigami
         var fr = language == "fr";
         yield return new(TableId, [new("doc", "?", 1, 40)], _ => Table(reading, fr));
         yield return new(BoardId, [new("doc", "?", 1, 40), new("folded", 0, 0, 1)], a => new(Drawing(reading.Fold, a.Number("folded") > 0.5)));
-        yield return new(ModelId, [new("doc", "?", 1, 40)], _ => new(Sheet(reading.Fold)));
+        yield return new(ModelId, [new("doc", "?", 1, 40)], _ => new(reading.Fold is { Moving: true } f ? Faces(f, reading.Hash) : Sheet(reading.Fold)));
+        yield return new(FaceId, [new("doc", "?", 1, 40), new("face", 0, 0, MaxMotionFaces - 1)], a => new(Face(reading.Fold, (int)a.Number("face"))));
     }
 
     public UsePiece Root(string language)
     {
-        drawn = Current.Fold is { Modelled: true };
+        drawn = Current.Fold is { Modelled: true } or { Moving: true };
+        folds = Current.Fold is { Moving: true } f ? Folds.Of(f) : null;
         return new("ix-origami", TableId, Place(X, 0f, Z, Yaw), new Dictionary<string, WidgetValue> { ["doc"] = $"{language}-{Current.Hash}" });
     }
 
     private bool drawn; // the last scene has the model: only then is it posed
+    private Folds? folds; // and the faces' turns, when the sheet folds
 
-    // The model turns on its rod, 60° either side of its face every 20 s, so that its layers show; nothing of the fold moves.
+    // The model turns on its rod, 60° either side of its face every 20 s, so that its layers show. A sheet with its
+    // motion also folds and unfolds, every Cycle seconds, each face where the motion puts it.
     public void Pose(double seconds, IDictionary<string, Pose> poses)
     {
-        if (drawn) poses["ix-origami/model"] = new(SN.Matrix4x4.CreateRotationY(60f * MathF.PI / 180f * MathF.Sin((float)(seconds % 20 / 20 * 2 * Math.PI))));
+        if (!drawn) return;
+        poses["ix-origami/model"] = new(SN.Matrix4x4.CreateRotationY(60f * MathF.PI / 180f * MathF.Sin((float)(seconds % 20 / 20 * 2 * Math.PI))));
+        if (folds is null) return;
+        var at = folds.At(HowFolded(seconds));
+        for (var i = 0; i < at.Length; i++) poses[$"ix-origami/model/f{i}"] = new(at[i]);
     }
 
-    private static readonly WidgetId TableId = new("ix-origami-table", 1), BoardId = new("ix-origami-board", 2), ModelId = new("ix-origami-model", 1);
+    public const float Cycle = 24f;
+
+    // How far the sheet is folded at this moment, 0 flat to 1 at the motion's last frame: flat for 3 s, folding for 8,
+    // folded for 4, unfolding for 8, flat again for 1; eased at both ends of each move.
+    public static float HowFolded(double seconds)
+    {
+        var t = (float)(seconds % Cycle);
+        static float Ease(float x) => x * x * (3 - (2 * x));
+        return t switch
+        {
+            < 3f => 0f,
+            < 11f => Ease((t - 3f) / 8f),
+            < 15f => 1f,
+            < 23f => 1f - Ease((t - 15f) / 8f),
+            _ => 0f,
+        };
+    }
+
+    private static readonly WidgetId TableId = new("ix-origami-table", 1), BoardId = new("ix-origami-board", 2), ModelId = new("ix-origami-model", 1),
+        FaceId = new("ix-origami-face", 1);
     private static readonly SN.Vector3 Dark = new(0.05f, 0.05f, 0.06f), Steel = new(0.2f, 0.21f, 0.22f), Plaque = new(0.02f, 0.02f, 0.025f),
         Paper = new(0.88f, 0.86f, 0.8f), Mountain = new(0.9f, 0.22f, 0.18f), Valley = new(0.2f, 0.45f, 0.95f), Edge = new(0.25f, 0.25f, 0.27f),
         Other = new(0.55f, 0.55f, 0.55f), Amber = new(1f, 0.62f, 0.2f), Green = new(0.35f, 0.9f, 0.45f), Red = new(1f, 0.45f, 0.35f),
@@ -306,6 +381,7 @@ public sealed class IxOrigami
                 lines.AddRange(f.Findings.Take(5).Select(x => (Explain(x, fr), Pale)));
                 if (f.Findings.Length > 5) lines.Add((Say($"+{f.Findings.Length - 5} more", $"+{f.Findings.Length - 5} autres"), Grey));
                 lines.Add((Say($"at most {f.MaxLayers} layers · checked by IX, not simulated", $"{f.MaxLayers} couches au plus · vérifié par IX, pas simulé"), Grey));
+                if (f.Moving) lines.Add((Say("the folding: exact closed form, Delta's · IX checks the flat fold", "le pliage : formule exacte, de Delta · IX vérifie le pli à plat"), Grey));
                 break;
             case Standing.Unavailable:
                 lines.Add((Say("IX unavailable", "IX indisponible"), Red));
@@ -340,14 +416,15 @@ public sealed class IxOrigami
             var lean = SN.Matrix4x4.CreateRotationX(Lean * MathF.PI / 180f);
             pieces.Add(new UsePiece("pattern", BoardId, lean * SN.Matrix4x4.CreateTranslation(-0.2f, Top, 0.02f), new Dictionary<string, WidgetValue> { ["doc"] = reading.Hash, ["folded"] = 0 }));
             pieces.Add(new TextPiece(Say("crease pattern", "patron"), new(-0.2f, Top + 0.012f, 0.205f), 0.1f, Grey));
-            if (fold.Modelled)
+            if (fold.Modelled || fold.Moving)
             {
                 // On a pin through the paper's centre, its lowest point 3 cm over the foot; the model turns about the pin.
                 var pin = Clearance + Drop(fold);
                 pieces.Add(new BoxPiece(new(0.2f, Top + 0.005f, 0), new(0.14f, 0.01f, 0.09f), Steel, 3));
                 pieces.Add(new BoxPiece(new(0.2f, Top + 0.01f + (pin / 2), 0), new(0.005f, pin, 0.005f), Steel, 3));
                 pieces.Add(new UsePiece("model", ModelId, SN.Matrix4x4.CreateTranslation(0.2f, Top + 0.01f + pin, 0), new Dictionary<string, WidgetValue> { ["doc"] = reading.Hash }));
-                var said = fold.Pose is null ? Say("folded in IX's layer order", "plié dans l'ordre de couches d'IX")
+                var said = fold.Moving ? Say("one sheet, only folded · rigid motion, Delta's", "une seule feuille, pliée · mouvement rigide de Delta")
+                    : fold.Pose is null ? Say("folded in IX's layer order", "plié dans l'ordre de couches d'IX")
                     : Say("IX's layers · wings opened by Delta, illustrative", "couches d'IX · ailes ouvertes par Delta, illustratif");
                 pieces.Add(new TextPiece(said, new(0.2f, Top + 0.012f, 0.205f), Math.Clamp(said.Length * 0.0068f, 0.1f, 0.36f), Grey));
             }
@@ -438,8 +515,141 @@ public sealed class IxOrigami
 
     private const float Clearance = 0.03f; // between the model's lowest point and its foot
 
-    // How far the model's lowest point is below its centre, posed or flat.
-    private static float Drop(Fold fold) => Folding(fold) is { Count: > 0 } t ? -t.Min(x => MathF.Min(x.A.Position.Y, MathF.Min(x.B.Position.Y, x.C.Position.Y))) : 0;
+    // How far the model's lowest point is below its centre, posed or flat, or at the lowest the folding sheet reaches.
+    private static float Drop(Fold fold) => fold.Moving ? Folds.Of(fold).Drop
+        : Folding(fold) is { Count: > 0 } t ? -t.Min(x => MathF.Min(x.A.Position.Y, MathF.Min(x.B.Position.Y, x.C.Position.Y))) : 0;
+
+    // The folding sheet, one instance per face, each face flat where the sheet lies before it folds (Face); Pose turns
+    // each to where the motion puts it.
+    private static IReadOnlyList<Piece> Faces(Fold fold, string hash) =>
+        [.. fold.Faces.Select((_, i) => new UsePiece($"f{i}", FaceId, SN.Matrix4x4.Identity, new Dictionary<string, WidgetValue> { ["doc"] = hash, ["face"] = i }))];
+
+    // One face of the sheet as paper, flat in the model's frame where the unfolded sheet puts it (Folds.Flat): its front
+    // kami red towards +z, its back cream, Ply / 5 apart.
+    public static IReadOnlyList<Piece> Face(Fold? fold, int index)
+    {
+        if (fold is not { Moving: true } || index < 0 || index >= fold.Faces.Length) return [];
+        var flat = Folds.Flat(fold);
+        var face = fold.Faces[index];
+        var area = 0f;
+        for (var i = 0; i < face.Length; i++)
+        {
+            var (p, q) = (fold.Vertices[face[i]], fold.Vertices[face[(i + 1) % face.Length]]);
+            area += (p.X * q.Y) - (q.X * p.Y);
+        }
+
+        var triangles = new List<ModuleTriangle>();
+        var (up, down) = (SN.Vector3.UnitZ, -SN.Vector3.UnitZ);
+        for (var k = 1; k < face.Length - 1; k++)
+        {
+            var (a, b, c) = (flat[face[0]], flat[face[k]], flat[face[k + 1]]);
+            if (area < 0) (b, c) = (c, b); // counter-clockwise seen from +z
+            if (SN.Vector3.Cross(b - a, c - a).Z < 1e-7f) continue; // a sliver: nothing to see
+            var lift = new SN.Vector3(0, 0, Ply / 10);
+            var (front, back) = area >= 0 ? (Kami, Cream) : (Cream, Kami);
+            triangles.Add(new(new(a + lift, up, front), new(b + lift, up, front), new(c + lift, up, front)));
+            triangles.Add(new(new(a - lift, down, back), new(c - lift, down, back), new(b - lift, down, back)));
+        }
+
+        return triangles.Count > 0 ? [new SurfacePiece(triangles)] : [];
+    }
+
+    // The motion as each face's rigid turn: at each frame, the turn and the centre that take the face from where the flat
+    // sheet has it (Flat: the pattern about its centre, scaled so that its larger side is Model) to where the frame puts
+    // it (the frame about its own centre, at the same scale). Between two frames each face turns by the shorter way
+    // between the two turns and its centre moves straight: the face keeps its shape at every moment.
+    public sealed class Folds
+    {
+        private readonly SN.Quaternion[][] turns; // [frame][face]
+        private readonly SN.Vector3[][] centres;
+        private readonly SN.Vector3[] flatCentres;
+
+        private Folds(SN.Quaternion[][] turns, SN.Vector3[][] centres, SN.Vector3[] flatCentres, float drop) =>
+            (this.turns, this.centres, this.flatCentres, Drop) = (turns, centres, flatCentres, drop);
+
+        // How far the sheet's lowest point comes below its centre, flat or folded.
+        public float Drop { get; }
+
+        public int Frames => turns.Length;
+
+        public static (float Scale, SN.Vector2 Centre) Size(Fold fold)
+        {
+            var used = fold.Faces.SelectMany(f => f).Select(i => fold.Vertices[i]).ToArray();
+            var (low, high) = (used.Aggregate(SN.Vector2.Min), used.Aggregate(SN.Vector2.Max));
+            return (Model / MathF.Max(1e-6f, MathF.Max(high.X - low.X, high.Y - low.Y)), (low + high) / 2);
+        }
+
+        // The pattern's vertices in the model's frame, the sheet flat.
+        public static SN.Vector3[] Flat(Fold fold)
+        {
+            var (scale, centre) = Size(fold);
+            return [.. fold.Vertices.Select(v => new SN.Vector3((v - centre) * scale, 0))];
+        }
+
+        private static SN.Vector3[] Placed(Fold fold, SN.Vector3[] frame, float scale)
+        {
+            var used = fold.Faces.SelectMany(f => f).Select(i => frame[i]).ToArray();
+            var centre = (used.Aggregate(SN.Vector3.Min) + used.Aggregate(SN.Vector3.Max)) / 2;
+            return [.. frame.Select(v => (v - centre) * scale)];
+        }
+
+        // An orthonormal frame of a face's plane from three of its corners: the first, the second, and the one farthest
+        // from the line through them; rows x, y, z with z out of the face.
+        private static SN.Matrix4x4 Basis(SN.Vector3[] at, int[] face)
+        {
+            var (o, a) = (at[face[0]], at[face[1]]);
+            var x = SN.Vector3.Normalize(a - o);
+            var far = face.Skip(2).Select(v => at[v]).MaxBy(p => SN.Vector3.Cross(x, p - o).Length());
+            var z = SN.Vector3.Normalize(SN.Vector3.Cross(x, far - o));
+            var y = SN.Vector3.Cross(z, x);
+            return new(x.X, x.Y, x.Z, 0, y.X, y.Y, y.Z, 0, z.X, z.Y, z.Z, 0, 0, 0, 0, 1);
+        }
+
+        private static SN.Vector3 Middle(SN.Vector3[] at, int[] face) => face.Aggregate(SN.Vector3.Zero, (s, v) => s + at[v]) / face.Length;
+
+        public static Folds Of(Fold fold)
+        {
+            var (scale, _) = Size(fold);
+            var flat = Flat(fold);
+            var flatBases = fold.Faces.Select(f => Basis(flat, f)).ToArray();
+            var turns = new SN.Quaternion[fold.Motion!.Length][];
+            var centres = new SN.Vector3[fold.Motion.Length][];
+            var drop = 0f;
+            for (var k = 0; k < fold.Motion.Length; k++)
+            {
+                var at = Placed(fold, fold.Motion[k], scale);
+                drop = MathF.Max(drop, -fold.Faces.SelectMany(f => f).Min(i => at[i].Y));
+                turns[k] = new SN.Quaternion[fold.Faces.Length];
+                centres[k] = new SN.Vector3[fold.Faces.Length];
+                for (var f = 0; f < fold.Faces.Length; f++)
+                {
+                    // A row vector v in the flat face's frame: v · Eᵀ its coordinates on the face, those · F the folded point.
+                    var turn = SN.Matrix4x4.Transpose(flatBases[f]) * Basis(at, fold.Faces[f]);
+                    turns[k][f] = SN.Quaternion.Normalize(SN.Quaternion.CreateFromRotationMatrix(turn));
+                    centres[k][f] = Middle(at, fold.Faces[f]);
+                }
+            }
+
+            return new(turns, centres, [.. fold.Faces.Select(f => Middle(flat, f))], drop);
+        }
+
+        // Each face's placement at this much folded, 0 the first frame to 1 the last.
+        public SN.Matrix4x4[] At(float folded)
+        {
+            var x = Math.Clamp(folded, 0f, 1f) * (Frames - 1);
+            var k = Math.Min((int)x, Frames - 2);
+            var s = x - k;
+            var placed = new SN.Matrix4x4[flatCentres.Length];
+            for (var f = 0; f < placed.Length; f++)
+            {
+                var turn = SN.Quaternion.Slerp(turns[k][f], turns[k + 1][f], s);
+                var centre = SN.Vector3.Lerp(centres[k][f], centres[k + 1][f], s);
+                placed[f] = SN.Matrix4x4.CreateTranslation(-flatCentres[f]) * SN.Matrix4x4.CreateFromQuaternion(turn) * SN.Matrix4x4.CreateTranslation(centre);
+            }
+
+            return placed;
+        }
+    }
 
     // Where the folded model sits in its own frame: the scale that makes its flat extent Model, and the paper's centre
     // (its faces' centroid, weighted by area) at the origin.

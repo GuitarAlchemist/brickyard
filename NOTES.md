@@ -1268,6 +1268,37 @@ it is Blender:
 Seen hidden: the overview's wall no longer repeats, the joints are dark and recessed, the brick edges catch the key
 light; beside the 60 cm clocks the bricks measure as real ones.
 
+## A Miura-ori that folds as one sheet (2026-11-14)
+
+The user asked for a more complex origami, then, seeing the first try, said a real origami is only folding, not
+glueing: the table's model stacked faces in layers and turned parts of them, which looks glued. The Miura-ori now
+stands as one sheet whose faces stay joined at the creases while it folds and unfolds.
+
+- `tools/miura` (Go, `go -C tools/miura run . -out X.fold`) writes a Miura-ori of m × n parallelograms (defaults 12 × 8,
+  65°, sides 1:1) from Schenk & Guest's closed form (2013): vertex (i, j) at (iS, jL + [i odd]V, [j odd]H), with H, S,
+  L, V functions of the fold angle θ. Its FOLD has the crease pattern, mountains and valleys read at θ = 45°, the
+  flat-folded state (θ = 90°) in file_frames[0] and that state's faceOrders (from the faces' overlaps just before
+  flat). Beside it, `X.motion.json`: 25 frames of every vertex from flat to 85°, each facet's sides kept to 2e-15.
+- IX checks the flat fold: the 4 × 3 and the 12 × 8 are valid, isometric, Kawasaki and Maekawa hold, 12 and 48 layers
+  at most, 66 and 3120 orders, 0 findings (testdata/ix-origami-miura-*.json, IX's replies as recorded).
+- The brain carries the motion in the document as `motion` (v 1 kept): 2 to 64 frames, each of the pattern's vertices,
+  within ±16, and refused when a frame changes any distance between a face's vertices by more than 0.001 (the pattern
+  is a unit sheet): the motion must be rigid, every face a flat card that only turns about its creases. The module
+  checks the same, to 0.002.
+- On the table each face is its own instance (`ix-origami/model/f{i}`, 96 for the 12 × 8), its two sides 0.2 mm apart,
+  and Pose moves it rigidly: the turn from the flat face to its place in each frame, slerped between frames, the face's
+  centre lerped. A cycle of 24 s: flat 3 s, folding 8 s (eased), folded 4 s, unfolding 8 s, flat 1 s, while the
+  model keeps its turn of 60° either side.
+- Widget tests: flat, mid-way between two frames and folded, every face's corner meets another face's within 1 mm except
+  the sheet's own four corners, and the widest such gap is 0.07 mm mid-way (0.1 mm is the paper's own thickness);
+  a frame that stretches a face, misses a vertex, or a motion of one frame is refused.
+
+The plaque says « une seule feuille, pliée · mouvement rigide de Delta » and « le pliage : formule exacte, de Delta · IX
+vérifie le pli à plat ». The motion is the closed form's kinematics, not a physical simulation: no forces, no paper
+bending; faces passing through one another while folding are not checked (the Miura-ori does not, but nothing here
+proves it). Seen hidden at 3200 × 1800, view 4, scratchpad miura-live/shot24: flat, half folded in its zigzag, and
+nearly flat-folded into the accordion.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

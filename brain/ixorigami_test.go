@@ -16,7 +16,9 @@ var origamiSamples = []struct{ file, input, report string }{
 	{"testdata/origami/half-then-quarter.origami", "sequence", "testdata/ix-origami-half-then-quarter.json"},
 	{"testdata/origami/wrong-expectation.origami", "sequence", "testdata/ix-origami-wrong-expectation.json"},
 	{"testdata/origami/flipped-crease.fold", "fold", "testdata/ix-origami-flipped-crease.json"},
-	{"testdata/origami/crane.fold", "fold", "testdata/ix-origami-crane.json"}, // Rabbit Ear's layout, see NOTICE.md
+	{"testdata/origami/crane.fold", "fold", "testdata/ix-origami-crane.json"},           // Rabbit Ear's layout, see NOTICE.md
+	{"testdata/origami/miura-4x3.fold", "fold", "testdata/ix-origami-miura-4x3.json"},   // tools/miura -m 4 -n 3
+	{"testdata/origami/miura-12x8.fold", "fold", "testdata/ix-origami-miura-12x8.json"}, // tools/miura, its defaults
 }
 
 func TestRecordIXOrigami(t *testing.T) {
@@ -125,6 +127,9 @@ func TestTheTableModuleIsTestedOnTheBrainsDocuments(t *testing.T) {
 		if doc.Pose, err = origamiPoseFor(s.file, doc); err != nil {
 			t.Fatal(err)
 		}
+		if doc.Motion, err = origamiMotionFor(s.file, doc); err != nil {
+			t.Fatal(err)
+		}
 		body, _ := json.Marshal(doc)
 		body = append(body, '\n')
 		fixture := filepath.Join("..", "widget-tests", "testdata", "ix-origami-"+strings.TrimSuffix(filepath.Base(s.file), filepath.Ext(s.file))+".json")
@@ -178,6 +183,63 @@ func TestTheTablePosesOnlyWhatIsThere(t *testing.T) {
 	flat.Orders = nil
 	if _, err := origamiPoseFor(origamiSamples[3].file, flat); err == nil {
 		t.Error("a pose without the orders to layer the faces is refused")
+	}
+}
+
+// The Miura-ori that tools/miura writes is valid according to IX, and its motion is carried when every face keeps its
+// shape in every frame; a frame that stretches a face, or that does not hold the pattern's vertices, is refused.
+func TestTheTableTakesOnlyARigidMotion(t *testing.T) {
+	given, report := origamiOf(t, 4)
+	doc, err := origamiFromIX("fold", given, report, "miura", origamiTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !*doc.OK || len(doc.Findings) != 0 || doc.MaxLayers != 12 || len(doc.Pattern.Faces) != 12 || len(doc.Orders) != 66 || doc.Name != "miura-ori 4x3" {
+		t.Fatalf("the Miura-ori: ok %v, %d findings, %d layers, %d faces, %d orders, %q", *doc.OK, len(doc.Findings), doc.MaxLayers, len(doc.Pattern.Faces), len(doc.Orders), doc.Name)
+	}
+	motion, err := origamiMotionFor(origamiSamples[4].file, doc)
+	if err != nil || motion == nil || len(motion.Frames) != 25 || len(motion.Frames[4]) != 20 {
+		t.Fatalf("its motion: %+v, %v", motion, err)
+	}
+	if flat := motion.Frames[0]; flat[19][0] != doc.Pattern.Vertices[19][0] || flat[19][2] != 0 {
+		t.Errorf("the motion starts from the flat sheet: vertex 19 at %v, in the pattern %v", flat[19], doc.Pattern.Vertices[19])
+	}
+	if none, err := origamiMotionFor(origamiSamples[3].file, doc); none != nil || err != nil {
+		t.Fatalf("a fold without a motion file: %+v, %v", none, err)
+	}
+	raw, err := os.ReadFile(strings.TrimSuffix(origamiSamples[4].file, ".fold") + ".motion.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, c := range []struct {
+		name, want string
+		damage     func(m map[string]any)
+	}{
+		{"a face stretched", "does not keep its shape", func(m map[string]any) {
+			v := m["frames"].([]any)[2].([]any)[6].([]any)
+			v[2] = v[2].(float64) + 0.01
+		}},
+		{"a vertex missing", "has 19 vertices", func(m map[string]any) {
+			f := m["frames"].([]any)
+			f[3] = f[3].([]any)[:19]
+		}},
+		{"one frame", "not 2 to 64", func(m map[string]any) { m["frames"] = m["frames"].([]any)[:1] }},
+		{"a vertex far away", "beyond", func(m map[string]any) { m["frames"].([]any)[1].([]any)[0].([]any)[0] = 99.0 }},
+		{"an unknown field", "not one", func(m map[string]any) { m["simulated"] = true }},
+	} {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		c.damage(m)
+		body, _ := json.Marshal(m)
+		if err := os.WriteFile(filepath.Join(dir, "miura.motion.json"), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := origamiMotionFor(filepath.Join(dir, "miura.fold"), doc); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", c.name, err, c.want)
+		}
 	}
 }
 
