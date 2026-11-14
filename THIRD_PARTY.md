@@ -58,7 +58,9 @@ release, and the scene keeps only its high score (`%LOCALAPPDATA%\delta\arcade-s
 The hall's photographed materials are Poly Haven's scans, CC0 1.0 (https://polyhaven.com/license):
 `brick_wall_001` (Rob Tuytel, Dimitrios Savva), `concrete_floor_worn_001` and `concrete_wall_003` (Dimitrios Savva, Rico
 Cilliers), `rough_wood` and `green_metal_rust` (Rob Tuytel). `tools/textures` downloads and packs them into
-`%LOCALAPPDATA%\delta\textures`, recording each file's SHA-256; neither this repository nor the release holds them yet.
+`%LOCALAPPDATA%\delta\materials`, recording each file's SHA-256; neither this repository nor the release holds them yet.
+The brick wall is not the scan as photographed: Blender (GPL; run as a tool, nothing of it is copied) lays the scan's
+own bricks afresh with `tools/textures/wall.py`, and what it writes is packed in the scan's place.
 
 ## Ideas, not code
 

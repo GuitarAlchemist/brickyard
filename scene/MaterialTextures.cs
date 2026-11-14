@@ -82,10 +82,12 @@ internal sealed unsafe class MaterialTextures : IDisposable
 
     public VkImageView Arm => images[2].View;
 
-    // The folder the scene reads: --textures DIR, else %LOCALAPPDATA%\delta\textures; null when a map is missing there.
+    // The folder the scene reads: --textures DIR, else %LOCALAPPDATA%\delta\materials; null when a map is missing there.
+    // (delta\textures held the first packing, 1024 px with the scanned wall tiled every 1.3 m, which the shader no
+    // longer matches.)
     public static string? Find(string? option)
     {
-        var dir = option ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "textures");
+        var dir = option ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "materials");
         return Names.All(n => Maps.All(m => File.Exists(Path.Combine(dir, n, m)))) ? dir : null;
     }
 

@@ -1241,6 +1241,33 @@ the wall, where the painted light drew only a disc under each. 55 fps either way
 present still paces it, so the trace's own cost is not isolated here, only shown to be below the frame's slack.
 This is a renderer's approximation of light, not a validated light simulation. DLSS (Streamline) is not used.
 
+## A wall of the scan's own bricks, laid by Blender (2026-11-14)
+
+The user asked for still better bricks, with ComfyUI or Blender. Up close the scan was good; from the hall's usual view
+it read as wallpaper: one 1.3 m square of it repeated about forty times, its pale bricks in a visible lattice, and its
+joints flat. ComfyUI's models (SDXL here) would make a colour without the normal and height that match it, and seamless
+tiling there needs custom nodes, which the task-local ComfyUI runs without; Blender lays geometry and bakes from it, so
+it is Blender:
+
+- `tools/textures/bricks.go` finds the scan's whole bricks from its height map (Otsu's threshold, the regions above it
+  eroded by 6 px to part touching bricks, kept when brick-shaped and not cut by the edge): 44 of brick_wall_001's.
+- `tools/textures/wall.py`, run by Blender 5.2 in the background, lays a stretcher bond of 225 × 75 mm (joint
+  included) that wraps every 2.7 m: 432 slots, each one of the 44 bricks at random (never the same as its left or
+  lower neighbours), flipped or not, resized by a few millimetres, turned by up to 0.5°, set forward or back by 1.5 mm
+  and leant by 1 mm. Only the scan's brick pixels are laid (its mortar left behind), by a height test, so the chipped
+  corners and worn edges stay as photographed. The bed is cast concrete's grain tinted to the scan's mortar, 10 mm
+  behind. Normals come from the laid height; the occlusion is baked by Cycles on the GPU (OptiX) from that height as a
+  mesh, with the neighbouring periods' edges around it. 4096 px, packed at 2048.
+- `textures.json` names it (`"laid"`); `go -C tools/textures run .` refetches nothing it has, and lays again only when
+  wall.py, its settings or its scans change (a stamp beside the output). About 35 s of Blender.
+- Every material is now packed at 2048 px from 2k scans (the array's layers share one size), into
+  `%LOCALAPPDATA%\delta\materials`: a new folder, so a scene of the earlier commits, which reads `delta\textures` and
+  tiles the wall every 1.3 m, keeps drawing what it expects. 90 MB on disk, about 320 MB of GPU memory with mipmaps;
+  loading takes 0.83 s instead of 0.43 s. 1080p hidden: 55 fps as before.
+
+Seen hidden: the overview's wall no longer repeats, the joints are dark and recessed, the brick edges catch the key
+light; beside the 60 cm clocks the bricks measure as real ones.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

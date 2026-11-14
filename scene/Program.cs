@@ -176,7 +176,7 @@ internal static unsafe class Stage
         // Per photographed material (Material.BrickWall = 8 and on): its layer, its tile in metres (tools/textures), the
         // depth of its relief in metres, and 1 when only its grain is taken, on the surface's own colour (ClayBrick).
         const vec4 scans[6] = vec4[](
-            vec4(0.0, 1.3, 0.014, 0.0),   // brick wall, 21.5 cm bricks: the mortar about 14 mm behind their face
+            vec4(0.0, 2.7, 0.023, 0.0),   // brick wall, laid by tools/textures every 2.7 m: 23 mm from the proudest brick to the deepest joint
             vec4(1.0, 3.0, 0.003, 0.0),   // worn concrete floor
             vec4(2.0, 3.0, 0.004, 0.0),   // cast concrete
             vec4(3.0, 0.5, 0.003, 0.0),   // pallet wood
