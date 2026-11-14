@@ -515,6 +515,19 @@ internal static unsafe class Stage
         // by FFmpeg into DIR\parsec-film.mp4, without the window's buttons; --hidden and --size make it apart from the
         // live window. Each frame is drawn and read back however long it takes.
         var filmDir = Option(args, "--film-arcade");
+        // --film-origami DIR: the office's origami table playing its fold step by step (OrigamiFilm), filmed the same way
+        // into DIR\origami-film.mp4, silent; --film-seconds S for another length than the crane's.
+        var origamiDir = Option(args, "--film-origami");
+        if (origamiDir is not null && filmDir is not null)
+        {
+            Console.Error.WriteLine("SCENE refused: one film at a time, --film-arcade or --film-origami");
+            return 2;
+        }
+
+        var origamiFilmed = origamiDir is not null;
+        filmDir ??= origamiDir;
+        var origamiSeconds = float.TryParse(Option(args, "--film-seconds"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var filmSeconds) && filmSeconds > 0
+            ? filmSeconds : OrigamiFilm.DefaultSeconds;
         const int FilmFps = 30;
         if (moduleClickTest && (!demo || shotsDir is null))
         {
@@ -1123,6 +1136,13 @@ internal static unsafe class Stage
         var walkFrom = SN.Vector3.Zero;
         int? officeLogged = null;
         var officeFailed = false; // set by the module's first exception, cleared when new code replaces it
+        var origamiPlay = origamiFilmed ? Path.GetFullPath(Path.Combine(filmDir!, "origami-play.json")) : null;
+        if (origamiPlay is not null) // --film-origami: its play document, written before the module reads it
+        {
+            Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI_PLAY", origamiPlay);
+            OrigamiFilm.Prepare(origamiPlay);
+        }
+
         if (officePath is not null)
         {
             try
@@ -1520,8 +1540,9 @@ internal static unsafe class Stage
             Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
         }
 
-        var film = filmDir is null ? new Cinematic { ReducedMotion = reducedMotion } : new Cinematic(ArcadeFilm.Shots, ArcadeFilm.Heading); // 0, or --cinematic once the splash is over
-        var arcadeFilm = filmDir is null ? null : new ArcadeFilm(camera, film);
+        var film = filmDir is null || origamiFilmed ? new Cinematic { ReducedMotion = reducedMotion } : new Cinematic(ArcadeFilm.Shots, ArcadeFilm.Heading); // 0, or --cinematic once the splash is over
+        var arcadeFilm = filmDir is null || origamiFilmed ? null : new ArcadeFilm(camera, film);
+        var origamiFilm = origamiPlay is null ? null : new OrigamiFilm(camera, origamiPlay, origamiSeconds);
         var filmAsked = false; // the film's game asked of the cabinet
         var hud = filmDir is null; // the window's buttons and cards; a film shows none
         // While nobody moves the camera it tours the hall (IdleTour), and while nobody plays the small robot plays PARSEC
@@ -2335,6 +2356,7 @@ internal static unsafe class Stage
             wheel.Advance(dt);
             film.Advance(dt);
             arcadeFilm?.Advance(dt);
+            origamiFilm?.Advance(dt);
             if (landOn != 0 && (film.Filming || !film.Playing))
             {
                 // Behind the black, so the shot hands the view back where it filmed; a skip before the black stays put.
@@ -2424,10 +2446,22 @@ internal static unsafe class Stage
                 }
             }
 
-            if (arcadeFilm is { Done: true })
+            if (arcadeFilm is { Done: true } || origamiFilm is { Done: true })
             {
                 reason = "film done";
                 return false;
+            }
+
+            // The origami table's film: rolls once the splash is over, the table told to play its steps from the first.
+            if (!splashing && origamiFilm is { Time: < 0f })
+            {
+                if (office is null)
+                {
+                    reason = "film: no office module, no origami table";
+                    return false;
+                }
+
+                origamiFilm.Start();
             }
 
             if (!splashing && wheelAtStart)
@@ -3110,7 +3144,7 @@ internal static unsafe class Stage
 
             cb.EndRenderPass();
             var capturing = shot < shots.Length && shown >= shots[shot].At && extent.Width == shotExtent.Width && extent.Height == shotExtent.Height;
-            var filming = arcadeFilm is { Rolling: true } && extent.Width == shotExtent.Width && extent.Height == shotExtent.Height;
+            var filming = (arcadeFilm is { Rolling: true } || origamiFilm is { Rolling: true }) && extent.Width == shotExtent.Width && extent.Height == shotExtent.Height;
             if (capturing || filming)
             {
                 cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
@@ -3236,14 +3270,17 @@ internal static unsafe class Stage
                     {
                         "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", bgra ? "bgra" : "rgba", "-s", $"{extent.Width}x{extent.Height}",
                         "-r", $"{FilmFps}", "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
-                        "-movflags", "+faststart", Path.Combine(filmDir!, "parsec-film-silent.mp4"),
+                        "-movflags", "+faststart", Path.Combine(filmDir!, origamiFilmed ? "origami-film.mp4" : "parsec-film-silent.mp4"),
                     },
                     RedirectStandardInput = true,
                     UseShellExecute = false,
                 }) ?? throw new InvalidOperationException("FFmpeg did not start");
                 encoder.StandardInput.BaseStream.Write(new ReadOnlySpan<byte>((byte*)readbackMapped, (int)(extent.Width * extent.Height * 4)));
                 filmFrames++;
-                filmSound.AddRange(cabinet.TakeSound());
+                if (arcadeFilm is not null)
+                {
+                    filmSound.AddRange(cabinet.TakeSound());
+                }
             }
             else if (arcadeFilm is not null)
             {
@@ -3286,7 +3323,14 @@ internal static unsafe class Stage
             Console.WriteLine($"SCENE missing shots: the run ended at {loopSeconds:F1} s, before {shots[shot].Name} at {shots[shot].At} s");
         }
 
-        if (encoder is not null)
+        if (encoder is not null && origamiFilmed)
+        {
+            encoder.StandardInput.Close();
+            encoder.WaitForExit();
+            Console.WriteLine($"SCENE film {filmFrames} frames ({filmFrames / (double)FilmFps:F1} s), silent, FFmpeg exit {encoder.ExitCode}, {Path.Combine(filmDir!, "origami-film.mp4")}");
+            encoder.Dispose();
+        }
+        else if (encoder is not null)
         {
             encoder.StandardInput.Close();
             encoder.WaitForExit();

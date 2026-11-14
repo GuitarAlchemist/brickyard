@@ -25,6 +25,7 @@ try
     // The office also draws the IX workshop from a document on this machine; these checks give it one of their own.
     Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", Path.Combine(Path.GetTempPath(), "delta-no-atelier-" + Guid.NewGuid().ToString("N"), "ix-atelier.json"));
     Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", Path.Combine(Path.GetTempPath(), "delta-no-origami-" + Guid.NewGuid().ToString("N"), "ix-origami.json"));
+    Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI_PLAY", Path.Combine(Path.GetTempPath(), "delta-no-origami-" + Guid.NewGuid().ToString("N"), "ix-origami-play.json"));
     Expansion(Check);
     Surfaces(Check);
     Stage(Check);
@@ -608,6 +609,9 @@ static void Origami(Action<bool, string> check, string image)
     var doc = Path.Combine(dir, "ix-origami.json");
     var before = Environment.GetEnvironmentVariable("DELTA_IX_ORIGAMI");
     Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", doc);
+    var playBefore = Environment.GetEnvironmentVariable("DELTA_IX_ORIGAMI_PLAY");
+    var playFile = Path.Combine(dir, "ix-origami-play.json");
+    Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI_PLAY", playFile);
     string Fixture(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "testdata", $"ix-origami-{name}.json"));
     var (flipped, half, wrong, crane) = (Fixture("flipped-crease"), Fixture("half-then-quarter"), Fixture("wrong-expectation"), Fixture("crane"));
     var stamp = DateTime.UtcNow;
@@ -830,6 +834,122 @@ static void Origami(Action<bool, string> check, string image)
             check(no.Tree.Valid && no.Plaque.Contains("Pli refusé") && no.Pattern is null, $"{what}: refused, and the fold it replaced goes ({no.Plaque})");
         }
 
+        // The crane step by step (tools/crane, brain/ixorigamisteps.go): IX's verdict on each step, its census and local
+        // theorems, how far Delta's move into it bends the paper, the creases it has folded on the board, and the sheet's
+        // faces lifted into the step's layers; played in turn, or step by step as the play document says.
+        var steps = Fixture("crane-steps");
+        var playStamp = DateTime.UtcNow;
+        void Play(string go, int step = 0)
+        {
+            File.WriteAllText(playFile, $$"""{"format":"delta-origami-play","v":1,"go":"{{go}}","step":{{step}}}""");
+            File.SetLastWriteTimeUtc(playFile, playStamp = playStamp.AddSeconds(2));
+        }
+        // The plaque after the scene has gone on so many seconds more, and the posed faces' corners then.
+        (string Plaque, WidgetTree Tree, List<Vector3> Corners) After(double seconds)
+        {
+            clock += seconds;
+            var poses = new Dictionary<string, Pose>();
+            office.Pose(clock, poses);
+            var tree = Widgets.Expand(office.Scene());
+            var corners = Enumerable.Range(0, 75).SelectMany(i => Corners(Find(tree.Roots, $"ix-origami/model/f{i}"))
+                .Select(v => Vector3.Transform(v.Position, poses.TryGetValue($"ix-origami/model/f{i}", out var p) ? p.Transform : Matrix4x4.Identity))).ToList();
+            return (string.Join(" | ", Find(tree.Roots, "ix-origami")?.Text.Select(t => t.Text) ?? []), tree, corners);
+        }
+        static float Depth(List<Vector3> c) => c.Count == 0 ? 0 : c.Max(v => v.Z) - c.Min(v => v.Z);
+        static float Extent(List<Vector3> c) => c.Count == 0 ? 0 : MathF.Max(c.Max(v => v.X) - c.Min(v => v.X), c.Max(v => v.Y) - c.Min(v => v.Y));
+
+        Write(steps);
+        var start = Look();
+        var sheetFlat = After(0.1);
+        check(start.Tree.Valid && start.Plaque.Contains("Origami · crane") && start.Plaque.Contains("Étape 0 sur 20 : La feuille carrée, côté couleur dessus")
+            && start.Plaque.Contains("Valide selon IX · à plat, une seule épaisseur |")
+            && start.Plaque.Contains("21 étapes sur 21 valides selon IX · chaque état à plat vérifié, pas simulé") && start.Plaque.Contains("plis à l'étape 0")
+            && start.Plaque.Contains("mouvement de Delta, qui la fléchit un peu") && Find(start.Tree.Roots, "ix-origami/model/f74") is not null
+            && Find(start.Tree.Roots, "ix-origami/model/f75") is null && !Has(start.Pattern, 0.9f, 0.22f, 0.18f) && !Has(start.Pattern, 0.2f, 0.45f, 0.95f),
+            $"the crane's first step: the flat sheet of 75 faces, no crease folded yet, every step valid according to IX ({start.Plaque})");
+        check(MathF.Abs(Extent(sheetFlat.Corners) - 0.36f) < 0.002f && Depth(sheetFlat.Corners) < 0.0005f,
+            $"the sheet lies flat at first, 0.36 m ({Extent(sheetFlat.Corners):F3} m, {Depth(sheetFlat.Corners) * 1000:F2} mm deep)");
+
+        Play("step", 7);
+        var told = After(1.5);
+        var based = After(10);
+        var basePattern = Find(based.Tree.Roots, "ix-origami/pattern");
+        check(told.Plaque.Contains("Étape 7 sur 20 : Rabattre en base carrée") && based.Plaque.Contains("Valide selon IX · 4 couches · 11 ordres de couches")
+            && based.Plaque.Contains("Recensement : IX rejette 11 des 11 ordres inversés seuls") && based.Plaque.Contains("Kawasaki et Maekawa tenus en 1 sommet |")
+            && based.Plaque.Contains("Pour y venir : mouvement de Delta, rigide à 0,05 % du côté près") && based.Plaque.Contains("plis à l'étape 7"),
+            $"told to go to step 7, the table moves there and says what IX found of the square base ({based.Plaque})");
+        check(Has(basePattern, 0.9f, 0.22f, 0.18f) && Has(basePattern, 0.2f, 0.45f, 0.95f) && Extent(based.Corners) < 0.3f
+            && Depth(based.Corners) is > 0.0012f and < 0.003f,
+            $"the square base: mountains and valleys on the board, the sheet drawn in to {Extent(based.Corners):F3} m and stacked {Depth(based.Corners) * 1000:F2} mm deep in its 4 layers");
+        var still = After(30);
+        check(still.Plaque.Contains("Étape 7 sur 20"), "told a step, the table holds it");
+
+        Play("step", 5);
+        var triangle = After(12);
+        var trianglePattern = Find(triangle.Tree.Roots, "ix-origami/pattern");
+        check(triangle.Plaque.Contains("Étape 5 sur 20 : Plier en triangle") && Has(trianglePattern, 0.2f, 0.45f, 0.95f) && !Has(trianglePattern, 0.9f, 0.22f, 0.18f),
+            $"back to the triangle, its diagonal a valley, blue, and nothing else folded ({triangle.Plaque})");
+
+        Play("next");
+        var unfolded = After(12);
+        Play("prev");
+        var again = After(12);
+        check(unfolded.Plaque.Contains("Étape 6 sur 20 : Déplier") && again.Plaque.Contains("Étape 5 sur 20"), $"next, then prev ({unfolded.Plaque} / {again.Plaque})");
+
+        Play("step", 17);
+        var tail = After(20);
+        check(tail.Plaque.Contains("Pli renversé : la queue") && tail.Plaque.Contains("Pour y venir : le mouvement de Delta fléchit le papier de 1,26 % du côté")
+            && tail.Plaque.Contains("Recensement : IX rejette 390 des 390"), $"the tail's reverse fold, where the paper bends and the plaque says by how much ({tail.Plaque})");
+
+        Play("step", 20);
+        var wing = After(20);
+        check(wing.Plaque.Contains("Étape 20 sur 20 : Rabattre l'aile") && wing.Plaque.Contains("28 couches · 838 ordres")
+            && Depth(wing.Corners) is > 0.01f and < 0.02f && Extent(wing.Corners) < 0.32f,
+            $"the crane folded: 28 layers, {Depth(wing.Corners) * 1000:F1} mm deep, {Extent(wing.Corners):F3} m long ({wing.Plaque})");
+
+        // Played in turn: from where it is, each step in order, held, and round again from the flat sheet.
+        Play("step", 0);
+        After(20);
+        Play("auto");
+        var seen = new List<int>();
+        for (var i = 0; i < 160; i++)
+        {
+            var plaque = After(1).Plaque;
+            var at = plaque.IndexOf("Étape ", StringComparison.Ordinal);
+            if (at >= 0 && int.TryParse(plaque[(at + 6)..].Split(' ')[0], out var k) && (seen.Count == 0 || seen[^1] != k)) seen.Add(k);
+        }
+        var round = seen.TakeWhile((k, i) => i == 0 || k > seen[i - 1]).ToList();
+        check(round.SequenceEqual(Enumerable.Range(0, 21)) && seen.Count > 21 && seen[21] == 0, $"played in turn: steps {string.Join(",", seen)}");
+
+        office.Update(new("en", false, []));
+        Play("step", 7);
+        var englishBase = After(12);
+        check(englishBase.Plaque.Contains("Step 7 of 20: Collapse into the square base") && englishBase.Plaque.Contains("Census: IX rejects 11 of the 11 orders flipped alone"),
+            $"in English: {englishBase.Plaque}");
+        office.Update(new("fr", false, []));
+
+        foreach (var (what, text) in new (string, string)[]
+        {
+            ("a step that bends the paper beyond 2 %", Damaged(steps, d => d["steps"]![17]!["flex"] = 0.05)),
+            ("a frame that bends a face beyond 2 %", Damaged(steps, d => d["motion"]!["frames"]![100]![20]![0] = d["motion"]!["frames"]![100]![20]![0]!.GetValue<double>() + 0.3)),
+            ("a step without a layer for each face", Damaged(steps, d => d["steps"]![3]!["layers"]!.AsArray().RemoveAt(0))),
+            ("a last step short of the last frame", Damaged(steps, d => d["steps"]![20]!["at"] = 200)),
+            ("steps out of order", Damaged(steps, d => d["steps"]![5]!["at"] = d["steps"]![4]!["at"]!.GetValue<int>())),
+            ("a census of more rejections than pairs", Damaged(steps, d => d["steps"]![7]!["census"] = new System.Text.Json.Nodes.JsonArray(12, 11))),
+            ("steps without a motion", Damaged(steps, d => d.AsObject().Remove("motion"))),
+        })
+        {
+            Write(half);
+            Look();
+            Write(text);
+            var no = Look();
+            check(no.Tree.Valid && no.Plaque.Contains("Pli refusé") && no.Pattern is null, $"{what}: refused ({no.Plaque})");
+        }
+
+        Play("next"); // a play document without a fold shown step by step changes nothing
+        Write(half);
+        check(Look().Plaque.Contains("Valide selon IX"), "a play command without steps is ignored");
+
         // The budget: 48 stations, the knot and the table together still expand.
         var atelierBefore = Environment.GetEnvironmentVariable("DELTA_IX_ATELIER");
         Environment.SetEnvironmentVariable("DELTA_IX_ATELIER", Path.Combine(dir, "ix-atelier.json"));
@@ -843,6 +963,11 @@ static void Origami(Action<bool, string> check, string image)
             var tree = Widgets.Expand(full.Module.Scene());
             check(tree.Valid && Find(tree.Roots, "ix-atelier/knot") is not null && Find(tree.Roots, "ix-origami/model") is not null,
                 $"48 stations, the rope and the crane expand within the scene's budget ({tree.Instances} instances, {tree.Boxes} boxes, {tree.Triangles} triangles){string.Concat(tree.Problems.Take(2).Select(p => "; " + p))}");
+            Write(steps);
+            full.Module.Pose(510, new Dictionary<string, Pose>());
+            tree = Widgets.Expand(full.Module.Scene());
+            check(tree.Valid && Find(tree.Roots, "ix-origami/model/f74") is not null,
+                $"48 stations, the rope and the crane's 75 faces step by step expand within the scene's budget ({tree.Instances} instances, {tree.Triangles} triangles){string.Concat(tree.Problems.Take(2).Select(p => "; " + p))}");
         }
         finally
         {
@@ -852,6 +977,7 @@ static void Origami(Action<bool, string> check, string image)
     finally
     {
         Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI", before);
+        Environment.SetEnvironmentVariable("DELTA_IX_ORIGAMI_PLAY", playBefore);
         try { Directory.Delete(dir, true); } catch (IOException) { }
     }
 }

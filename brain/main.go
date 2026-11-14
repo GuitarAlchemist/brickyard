@@ -72,7 +72,8 @@ func main() {
 	ixKnotName := flag.String("ix-knot", "", "ask IX for this catalogue knot (figure-eight, overhand…) with its 3D path, write it for the hall's IX workshop, then exit (ixatelier.go)")
 	ixOrigami := flag.String("ix-origami", "", "ask IX to check this fold, a .origami sequence or a FOLD object, write its verdict for the hall's origami table, then exit (ixorigami.go)")
 	ixMCP := flag.String("ix-mcp", "", "with -ix-knot or -ix-origami, IX's MCP server executable (default: ix-mcp on the PATH)")
-	ixOut := flag.String("ix-out", "", "with -ix-knot or -ix-origami, where to write the document (default: %LOCALAPPDATA%\\delta\\ix-atelier.json or ix-origami.json)")
+	ixOut := flag.String("ix-out", "", "with -ix-knot, -ix-origami or -origami-play, where to write the document (default: %LOCALAPPDATA%\\delta\\ix-atelier.json, ix-origami.json or ix-origami-play.json)")
+	origamiPlayCommand := flag.String("origami-play", "", "steer the origami table's fold shown step by step: next, prev, auto or a step's number, then exit (origamiplay.go)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -83,6 +84,9 @@ func main() {
 	}
 	if *ixOrigami != "" {
 		os.Exit(runIXOrigami(*ixOrigami, *ixMCP, *ixOut, os.Stdout, os.Stderr))
+	}
+	if *origamiPlayCommand != "" {
+		os.Exit(runOrigamiPlay(*origamiPlayCommand, *ixOut, os.Stdout, os.Stderr))
 	}
 	if *whisperModel == "" && *whisper != "" {
 		*whisperModel = filepath.Join(filepath.Dir(*whisper), "ggml-large-v3-turbo-q5_0.bin")

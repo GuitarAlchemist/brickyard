@@ -633,6 +633,7 @@ internal sealed class Link(Func<double> clock)
         ArcadeCabinet.SelfTest(Check);
         ScriptScreen.SelfTest(Check);
         ArcadeFilm.SelfTest(Check);
+        OrigamiFilm.SelfTest(Check);
         FrameGap.SelfTest(Check);
         MemoryWatch.SelfTest(Check);
         Panel.BrainSelfTest(Check);

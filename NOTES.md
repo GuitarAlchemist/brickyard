@@ -1299,6 +1299,55 @@ bending; faces passing through one another while folding are not checked (the Mi
 proves it). Seen hidden at 3200 × 1800, view 4, scratchpad miura-live/shot24: flat, half folded in its zigzag, and
 nearly flat-folded into the accordion.
 
+## The traditional crane, step by step, each step checked by IX (2026-11-14)
+
+The user found the Miura-ori not very interesting, chose the traditional crane folded step by step, and asked that each
+step be shown and checked mathematically, the scene playable step by step, and a video of it.
+
+- `tools/crane` (Go, `go -C tools/crane run . -out DIR`, about 4 minutes) folds Rabbit Ear's crane (brain/testdata/
+  origami/crane.fold) in 21 steps (steps.go): the square, the half folds and the triangle each folded and unfolded, the
+  square base, the kites, the top down and up, the petal fold, the same behind (the bird base), the legs narrowed in
+  front and behind, three inside reverse folds (tail, neck, head) and the wing. The sheet is the crane's pattern cut by
+  every crease any step makes (64 vertices, 138 edges, 75 faces). For each step: its flat state from the creases it has
+  folded (reflections from a root face, closing round every vertex, which is Kawasaki), its faces joined where it leaves
+  creases flat, and the layer order from a constraint solver (transitivity, taco-tortilla, taco-taco) whose preferences
+  are, in order, the step's own word (a few mountain/valley hints, steps.go), a folded crease whose faces moved together
+  keeping its side, the final crane's side by most of a crease's pieces, and two faces' order at the step before.
+  Each step is written as a FOLD (crease pattern, folded frame, faceOrders).
+- The motion between steps is Delta's: rigid transforms per face found by Gauss-Newton on the joints and the creases'
+  fold angles, reverse folds in three phases (open the spine, turn, close). Most moves are rigid to 1e-12. The bird base
+  is not rigidly foldable, nor are reverse folds: the petal folds bend the paper by up to 0.1 % of the side, the
+  collapse into the square base 0.025 %, the tail 1.26 %, the neck 1.11 %, the head 0.38 % (4, 3 and 1 mm on a 30 cm
+  sheet). The manifest `crane.steps.json` (format delta-origami-steps v 1) carries the sheet, each step's words,
+  FOLD, resting frame, flex and each face's layer, and the 261 frames.
+- `brain -ix-origami crane.steps.json` (ixorigamisteps.go) asks IX's ix_origami_check about each step's FOLD with the
+  census, and refuses the manifest unless the motion rests, at every step, with every vertex of the sheet where that
+  step's FOLD folds it (each sheet vertex through the face of the FOLD that holds it), and no frame bends a face by more
+  than 0.02. IX finds all 21 steps valid; the census rejects every stated order flipped alone (838 of 838 for the wing);
+  Kawasaki and Maekawa hold at every interior vertex (44 for the wing); 28 layers at most. The document gains `steps`.
+  Tests replay IX's recorded replies (testdata/ix-origami-crane-steps.json, TestRecordIXOrigamiSteps with DELTA_IX_MCP)
+  and refuse a rest off the step's FOLD, a stretched frame, steps out of order, a missing layer, a step's FOLD whose
+  vertex is none of the sheet's; IX rejecting a step is a verdict the step carries.
+- The module plays the steps (IxOrigami.Player): each held 3 s (the first 3, the last 6), the move to the next at 6
+  frames a second, eased; the faces lifted into each step's layers, 0.5 mm apart, between two steps' stacks as they
+  move. The plaque: « Étape k sur 20 : … », IX's verdict, layers and orders, « Recensement : IX rejette R des P ordres
+  inversés seuls », « Kawasaki et Maekawa tenus en N sommets », « Pour y venir : le mouvement de Delta fléchit le papier
+  de X % du côté » (or « rigide à 0,05 % du côté près »), and « 21 étapes sur 21 valides selon IX · chaque état à plat
+  vérifié, pas simulé ». The board shows the creases folded at that step, mountains red and valleys blue (from the
+  resting frame: an edge whose faces turn opposite ways, a mountain when the upper face shows the sheet's front), the
+  others faint. Frames may bend up to 0.021 in a steps document, 512 frames, 64 steps.
+- `brain -origami-play next|prev|auto|K` writes %LOCALAPPDATA%\delta\ix-origami-play.json, which the module watches
+  (DELTA_IX_ORIGAMI_PLAY elsewhere): one command per writing, from the step shown; within a second, the last counts.
+- `scene --film-origami DIR` films the table close at 30 frames a second of the scene's own time, through a play
+  document of its own in DIR (first step held, then all in turn), into DIR\origami-film.mp4, silent, 109 s by default
+  (`--film-seconds S`). Made hidden: `--demo --hidden --listen 8899 --lang fr --size 1920x1080 --film-origami DIR
+  --office-module …` with DELTA_IX_ORIGAMI on the brain's document, 3271 frames in 4 minutes.
+
+What is checked and what is not: IX checks each flat state, its layers and its local theorems; the brain checks that the
+motion passes exactly through those states and how much it bends the paper. The motion between states is an
+interpolation, not a physical simulation: no forces, and faces passing through one another while moving are not
+checked.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

@@ -91,6 +91,7 @@ type origamiDoc struct {
 	Orders     [][3]int         `json:"orders,omitempty"`
 	Pose       *origamiPose     `json:"pose,omitempty"`
 	Motion     *origamiMotion   `json:"motion,omitempty"`
+	Steps      []origamiStep    `json:"steps,omitempty"`
 	Findings   []origamiFinding `json:"findings,omitempty"`
 	Error      string           `json:"error,omitempty"`
 }
@@ -146,7 +147,13 @@ type ixOrigamiReport struct {
 			Violations []json.RawMessage `json:"violations"`
 		} `json:"tortilla_tortilla"`
 	} `json:"layers"`
+	Census *struct {
+		Pairs    int               `json:"pairs"`
+		Rejected int               `json:"rejected"`
+		Accepted []json.RawMessage `json:"accepted"`
+	} `json:"census"`
 	Local struct {
+		Applicable  int               `json:"applicable"`
 		Kawasaki    []json.RawMessage `json:"kawasaki_failing"`
 		KawasakiMax float64           `json:"kawasaki_max_abs_alt_sum"`
 		Maekawa     []json.RawMessage `json:"maekawa_failing"`
@@ -607,6 +614,13 @@ func runIXOrigami(file, exe, out string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "ix-origami: %v\n", err)
 		return 2
+	}
+	if isSteps(given) {
+		if len(given) > origamiMaxStepsInput {
+			fmt.Fprintf(stderr, "ix-origami: %s is larger than %d bytes\n", file, origamiMaxStepsInput)
+			return 2
+		}
+		return runIXOrigamiSteps(given, exe, write, fail, stdout, stderr, out, now)
 	}
 	if len(given) > origamiMaxInput {
 		fmt.Fprintf(stderr, "ix-origami: %s is larger than %d bytes\n", file, origamiMaxInput)

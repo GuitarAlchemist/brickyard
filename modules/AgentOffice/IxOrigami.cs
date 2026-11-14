@@ -17,7 +17,11 @@ namespace Delta.AgentOffice;
 // each face an instance turned rigidly between the motion's frames; the plaque says the motion is Delta's and the flat
 // fold IX's. The plaque gives IX's verdict
 // and each of its findings in words, and the boards mark in amber the edges and vertices a finding names. A document that breaks the
-// bounds shows why, one that says IX was unavailable says so, and none at all gives the command.
+// bounds shows why, one that says IX was unavailable says so, and none at all gives the command. A document with steps
+// (brain/ixorigamisteps.go: the crane from tools/crane) plays them (Player): each step held, its plaque giving IX's
+// verdict on that flat state, the census and the local theorems, and how far Delta's move into it bends the paper; the
+// board shows the creases folded at that step, and the faces stand in the step's layers. A play document
+// (brain -origami-play) moves it to a step, the next, the one before, or plays them all again in turn.
 //
 // This assembly is replaced while the scene runs, so it keeps no static state: what it read lives in this instance.
 public sealed class IxOrigami
@@ -54,10 +58,24 @@ public sealed class IxOrigami
         public SN.Vector3[][]? Motion { get; init; }
 
         public bool Moving => Motion is not null && Faces.Length > 0;
+
+        // A fold shown step by step (brain/ixorigamisteps.go): each step a flat state IX checked, the motion resting at
+        // it at frame At, its faces in their layers there. The pattern is then the sheet every step folds part of.
+        public Step[] Steps { get; init; } = [];
+
+        public bool Stepped => Moving && Steps.Length > 1;
     }
 
-    public const int MaxFrames = 64, MaxMotionFaces = 256;
+    // A step as IX found it: its verdict, layers, face orders, the census (the stated orders each flipped alone, how many
+    // of them IX's rules rejected), the vertices where Kawasaki and Maekawa were checked, the rules that rejected it; and
+    // Delta's: how far the move into it bends the paper (Flex, in the pattern's units), the frame it rests at and each
+    // of the sheet's faces' layer there, 0 the lowest.
+    public sealed record Step(string Fr, string En, bool Ok, int MaxLayers, int Orders, int Rejected, int Pairs, int Vertices,
+        double Flex, int At, int[] Layers, string[] Rules);
+
+    public const int MaxFrames = 64, MaxMotionFaces = 256, MaxSteps = 64, MaxStepFrames = 512, MaxStepLayers = 255;
     public const float Rigid = 2e-3f; // how far a face's vertices may come apart or together in a frame, in the pattern's units
+    public const float MaxFlex = 0.021f; // in a fold shown step by step, how far the paper may bend (the brain's 0.02, rounded)
 
     // A ridge through two vertices of the folded state, its up side to the left from A to B, and parts of the faces turned
     // about it: each to To degrees from up, towards the side of the stack its layers are on; a Spread part's two halves
@@ -76,16 +94,112 @@ public sealed class IxOrigami
 
     public int Revision { get; private set; }
 
+    // What to play of a fold shown step by step, written by `brain -origami-play` (brain/origamiplay.go):
+    // {"format": "delta-origami-play", "v": 1, "go": "auto" | "next" | "prev" | "step", "step": k}. Each new writing is
+    // one command: go to the next step, the one before, step k, or play them all again in turn from the one shown.
+    public const string PlayFormat = "delta-origami-play";
+    private readonly DocumentWatch playWatch = new(DocumentWatch.Place("DELTA_IX_ORIGAMI_PLAY", "ix-origami-play.json"), 4096);
+    private Player? player; // the fold's steps in play, when it has them
+    private int shown; // the step the plaque and the board show
+
     public bool Poll(double seconds)
     {
-        if (watch.Poll(seconds) is not var (exists, length, bytes)) return false;
-        var next = !exists ? new(Standing.Absent, null, "", "absent")
-            : bytes is null ? Refuse($"{length} bytes, more than {MaxBytes}", $"big-{length}")
-            : Read(bytes);
-        if (next.Hash == Current.Hash) return false;
-        Current = next;
-        Revision++;
-        return true;
+        var changed = false;
+        if (watch.Poll(seconds) is var (exists, length, bytes))
+        {
+            var next = !exists ? new(Standing.Absent, null, "", "absent")
+                : bytes is null ? Refuse($"{length} bytes, more than {MaxBytes}", $"big-{length}")
+                : Read(bytes);
+            if (next.Hash != Current.Hash)
+            {
+                Current = next;
+                player = next.Fold is { Stepped: true } f ? new Player([.. f.Steps.Select(s => s.At)], seconds) : null;
+                shown = 0;
+                Revision++;
+                changed = true;
+            }
+        }
+
+        if (playWatch.Poll(seconds) is (true, _, { } command) && Command(command) is var (go, step) && player is not null) player.Go(go, step, seconds);
+        return changed;
+    }
+
+    // A play command, or null when the bytes are none.
+    public static (string Go, int Step)? Command(byte[] bytes)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 2 });
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || Str(root, "format") != PlayFormat || !root.TryGetProperty("v"u8, out var v) || v.ValueKind != JsonValueKind.Number
+                || !v.TryGetInt32(out var version) || version != 1) return null;
+            var go = Str(root, "go");
+            if (go is not ("auto" or "next" or "prev" or "step")) return null;
+            if (go != "step") return (go, 0);
+            return root.TryGetProperty("step"u8, out var s) && Index(s, MaxSteps) is { } k ? (go, k) : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    // The steps in play: in turn, each held while it is read and then folded into the next at FramesPerSecond of the
+    // motion, eased; or, after a command, moved to one step and held there.
+    public sealed class Player(int[] rests, double origin)
+    {
+        public const float FramesPerSecond = 6f, Hold = 3f, FirstHold = 3f, LastHold = 6f;
+        private readonly float[] start = Starts(rests);
+        private double origin = origin;
+        private (double At, float From, int To, float Duration)? manual;
+
+        private static float HoldOf(int k, int n) => k == 0 ? FirstHold : k == n - 1 ? LastHold : Hold;
+
+        public static float MoveTime(int frames) => MathF.Max(1.5f, frames / FramesPerSecond);
+
+        private static float[] Starts(int[] rests)
+        {
+            var start = new float[rests.Length + 1]; // and the cycle's length last
+            for (var k = 0; k < rests.Length; k++)
+                start[k + 1] = start[k] + HoldOf(k, rests.Length) + (k + 1 < rests.Length ? MoveTime(rests[k + 1] - rests[k]) : 0);
+            return start;
+        }
+
+        public float Cycle => start[^1];
+
+        private static float Ease(float x) => x * x * (3 - (2 * x));
+
+        // Where the motion is, in frames, and the step shown: the one held, or the one being folded into.
+        public (float Frame, int Step) At(double seconds)
+        {
+            if (manual is { } m)
+            {
+                var s = m.Duration <= 0 ? 1f : Math.Clamp((float)((seconds - m.At) / m.Duration), 0f, 1f);
+                return (m.From + (Ease(s) * (rests[m.To] - m.From)), m.To);
+            }
+
+            var t = (float)((seconds - origin) % Cycle);
+            if (t < 0) t += Cycle;
+            var k = Math.Max(0, Array.FindLastIndex(start, rests.Length - 1, rests.Length, x => x <= t));
+            var held = t - start[k];
+            if (k == rests.Length - 1 || held < HoldOf(k, rests.Length)) return (rests[k], k);
+            var x = Ease(Math.Clamp((held - HoldOf(k, rests.Length)) / MoveTime(rests[k + 1] - rests[k]), 0f, 1f));
+            return (rests[k] + (x * (rests[k + 1] - rests[k])), k + 1);
+        }
+
+        public void Go(string go, int step, double seconds)
+        {
+            var (frame, now) = At(seconds);
+            if (go == "auto")
+            {
+                manual = null;
+                origin = seconds - start[now];
+                return;
+            }
+
+            var to = Math.Clamp(go switch { "next" => now + 1, "prev" => now - 1, _ => step }, 0, rests.Length - 1);
+            manual = (seconds, frame, to, Math.Clamp(MathF.Abs(rests[to] - frame) / FramesPerSecond, 0.8f, 8f));
+        }
     }
 
     public static Reading Read(byte[] bytes)
@@ -214,12 +328,14 @@ public sealed class IxOrigami
                 pose = new((ridgeA, ridgeB), [.. parts]);
             }
 
+            var stepped = root.TryGetProperty("steps"u8, out var stepList);
+            var (maxFrames, rigid) = stepped ? (MaxStepFrames, MaxFlex) : (MaxFrames, Rigid);
             SN.Vector3[][]? motion = null;
             if (root.TryGetProperty("motion"u8, out var mo))
             {
                 if (mo.ValueKind != JsonValueKind.Object || faces.Count is 0 or > MaxMotionFaces || !mo.TryGetProperty("frames"u8, out var fr)
-                    || fr.ValueKind != JsonValueKind.Array || fr.GetArrayLength() is < 2 or > MaxFrames)
-                    return Refuse($"a motion without faces (1 to {MaxMotionFaces}), or not of 2 to {MaxFrames} frames", hash);
+                    || fr.ValueKind != JsonValueKind.Array || fr.GetArrayLength() is < 2 || fr.GetArrayLength() > maxFrames)
+                    return Refuse($"a motion without faces (1 to {MaxMotionFaces}), or not of 2 to {maxFrames} frames", hash);
                 var frames = new List<SN.Vector3[]>();
                 foreach (var frame in fr.EnumerateArray())
                 {
@@ -238,7 +354,7 @@ public sealed class IxOrigami
                         {
                             for (var b = a + 1; b < face.Length; b++)
                             {
-                                if (MathF.Abs(SN.Vector3.Distance(at[face[a]], at[face[b]]) - SN.Vector2.Distance(vertices[face[a]], vertices[face[b]])) > Rigid)
+                                if (MathF.Abs(SN.Vector3.Distance(at[face[a]], at[face[b]]) - SN.Vector2.Distance(vertices[face[a]], vertices[face[b]])) > rigid)
                                     return Refuse($"motion frame {frames.Count} changes face {faces.IndexOf(face)}'s shape", hash);
                             }
                         }
@@ -248,6 +364,57 @@ public sealed class IxOrigami
                 }
 
                 motion = [.. frames];
+            }
+
+            var steps = new List<Step>();
+            if (stepped)
+            {
+                if (motion is null || stepList.ValueKind != JsonValueKind.Array || stepList.GetArrayLength() is < 2 or > MaxSteps)
+                    return Refuse($"steps without a motion, or not 2 to {MaxSteps} of them", hash);
+                foreach (var s in stepList.EnumerateArray())
+                {
+                    var i = steps.Count;
+                    int? Whole(string field, int most) => s.TryGetProperty(field, out var x) && x.ValueKind == JsonValueKind.Number && x.TryGetInt32(out var n) && n >= 0 && n <= most ? n : null;
+                    if (s.ValueKind != JsonValueKind.Object || Str(s, "fr") is not { } frText || Str(s, "en") is not { } enText || Text(frText, MaxText) is null || Text(enText, MaxText) is null)
+                        return Refuse($"step {i} without its words, or with words too long", hash);
+                    if (!s.TryGetProperty("ok"u8, out var sok) || sok.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return Refuse($"step {i} without IX's verdict", hash);
+                    if (Whole("at", motion.Length - 1) is not { } at || (i == 0 ? at != 0 : at <= steps[i - 1].At))
+                        return Refuse($"step {i} rests at no frame after the last step's", hash);
+                    if (!s.TryGetProperty("flex"u8, out var fx) || fx.ValueKind != JsonValueKind.Number || fx.GetDouble() is not (>= 0 and <= MaxFlex))
+                        return Refuse($"step {i} bends the paper beyond {MaxFlex}, or does not say", hash);
+                    var census = (0, 0);
+                    if (s.TryGetProperty("census"u8, out var cs))
+                    {
+                        if (cs.ValueKind != JsonValueKind.Array || cs.GetArrayLength() != 2 || Index(cs[0], int.MaxValue) is not { } rej || Index(cs[1], int.MaxValue) is not { } pairs || rej > pairs)
+                            return Refuse($"step {i}'s census is not [rejected, pairs]", hash);
+                        census = (rej, pairs);
+                    }
+
+                    if (!s.TryGetProperty("layers"u8, out var ly) || ly.ValueKind != JsonValueKind.Array || ly.GetArrayLength() != faces.Count)
+                        return Refuse($"step {i} does not give each of the {faces.Count} faces its layer", hash);
+                    var layer = new List<int>();
+                    foreach (var x in ly.EnumerateArray())
+                    {
+                        if (Index(x, MaxStepLayers + 1) is not { } l) return Refuse($"step {i} puts a face beyond layer {MaxStepLayers}", hash);
+                        layer.Add(l);
+                    }
+
+                    var rules = new List<string>();
+                    if (s.TryGetProperty("findings"u8, out var sf))
+                    {
+                        if (sf.ValueKind != JsonValueKind.Array || sf.GetArrayLength() > MaxFindings) return Refuse($"step {i}: more than {MaxFindings} findings", hash);
+                        foreach (var f in sf.EnumerateArray())
+                        {
+                            if (f.ValueKind != JsonValueKind.Object || Str(f, "rule") is not { Length: > 0 } rule || Text(rule, MaxText) is null) return Refuse($"step {i}: a finding without its rule", hash);
+                            if (!rules.Contains(rule)) rules.Add(rule);
+                        }
+                    }
+
+                    steps.Add(new(frText, enText, sok.GetBoolean(), Whole("max_layers", 100000) ?? 0, Whole("orders", MaxOrders) ?? 0, census.Item1, census.Item2,
+                        Whole("vertices", MaxVertices) ?? 0, fx.GetDouble(), at, [.. layer], [.. rules]));
+                }
+
+                if (steps[^1].At != motion.Length - 1) return Refuse("the last step does not rest at the motion's last frame", hash);
             }
 
             var findings = new List<Finding>();
@@ -278,7 +445,7 @@ public sealed class IxOrigami
                 }
             }
 
-            var fold = new Fold(name, okay.GetBoolean(), holds, [.. rejected], layers, vertices, [.. edges], [.. assignment], folded, [.. findings]) { Faces = [.. faces], Orders = [.. orders], Pose = pose, Motion = motion };
+            var fold = new Fold(name, okay.GetBoolean(), holds, [.. rejected], layers, vertices, [.. edges], [.. assignment], folded, [.. findings]) { Faces = [.. faces], Orders = [.. orders], Pose = pose, Motion = motion, Steps = [.. steps] };
             return new(Standing.Shown, fold, "", hash);
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException)
@@ -314,8 +481,9 @@ public sealed class IxOrigami
     {
         var reading = Current;
         var fr = language == "fr";
-        yield return new(TableId, [new("doc", "?", 1, 40)], _ => Table(reading, fr));
-        yield return new(BoardId, [new("doc", "?", 1, 40), new("folded", 0, 0, 1)], a => new(Drawing(reading.Fold, a.Number("folded") > 0.5)));
+        var step = reading.Fold is { Stepped: true } ? shown : -1;
+        yield return new(TableId, [new("doc", "?", 1, 40)], _ => Table(reading, fr, step));
+        yield return new(BoardId, [new("doc", "?", 1, 40), new("folded", 0, 0, 1)], a => new(Drawing(reading.Fold, a.Number("folded") > 0.5, step)));
         yield return new(ModelId, [new("doc", "?", 1, 40)], _ => new(reading.Fold is { Moving: true } f ? Faces(f, reading.Hash) : Sheet(reading.Fold)));
         yield return new(FaceId, [new("doc", "?", 1, 40), new("face", 0, 0, MaxMotionFaces - 1)], a => new(Face(reading.Fold, (int)a.Number("face"))));
     }
@@ -324,21 +492,59 @@ public sealed class IxOrigami
     {
         drawn = Current.Fold is { Modelled: true } or { Moving: true };
         folds = Current.Fold is { Moving: true } f ? Folds.Of(f) : null;
-        return new("ix-origami", TableId, Place(X, 0f, Z, Yaw), new Dictionary<string, WidgetValue> { ["doc"] = $"{language}-{Current.Hash}" });
+        lifts = Current.Fold is { Stepped: true } g ? [.. g.Steps.Select(Lifts)] : null;
+        var doc = Current.Fold is { Stepped: true } ? $"{language}-{Current.Hash}-{shown}" : $"{language}-{Current.Hash}";
+        return new("ix-origami", TableId, Place(X, 0f, Z, Yaw), new Dictionary<string, WidgetValue> { ["doc"] = doc });
     }
 
     private bool drawn; // the last scene has the model: only then is it posed
     private Folds? folds; // and the faces' turns, when the sheet folds
+    private float[][]? lifts; // and, step by step, how far each face lies above the paper's middle layer
+
+    // Each face's height in the stack a step leaves, Ply a layer, about the stack's middle.
+    public static float[] Lifts(Step step)
+    {
+        var top = Math.Max(1, step.Layers.Max());
+        return [.. step.Layers.Select(l => (l - (top / 2f)) * Ply)];
+    }
 
     // The model turns on its rod, 60° either side of its face every 20 s, so that its layers show. A sheet with its
-    // motion also folds and unfolds, every Cycle seconds, each face where the motion puts it.
+    // motion also folds and unfolds, every Cycle seconds, each face where the motion puts it. A fold shown step by step
+    // turns slower, 30° either side every 40 s, and plays its steps (Player), each face lifted to its layer, from one
+    // step's stack to the next's as it moves; when the step shown changes, the plaque and the board follow.
     public void Pose(double seconds, IDictionary<string, Pose> poses)
     {
         if (!drawn) return;
-        poses["ix-origami/model"] = new(SN.Matrix4x4.CreateRotationY(60f * MathF.PI / 180f * MathF.Sin((float)(seconds % 20 / 20 * 2 * Math.PI))));
+        var stepped = player is not null && lifts is not null && Current.Fold is { Stepped: true };
+        var (swing, period) = stepped ? (30f, 40.0) : (60f, 20.0);
+        poses["ix-origami/model"] = new(SN.Matrix4x4.CreateRotationY(swing * MathF.PI / 180f * MathF.Sin((float)(seconds % period / period * 2 * Math.PI))));
         if (folds is null) return;
-        var at = folds.At(HowFolded(seconds));
-        for (var i = 0; i < at.Length; i++) poses[$"ix-origami/model/f{i}"] = new(at[i]);
+        if (!stepped)
+        {
+            var at = folds.At(HowFolded(seconds));
+            for (var i = 0; i < at.Length; i++) poses[$"ix-origami/model/f{i}"] = new(at[i]);
+            return;
+        }
+
+        var (frame, step) = player!.At(seconds);
+        if (step != shown)
+        {
+            shown = step;
+            Revision++;
+        }
+
+        var placed = folds.At(frame / (folds.Frames - 1));
+        var lift = Lift(Current.Fold!.Steps, lifts!, frame);
+        for (var i = 0; i < placed.Length; i++) poses[$"ix-origami/model/f{i}"] = new(placed[i] * SN.Matrix4x4.CreateTranslation(0, 0, lift[i]));
+    }
+
+    // Each face's lift at this frame of the motion: the step it rests at's, or between two steps' as far as it has come.
+    public static float[] Lift(Step[] steps, float[][] lifts, float frame)
+    {
+        var k = Math.Max(0, Array.FindLastIndex(steps, s => s.At <= frame));
+        if (k == steps.Length - 1) return lifts[k];
+        var s = Math.Clamp((frame - steps[k].At) / (steps[k + 1].At - steps[k].At), 0f, 1f);
+        return [.. lifts[k].Select((z, i) => z + (s * (lifts[k + 1][i] - z)))];
     }
 
     public const float Cycle = 24f;
@@ -366,13 +572,17 @@ public sealed class IxOrigami
         Other = new(0.55f, 0.55f, 0.55f), Amber = new(1f, 0.62f, 0.2f), Green = new(0.35f, 0.9f, 0.45f), Red = new(1f, 0.45f, 0.35f),
         Pale = new(0.84f, 0.86f, 0.9f), Grey = new(0.6f, 0.62f, 0.66f), Kami = new(0.68f, 0.1f, 0.11f), Cream = new(0.93f, 0.9f, 0.83f);
 
-    private static Built Table(Reading reading, bool fr)
+    private static Built Table(Reading reading, bool fr, int step)
     {
         string Say(string en, string frText) => fr ? frText : en;
         var lines = new List<(string Text, SN.Vector3 Color)>();
         var title = "Origami";
         switch (reading.Standing)
         {
+            case Standing.Shown when reading.Fold is { Stepped: true } f && step >= 0:
+                title = f.Name.Length > 0 ? $"Origami · {f.Name}" : "Origami";
+                lines.AddRange(StepLines(f, step, fr));
+                break;
             case Standing.Shown when reading.Fold is { } f:
                 title = f.Name.Length > 0 ? $"Origami · {f.Name}" : "Origami";
                 if (!f.Ok) lines.Add((Say("Rejected by IX: ", "Refusé par IX : ") + (f.RejectedBy.Length > 0 ? string.Join(", ", f.RejectedBy) : "?"), Red));
@@ -414,8 +624,11 @@ public sealed class IxOrigami
         if (reading.Fold is { } fold)
         {
             var lean = SN.Matrix4x4.CreateRotationX(Lean * MathF.PI / 180f);
-            pieces.Add(new UsePiece("pattern", BoardId, lean * SN.Matrix4x4.CreateTranslation(-0.2f, Top, 0.02f), new Dictionary<string, WidgetValue> { ["doc"] = reading.Hash, ["folded"] = 0 }));
-            pieces.Add(new TextPiece(Say("crease pattern", "patron"), new(-0.2f, Top + 0.012f, 0.205f), 0.1f, Grey));
+            var stepped = fold.Stepped && step >= 0;
+            pieces.Add(new UsePiece("pattern", BoardId, lean * SN.Matrix4x4.CreateTranslation(-0.2f, Top, 0.02f),
+                new Dictionary<string, WidgetValue> { ["doc"] = stepped ? $"{reading.Hash}-{step}" : reading.Hash, ["folded"] = 0 }));
+            var board = stepped ? Say($"creases folded at step {step}", $"plis à l'étape {step}") : Say("crease pattern", "patron");
+            pieces.Add(new TextPiece(board, new(-0.2f, Top + 0.012f, 0.205f), Math.Clamp(board.Length * 0.0068f, 0.1f, 0.3f), Grey));
             if (fold.Modelled || fold.Moving)
             {
                 // On a pin through the paper's centre, its lowest point 3 cm over the foot; the model turns about the pin.
@@ -423,7 +636,8 @@ public sealed class IxOrigami
                 pieces.Add(new BoxPiece(new(0.2f, Top + 0.005f, 0), new(0.14f, 0.01f, 0.09f), Steel, 3));
                 pieces.Add(new BoxPiece(new(0.2f, Top + 0.01f + (pin / 2), 0), new(0.005f, pin, 0.005f), Steel, 3));
                 pieces.Add(new UsePiece("model", ModelId, SN.Matrix4x4.CreateTranslation(0.2f, Top + 0.01f + pin, 0), new Dictionary<string, WidgetValue> { ["doc"] = reading.Hash }));
-                var said = fold.Moving ? Say("one sheet, only folded · rigid motion, Delta's", "une seule feuille, pliée · mouvement rigide de Delta")
+                var said = stepped ? Say("one sheet · Delta's motion, which bends it a little", "une seule feuille · mouvement de Delta, qui la fléchit un peu")
+                    : fold.Moving ? Say("one sheet, only folded · rigid motion, Delta's", "une seule feuille, pliée · mouvement rigide de Delta")
                     : fold.Pose is null ? Say("folded in IX's layer order", "plié dans l'ordre de couches d'IX")
                     : Say("IX's layers · wings opened by Delta, illustrative", "couches d'IX · ailes ouvertes par Delta, illustratif");
                 pieces.Add(new TextPiece(said, new(0.2f, Top + 0.012f, 0.205f), Math.Clamp(said.Length * 0.0068f, 0.1f, 0.36f), Grey));
@@ -436,6 +650,86 @@ public sealed class IxOrigami
         }
 
         return new(pieces);
+    }
+
+    // A step in words: which it is, IX's verdict on it, the census, the local theorems, how far the move into it bends the
+    // paper, and what IX and Delta each did.
+    public static IEnumerable<(string Text, SN.Vector3 Color)> StepLines(Fold f, int step, bool fr)
+    {
+        string Say(string en, string frText) => fr ? frText : en;
+        var s = f.Steps[step];
+        var last = f.Steps.Length - 1;
+        yield return (Say($"Step {step} of {last}: {s.En}", $"Étape {step} sur {last} : {s.Fr}"), Pale);
+        var stack = s.MaxLayers <= 1 ? Say(" · flat, one layer", " · à plat, une seule épaisseur") : Say($" · {s.MaxLayers} layers", $" · {s.MaxLayers} couches");
+        var orders = s.Orders switch { 0 => "", 1 => Say(" · 1 layer order", " · 1 ordre de couches"), _ => Say($" · {s.Orders} layer orders", $" · {s.Orders} ordres de couches") };
+        yield return s.Ok
+            ? (Say("Valid according to IX", "Valide selon IX") + stack + orders, Green)
+            : (Say("Rejected by IX: ", "Refusé par IX : ") + (s.Rules.Length > 0 ? string.Join(", ", s.Rules) : "?"), Red);
+        if (s.Pairs > 0)
+            yield return (Say($"Census: IX rejects {s.Rejected} of the {s.Pairs} orders flipped alone", $"Recensement : IX rejette {s.Rejected} des {s.Pairs} ordres inversés seuls"),
+                s.Rejected == s.Pairs ? Pale : Amber);
+        if (s.Vertices > 0)
+        {
+            var failing = s.Rules.Any(r => r is "kawasaki" or "maekawa");
+            var (en, frWord) = s.Vertices == 1 ? ("vertex", "sommet") : ("vertices", "sommets");
+            yield return (failing ? Say($"Kawasaki and Maekawa checked at {s.Vertices} {en}: failing", $"Kawasaki et Maekawa vérifiés en {s.Vertices} {frWord} : en défaut")
+                : Say($"Kawasaki and Maekawa hold at {s.Vertices} {en}", $"Kawasaki et Maekawa tenus en {s.Vertices} {frWord}"), failing ? Red : Pale);
+        }
+
+        if (step > 0)
+        {
+            var bent = (s.Flex * 100).ToString("0.0#", System.Globalization.CultureInfo.InvariantCulture); // the module runs without cultures
+            if (fr) bent = bent.Replace('.', ',');
+            yield return s.Flex < 5e-4
+                ? (Say("To get here: Delta's move, rigid to 0.05 % of the side", "Pour y venir : mouvement de Delta, rigide à 0,05 % du côté près"), Pale)
+                : (Say($"To get here: Delta's move bends the paper {bent} % of its side", $"Pour y venir : le mouvement de Delta fléchit le papier de {bent} % du côté"), Amber);
+        }
+
+        var valid = f.Steps.Count(x => x.Ok);
+        yield return (Say($"{valid} of {f.Steps.Length} steps valid according to IX · each flat state checked, not simulated",
+            $"{valid} étapes sur {f.Steps.Length} valides selon IX · chaque état à plat vérifié, pas simulé"), Grey);
+    }
+
+    // The creases a step has folded, as the sheet's edges' assignments: an edge between two faces the step's resting
+    // frame turns opposite ways is folded, a mountain when the upper of the two (by the step's layers) shows the sheet's
+    // front upwards, its back against the other, a valley when it shows its back; the border stays B, the rest F.
+    public static string[] Creases(Fold fold, int step)
+    {
+        var s = fold.Steps[step];
+        var at = fold.Motion![s.At];
+        var frontUp = fold.Faces.Select(face =>
+        {
+            var (normal, area) = (SN.Vector3.Zero, 0f);
+            for (var i = 0; i < face.Length; i++)
+            {
+                var (p, q) = (face[i], face[(i + 1) % face.Length]);
+                normal += SN.Vector3.Cross(at[p], at[q]);
+                area += (fold.Vertices[p].X * fold.Vertices[q].Y) - (fold.Vertices[q].X * fold.Vertices[p].Y);
+            }
+
+            return normal.Z * area > 0;
+        }).ToArray();
+        var sides = new Dictionary<(int, int), List<int>>();
+        for (var f = 0; f < fold.Faces.Length; f++)
+        {
+            var face = fold.Faces[f];
+            for (var i = 0; i < face.Length; i++)
+            {
+                var (a, b) = (face[i], face[(i + 1) % face.Length]);
+                var key = (Math.Min(a, b), Math.Max(a, b));
+                if (!sides.TryGetValue(key, out var list)) sides[key] = list = [];
+                list.Add(f);
+            }
+        }
+
+        return [.. fold.Edges.Select((e, i) =>
+        {
+            if (fold.Assignment[i] == "B" || !sides.TryGetValue((Math.Min(e.A, e.B), Math.Max(e.A, e.B)), out var two) || two.Count != 2) return fold.Assignment[i] == "B" ? "B" : "F";
+            var (f, g) = (two[0], two[1]);
+            if (frontUp[f] == frontUp[g]) return "F";
+            var upper = s.Layers[f] >= s.Layers[g] ? f : g;
+            return frontUp[upper] ? "M" : "V";
+        })];
     }
 
     // A finding in words, from IX's rule and what it names.
@@ -472,9 +766,10 @@ public sealed class IxOrigami
     // A board: the creases as fine lines on a sheet, in the pattern's place or the folded state's, about their own centre,
     // at the pattern's scale so that the folded state shows how much smaller it is. The edges and vertices a finding
     // names are amber.
-    public static IReadOnlyList<Piece> Drawing(Fold? fold, bool folded)
+    public static IReadOnlyList<Piece> Drawing(Fold? fold, bool folded, int step = -1)
     {
         if (fold is null || (folded && fold.Folded is null)) return [];
+        var assignment = fold.Stepped && step >= 0 && !folded ? Creases(fold, step) : fold.Assignment;
         var at = folded ? fold.Folded! : fold.Vertices;
         static (SN.Vector2 Low, SN.Vector2 High) Bounds(SN.Vector2[] v) => (v.Aggregate(SN.Vector2.Min), v.Aggregate(SN.Vector2.Max));
         var (low, high) = Bounds(fold.Vertices);
@@ -490,8 +785,9 @@ public sealed class IxOrigami
         for (var i = 0; i < fold.Edges.Length; i++)
         {
             var (a, b) = fold.Edges[i];
-            var color = marked.Contains(i) ? Amber : fold.Assignment[i] switch { "M" => Mountain, "V" => Valley, "B" => Edge, _ => Other };
-            var width = marked.Contains(i) ? 0.006f : fold.Assignment[i] == "B" ? 0.0025f : 0.0022f;
+            var color = marked.Contains(i) ? Amber : assignment[i] switch { "M" => Mountain, "V" => Valley, "B" => Edge, _ => Other };
+            var width = marked.Contains(i) ? 0.006f : assignment[i] switch { "B" => 0.0025f, "M" or "V" => 0.0022f, _ => assignment == fold.Assignment ? 0.0022f : 0.0008f };
+            if (assignment != fold.Assignment && assignment[i] == "F") color = Paper * 0.7f; // a crease not folded at this step: a faint line
             Line(lines, Place(at[a]), Place(at[b]), width, color);
         }
 
