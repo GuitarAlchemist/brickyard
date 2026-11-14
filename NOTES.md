@@ -1193,6 +1193,32 @@ The user then found the rope "plastic" and the crane "flat":
   a document without a pose shows. A pose that names a face not there or twice, turns beyond 0–180°, or comes without
   the orders is refused, by the brain and by the module.
 
+## Out of the arcade, and a hall of real materials (2026-11-14)
+
+The user could not get out of PARSEC: Esc was the only way out and nothing said so. While the game has the keys, a
+hint now sits at the bottom (« Échap, ou un clic hors de la borne : quitter le jeu »), a left click away from the
+cabinet leaves as Esc does, and leaving flies the camera back to the hall's first view. Enter does what Home does
+(back to Delta), asked for so that one is never stuck in a corner.
+
+The user then found the hall "Lego", "childish". It was: every surface a box of one flat colour, edges rounded by 8 mm,
+and bricks of 42 × 15 cm, twice real ones. A first step towards real:
+
+- `tools/textures` (Go, `go -C tools/textures run .`) fetches five scans from Poly Haven, all CC0 — `brick_wall_001`,
+  `concrete_floor_worn_001`, `concrete_wall_003`, `rough_wood`, `green_metal_rust` — and packs each as three 1024 px
+  8-bit PNGs (colour with the height in alpha, OpenGL normal, ambient occlusion/roughness/metalness) into
+  `%LOCALAPPDATA%\delta\textures`, with a `textures.json` naming each source and the SHA-256 of each file used. They
+  are not in git (24 MB); the scene draws its flat colours without them (`--no-textures` too; `--textures DIR`).
+- `MaterialTextures` loads them as three 2D array images with mipmaps made on the CPU, sampled with 16× anisotropy.
+  `Material.BrickWall` (8) and on map a scan by the surface's place in the world (each box face takes the plane it
+  faces; walls keep the image upright), with parallax occlusion: the mortar 14 mm behind the bricks' face. Roughness
+  and occlusion come from the scan; those surfaces lose the rounded edges. `ClayBrick` takes only the concrete's grain,
+  on each pallet brick's own colour.
+- The wall is one surface at the bricks' face (z −3.30, where the clocks and the screen are); its scan tiled every
+  1.3 m gives 21.5 cm bricks (Poly Haven says 3 m, which drew them twice too large beside the 60 cm clocks).
+
+Hidden at 1920 × 1080, 55 fps as before. Next, if the user keeps it: side walls, the robot's props in real materials,
+and light that is computed (shadows and occlusion by ray queries on the RTX 5080) rather than painted.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

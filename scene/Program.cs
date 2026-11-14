@@ -66,11 +66,13 @@ internal struct Vertex(SN.Vector3 pos, SN.Vector3 normal, SN.Vector3 color, Mate
     public SN.Vector4 Edge = edge;
 }
 
-// What the Low shader reads once a frame, 16 bytes: the camera's position, and the haze's density per metre (0: none).
+// What the Low shader reads once a frame, 32 bytes: the camera's position, the haze's density per metre (0: none), and
+// whether the photographed materials are there (1) or drawn in their flat colours (0).
 [StructLayout(LayoutKind.Sequential)]
-internal struct Frame(SN.Vector3 eye, float haze)
+internal struct Frame(SN.Vector3 eye, float haze, bool photographed)
 {
     public SN.Vector4 Eye = new(eye, haze);
+    public SN.Vector4 Options = new(photographed ? 1f : 0f, 0f, 0f, 0f);
 }
 
 // What each draw pushes, 128 bytes: the part's clip transform, the three rows of its world transform (for the light)
@@ -164,8 +166,75 @@ internal static unsafe class Stage
         layout(location = 4) in vec3 vTangent;
         layout(location = 5) in vec4 vEdge;
         layout(push_constant) uniform Push { mat4 mvp; vec4 row0; vec4 row1; vec4 row2; vec4 glow; } pc;
-        layout(set = 0, binding = 0) uniform Frame { vec4 eye; } frame;
+        layout(set = 0, binding = 0) uniform Frame { vec4 eye; vec4 options; } frame;
+        layout(set = 0, binding = 1) uniform sampler2DArray albedoMaps; // colour, the height in alpha (MaterialTextures)
+        layout(set = 0, binding = 2) uniform sampler2DArray normalMaps; // tangent space, green up
+        layout(set = 0, binding = 3) uniform sampler2DArray armMaps;    // occlusion, roughness, metalness
         layout(location = 0) out vec4 outColor;
+
+        // Per photographed material (Material.BrickWall = 8 and on): its layer, its tile in metres (tools/textures), the
+        // depth of its relief in metres, and 1 when only its grain is taken, on the surface's own colour (ClayBrick).
+        const vec4 scans[6] = vec4[](
+            vec4(0.0, 1.3, 0.014, 0.0),   // brick wall, 21.5 cm bricks: the mortar about 14 mm behind their face
+            vec4(1.0, 3.0, 0.003, 0.0),   // worn concrete floor
+            vec4(2.0, 3.0, 0.004, 0.0),   // cast concrete
+            vec4(3.0, 0.5, 0.003, 0.0),   // pallet wood
+            vec4(4.0, 1.0, 0.0008, 0.0),  // painted steel
+            vec4(2.0, 0.6, 0.002, 1.0));  // clay brick: the cast concrete's grain on its colour
+
+        // Where a box's face p, of outward normal face, is on a scan tiled every metres: the image's coordinates, and the
+        // world directions of its u and of its up (green in the normal map). Walls keep the image upright.
+        void project(vec3 p, vec3 face, float metres, out vec2 uv, out vec3 t, out vec3 b)
+        {
+            vec3 a = abs(face);
+            if (a.y >= a.x && a.y >= a.z)
+            {
+                float s = face.y < 0.0 ? -1.0 : 1.0;
+                uv = vec2(p.x, s * p.z) / metres;
+                t = vec3(1.0, 0.0, 0.0);
+                b = vec3(0.0, 0.0, -s);
+            }
+            else if (a.x >= a.z)
+            {
+                float s = face.x < 0.0 ? -1.0 : 1.0;
+                uv = vec2(-s * p.z, -p.y) / metres;
+                t = vec3(0.0, 0.0, -s);
+                b = vec3(0.0, 1.0, 0.0);
+            }
+            else
+            {
+                float s = face.z < 0.0 ? -1.0 : 1.0;
+                uv = vec2(s * p.x, -p.y) / metres;
+                t = vec3(s, 0.0, 0.0);
+                b = vec3(0.0, 1.0, 0.0);
+            }
+        }
+
+        // Parallax occlusion: the point of the relief the eye sees through uv, marching into the scan's height (alpha,
+        // 1 at the face) by depth tiles at most, finer where the view grazes the face.
+        vec2 parallax(vec2 uv, vec3 v, vec3 t, vec3 b, vec3 face, float layer, float depth, vec2 dx, vec2 dy)
+        {
+            vec3 tv = vec3(dot(v, t), dot(v, b), dot(v, face));
+            vec2 shift = vec2(tv.x, -tv.y) / max(tv.z, 0.2) * depth;
+            int steps = int(mix(24.0, 8.0, clamp(tv.z, 0.0, 1.0)));
+            float step = 1.0 / float(steps);
+            vec2 duv = shift * step;
+            float into = 0.0;
+            vec2 at = uv;
+            float below = 1.0 - textureGrad(albedoMaps, vec3(at, layer), dx, dy).a;
+            for (int i = 0; i < 24 && i < steps && into < below; i++)
+            {
+                at -= duv;
+                into += step;
+                below = 1.0 - textureGrad(albedoMaps, vec3(at, layer), dx, dy).a;
+            }
+
+            vec2 last = at + duv;
+            float after = below - into;
+            float before = (1.0 - textureGrad(albedoMaps, vec3(last, layer), dx, dy).a) - (into - step);
+            float w = after / min(after - before, -1e-5);
+            return mix(at, last, clamp(w, 0.0, 1.0));
+        }
 
         // Per material: its reflectance head-on (a metal's is its colour), its gloss (Blinn-Phong's exponent), whether
         // it is a metal, and how much a grazing view adds to its reflection, little on rough surfaces.
@@ -216,15 +285,40 @@ internal static unsafe class Stage
         {
             vec3 face = normalize(vNormal);
             vec3 v = normalize(frame.eye.xyz - vWorld);
+            vec3 base = vColor;
+            float occlusion = 1.0;
+            vec3 n;
+            vec4 m;
+            if (vMaterial >= 8u && frame.options.x > 0.5)
+            {
+                // A photographed material: its scan, its relief, its normals and its roughness; no rounded edges.
+                vec4 s = scans[min(vMaterial - 8u, 5u)];
+                vec2 uv;
+                vec3 t, b;
+                project(vWorld, face, s.y, uv, t, b);
+                vec2 dx = dFdx(uv), dy = dFdy(uv);
+                uv = parallax(uv, v, t, b, face, s.x, s.z / s.y, dx, dy);
+                vec3 colour = textureGrad(albedoMaps, vec3(uv, s.x), dx, dy).rgb;
+                vec3 tn = textureGrad(normalMaps, vec3(uv, s.x), dx, dy).xyz * 2.0 - 1.0;
+                vec3 arm = textureGrad(armMaps, vec3(uv, s.x), dx, dy).xyz;
+                n = normalize(t * tn.x + b * tn.y + face * max(tn.z, 0.05));
+                base = s.w > 0.5 ? vColor * clamp(dot(colour, vec3(0.2126, 0.7152, 0.0722)) * 3.0, 0.55, 1.45) : colour * vColor;
+                occlusion = arm.x;
+                float r = clamp(arm.y, 0.05, 1.0);
+                m = vec4(0.04, clamp(2.0 / (r * r * r * r) - 2.0, 2.0, 600.0), arm.z, mix(1.0, 0.1, r));
+            }
+            else
+            {
+                // Rounded edges: within 8 mm of a face's edge, less on thin parts and never under a pixel, the normal
+                // leans towards the next face, halfway there at the edge itself, so that the edges catch the light.
+                vec3 across = normalize(vTangent - face * dot(vTangent, face));
+                vec2 toEdge = (1.0 - abs(vEdge.xy)) * vEdge.zw;
+                vec2 width = max(min(vec2(0.008), 0.35 * vEdge.zw), fwidth(toEdge));
+                vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(vEdge.xy);
+                n = normalize(face + lean.x * across + lean.y * cross(face, across));
+                m = materials[vMaterial >= 8u ? 0u : min(vMaterial, 5u)];
+            }
 
-            // Rounded edges: within 8 mm of a face's edge, less on thin parts and never under a pixel, the normal leans
-            // towards the next face, halfway there at the edge itself, so that the edges catch the light.
-            vec3 across = normalize(vTangent - face * dot(vTangent, face));
-            vec2 toEdge = (1.0 - abs(vEdge.xy)) * vEdge.zw;
-            vec2 width = max(min(vec2(0.008), 0.35 * vEdge.zw), fwidth(toEdge));
-            vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(vEdge.xy);
-            vec3 n = normalize(face + lean.x * across + lean.y * cross(face, across));
-            vec4 m = materials[min(vMaterial, 5u)];
             vec3 keyDir = normalize(vec3(-0.45, 0.8, 0.55));
             vec3 fillDir = normalize(vec3(0.7, 0.25, 0.3));
             vec3 keyColor = vec3(1.0, 0.86, 0.68);
@@ -255,16 +349,17 @@ internal static unsafe class Stage
             float key = max(dot(n, keyDir), 0.0);
             float fill = max(dot(n, fillDir), 0.0);
             float bounce = 0.5 - 0.5 * n.y;
+            ao *= occlusion;
             vec3 light = (keyColor * key * shade + fillColor * fill + vec3(0.12, 0.1, 0.09) * bounce + 0.03) * ao;
 
             // Blinn-Phong highlights of both lights, roughly normalised so that a tighter one is brighter, and the hall
             // reflected, both weighed by Schlick's Fresnel.
-            vec3 f0 = mix(vec3(m.x), vColor, m.z);
+            vec3 f0 = mix(vec3(m.x), base, m.z);
             vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0) * m.w;
             float norm = (m.y + 8.0) / 25.0;
             vec3 highlight = keyColor * pow(max(dot(n, normalize(keyDir + v)), 0.0), m.y) * key * shade
                 + fillColor * pow(max(dot(n, normalize(fillDir + v)), 0.0), m.y) * fill;
-            vec3 lit = vColor * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
+            vec3 lit = base * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
 
             // A pool of light around the robot; the hall falls into the dark beyond it and above it.
             float pool = 1.0 - smoothstep(0.8, 6.0, length(vWorld.xz - vec2(0.0, -0.3)));
@@ -541,11 +636,17 @@ internal static unsafe class Stage
             canWait = presentIdFeature.PresentId && presentWaitFeature.PresentWait;
         }
 
+        // Anisotropic filtering, when offered, keeps the floor's and the wall's scans sharp where the view grazes them.
+        var offeredFeatures = new VkPhysicalDeviceFeatures2();
+        physical.GetFeatures2(ref offeredFeatures);
+        bool anisotropic = offeredFeatures.Features.SamplerAnisotropy;
+        var enabledFeatures = new VkPhysicalDeviceFeatures2 { Next = canWait ? &presentIdFeature : null };
+        enabledFeatures.Features.SamplerAnisotropy = offeredFeatures.Features.SamplerAnisotropy;
         var device = physical.CreateDevice(new Device.CreateInfo
         {
             Extensions = canWait ? ["VK_KHR_swapchain", "VK_KHR_present_id", "VK_KHR_present_wait"] : ["VK_KHR_swapchain"],
             QueueCreateInfos = new ReadOnlySpan<VkDeviceQueueCreateInfo>(&queueInfo, 1),
-            Next = canWait ? &presentIdFeature : null,
+            Next = &enabledFeatures,
         });
         var queue = device.GetQueue(family, 0);
 
@@ -824,14 +925,25 @@ internal static unsafe class Stage
         // The Low shader's Frame: a uniform buffer per frame in flight, in one host-visible buffer at 256-byte steps,
         // the largest offset alignment Vulkan allows.
         const int frameStep = 256;
+        // Bindings 1 to 3: the photographed materials' colour, normal and ARM images (MaterialTextures), written once loaded.
         var frameLayout = device.CreateDescriptorSetLayout(new DescriptorSetLayoutEx.CreateInfo
         {
-            Bindings = [new VkDescriptorSetLayoutBinding { DescriptorType = VkDescriptorType.UniformBuffer, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit }],
+            Bindings =
+            [
+                new VkDescriptorSetLayoutBinding { Binding = 0, DescriptorType = VkDescriptorType.UniformBuffer, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 2, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 3, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+            ],
         }, null);
         var framePool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
             MaxSets = FramesInFlight,
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight }],
+            PoolSizes =
+            [
+                new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight },
+                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 3 * FramesInFlight },
+            ],
         }, null);
         var frameSize = new ByteSize((nuint)(frameStep * FramesInFlight));
         var frameBuffer = device.CreateBuffer(new VkBufferCreateInfo { Size = frameSize, Usage = VkBufferUsageFlags.UniformBufferBit, SharingMode = VkSharingMode.Exclusive }, null);
@@ -849,8 +961,10 @@ internal static unsafe class Stage
         var layout = device.CreatePipelineLayout([frameLayout], [pushRange], null);
         var pipeline = Pipeline(device, layout, renderPass, samples, vertexModule, fragmentModule);
 
-        // The hall, still, and the robot's parts, each moved by its own matrix.
-        var hallVertices = Brickwork.Build();
+        // The hall, still, and the robot's parts, each moved by its own matrix. With the photographed materials there
+        // (MaterialTextures), the wall is one surface carrying the scan of real brick, its relief drawn by the shader.
+        var materialDir = quality == Quality.Low && !args.Contains("--no-textures") ? MaterialTextures.Find(Option(args, "--textures")) : null;
+        var hallVertices = Brickwork.Build(photographed: materialDir is not null);
         var hall = new Mesh(device, physical, hallVertices);
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
@@ -973,6 +1087,23 @@ internal static unsafe class Stage
         var noticePixels = Splash.Text(Splash.Notice, Math.Max(14, extent.Height / 40), out var noticeWidth, out var noticeHeight);
         var upload = commands[0];
         upload.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+        var materialClock = Stopwatch.StartNew();
+        var materials = new MaterialTextures(device, physical, upload, materialDir);
+        var materialSampler = device.CreateSampler(new VkSamplerCreateInfo
+        {
+            MagFilter = VkFilter.Linear,
+            MinFilter = VkFilter.Linear,
+            MipmapMode = VkSamplerMipmapMode.Linear,
+            AddressModeU = VkSamplerAddressMode.Repeat,
+            AddressModeV = VkSamplerAddressMode.Repeat,
+            AddressModeW = VkSamplerAddressMode.Repeat,
+            AnisotropyEnable = anisotropic,
+            MaxAnisotropy = anisotropic ? 16f : 1f,
+            MaxLod = 16f,
+        }, null);
+        Console.WriteLine(materials.Photographed
+            ? $"SCENE materials: {MaterialTextures.Names.Length} photographed, {materials.Size} px, {(anisotropic ? "16x anisotropic" : "no anisotropy")}, from {materialDir}, in {materialClock.Elapsed.TotalMilliseconds:F0} ms"
+            : $"SCENE materials: flat colours{(quality != Quality.Low ? " (the Flat lighting)" : args.Contains("--no-textures") ? " (--no-textures)" : materialDir is null ? " (no textures; go -C tools/textures run . fetches them)" : "")}");
         Texture[] splashTextures = noticePixels is null
             ? [new Texture(device, physical, upload, logoPixels, logoWidth, logoHeight)]
             : [new Texture(device, physical, upload, logoPixels, logoWidth, logoHeight), new Texture(device, physical, upload, noticePixels, noticeWidth, noticeHeight)];
@@ -1003,6 +1134,20 @@ internal static unsafe class Stage
         var uploadHandle = upload.Handle;
         queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploadHandle }], default);
         device.WaitIdle();
+        materials.FreeStaging();
+        var maps = stackalloc VkDescriptorImageInfo[3];
+        foreach (var frameSet in frameSets)
+        {
+            maps[0] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Albedo, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            maps[1] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Normal, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            maps[2] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Arm, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            device.UpdateDescriptorSets(
+            [
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 1, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[0] },
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 2, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[1] },
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 3, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[2] },
+            ], []);
+        }
         var splashSets = new VkDescriptorSet[splashTextures.Length];
         for (var i = 0; i < splashTextures.Length; i++)
         {
@@ -2520,7 +2665,7 @@ internal static unsafe class Stage
                 return true;
             }
 
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f);
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
 
@@ -3115,6 +3260,8 @@ internal static unsafe class Stage
         device.DestroyPipelineLayout(splashLayout, null);
         device.DestroyDescriptorSetLayout(setLayout, null);
         device.DestroySampler(sampler, null);
+        device.DestroySampler(materialSampler, null);
+        materials.Dispose();
         device.DestroyShaderModule(splashVertex, null);
         device.DestroyShaderModule(splashFragment, null);
         device.DestroyPipeline(pipeline, null);

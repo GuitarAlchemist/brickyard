@@ -70,6 +70,16 @@ internal enum Material : uint
     Steel,
     Rubber,
     Glass,
+
+    // Photographed (MaterialTextures, in its Names' order from BrickWall): the Low shader maps the scan onto the surface
+    // by its place in the world and draws its relief; the colour is then a tint on the scan's own, about 1. ClayBrick
+    // takes only the cast concrete's grain and relief, on its own colour. Without the scans they are matte, in their colour.
+    BrickWall = 8,
+    ConcreteFloor,
+    ConcreteCast,
+    PalletWood,
+    PaintedSteel,
+    ClayBrick,
 }
 
 // A surface's colour and what it is made of.
