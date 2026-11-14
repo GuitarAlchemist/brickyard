@@ -489,7 +489,7 @@ internal static class Panel
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var look = Words.Say("Right button held, or Ctrl + click: look   Home or Enter: back to Delta   B: haze   T: room captions   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine ou Entrée : revenir à Delta   B : brume   T : légendes de la pièce   F1 : masquer");
+        var look = Words.Say("Right button held, or Ctrl + click: look   Home or Enter: back to Delta   B: haze   T: room captions   F10: RTX   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine ou Entrée : revenir à Delta   B : brume   T : légendes de la pièce   F10 : RTX   F1 : masquer");
         string[] lines = flying
             ? [Words.Say("FLYING", "EN VOL"),
                Words.Say("ZQSD, WASD or arrows: move   Space or E: rise   C: descend   Shift: faster", "ZQSD, WASD ou flèches : avancer   Espace ou E : monter   C : descendre   Maj : plus vite"),
@@ -512,6 +512,54 @@ internal static class Panel
         for (var i = 1; i < fitted.Length; i++)
         {
             Text(rgba, width, height, fitted[i], Px(13), false, Px(Pad), Px(Pad) + Px(22) + ((i - 1) * Px(19)), (214, 220, 226));
+        }
+
+        return new Card(rgba, width, height, []);
+    }
+
+    // What the GPU offers of NVIDIA's RTX and what the scene does with it, as the Observatory's RTX column has it; F10
+    // shows it. Use: in use now; Offered: the GPU has it, the scene does not use it yet; Absent: the GPU lacks it.
+    public enum Rtx { Use, Offered, Absent }
+
+    public sealed record RtxRow(string Name, Rtx State, string Detail);
+
+    public static Card RtxFeatures(string gpu, string driver, IReadOnlyList<RtxRow> rows, int fps, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var title = "RTX · F10";
+        var under = $"{gpu} · {driver}{(fps > 0 ? $" · {fps} fps" : "")}";
+        string State(Rtx s) => s switch
+        {
+            Rtx.Use => Words.Say("ON", "ACTIF"),
+            Rtx.Offered => Words.Say("offered, unused", "offert, inutilisé"),
+            _ => Words.Say("not on this GPU", "absent de ce GPU"),
+        };
+        var dot = Px(9);
+        var width = new[] { Wide(title, Px(15), true), Wide(under, Px(12), false) }
+            .Concat(rows.Select(r => dot + Px(8) + Wide($"{r.Name}  {State(r.State)}", Px(13), true)))
+            .Concat(rows.Select(r => dot + Px(8) + Wide(r.Detail, Px(12), false)))
+            .Max() + (2 * Px(Pad));
+        var height = (2 * Px(Pad)) + Px(22) + Px(20) + (rows.Count * Px(38));
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 215);
+        Fill(rgba, width, 0, 0, Px(3), height, (118, 185, 0), 255); // NVIDIA's green
+        Text(rgba, width, height, title, Px(15), true, Px(Pad), Px(Pad), (242, 214, 153));
+        Text(rgba, width, height, under, Px(12), false, Px(Pad), Px(Pad) + Px(22), (160, 170, 180));
+        var y = Px(Pad) + Px(22) + Px(20);
+        foreach (var row in rows)
+        {
+            var (color, label) = row.State switch
+            {
+                Rtx.Use => ((118, 185, 0), (232, 240, 222)),
+                Rtx.Offered => ((140, 146, 152), (200, 206, 212)),
+                _ => ((150, 70, 60), (130, 136, 142)),
+            };
+            Fill(rgba, width, Px(Pad), y + Px(4), dot, dot, color, 255);
+            Text(rgba, width, height, $"{row.Name}  {State(row.State)}", Px(13), true, Px(Pad) + dot + Px(8), y, label);
+            Text(rgba, width, height, row.Detail, Px(12), false, Px(Pad) + dot + Px(8), y + Px(17), (138, 150, 162));
+            y += Px(38);
         }
 
         return new Card(rgba, width, height, []);

@@ -763,6 +763,16 @@ internal static unsafe class Stage
         });
         var queue = device.GetQueue(family, 0);
 
+        // What the GPU offers of NVIDIA's RTX, for the F10 card: the extensions it names, and its driver as NVIDIA
+        // numbers it (10 bits major, 8 minor) or as Vulkan does.
+        var rtxOffered = DeviceExtensions(physical);
+        var nvidia = properties.VendorID == 0x10DE;
+        var driverVersion = unchecked((uint)properties.DriverVersion);
+        var driver = nvidia
+            ? $"{Words.Say("driver", "pilote")} {driverVersion >> 22}.{(driverVersion >> 14) & 0xFF:D2}"
+            : $"{Words.Say("driver", "pilote")} {driverVersion >> 22}.{(driverVersion >> 12) & 0x3FF}";
+        bool Has(string extension) => rtxOffered.Contains(extension);
+
         // Swapchain: sRGB BGRA if offered; vsync unless --immediate.
         var formatCount = physical.GetSurfaceFormatsKHR_Count(surface);
         Span<VkSurfaceFormatKHR> formats = stackalloc VkSurfaceFormatKHR[formatCount];
@@ -1210,8 +1220,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 22, // the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 22 }], // one image each
+            MaxSets = 23, // the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 23 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -1605,6 +1615,39 @@ internal static unsafe class Stage
         Texture? keysTexture = null;
         Panel.Card? keysCard = null;
         var keysDrawn = (Flying: false, Width: 0, Height: 0, Language: "");
+        var rtxShown = args.Contains("--rtx"); // F10: what the GPU offers of RTX and what the scene uses
+        var rtxSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? rtxTexture = null;
+        Panel.Card? rtxCard = null;
+        var rtxDrawn = (Rays: false, Fps: -1, Height: 0, Language: "");
+        var rtxFps = 0.0; // frames a second, averaged over about a second
+        List<Panel.RtxRow> RtxRows() =>
+        [
+            new(Words.Say("Ray-traced shadows and occlusion", "Ombres et occlusion tracées"),
+                rays is not null && raysOn ? Panel.Rtx.Use : RayScene.Offered(physical, rtxOffered) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                rays is not null
+                    ? Words.Say("VK_KHR_ray_query, 3 shadow and 5 occlusion rays a pixel · R: on or off", "VK_KHR_ray_query, 3 rayons d'ombre et 5 d'occlusion par pixel · R : activer ou couper")
+                    : Words.Say("VK_KHR_ray_query · Low lighting without --no-rays", "VK_KHR_ray_query · éclairage Low sans --no-rays")),
+            new(Words.Say("Ray tracing pipeline (path tracing)", "Pipeline de lancer de rayons (path tracing)"),
+                Has("VK_KHR_ray_tracing_pipeline") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                "VK_KHR_ray_tracing_pipeline"),
+            new(Words.Say("Shader execution reordering", "Réordonnancement des shaders (SER)"),
+                Has("VK_NV_ray_tracing_invocation_reorder") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                "VK_NV_ray_tracing_invocation_reorder"),
+            new(Words.Say("Opacity micromaps", "Micro-cartes d'opacité"),
+                Has("VK_EXT_opacity_micromap") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                "VK_EXT_opacity_micromap"),
+            new("DLSS (Super Resolution, Ray Reconstruction)",
+                nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                Words.Say("NGX's extensions, VK_NVX_binary_import and VK_NVX_image_view_handle; needs NVIDIA's SDK", "extensions de NGX, VK_NVX_binary_import et VK_NVX_image_view_handle ; demande le SDK de NVIDIA")),
+            new("Reflex",
+                Has("VK_NV_low_latency2") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                Words.Say("VK_NV_low_latency2; the scene paces frames by present wait instead", "VK_NV_low_latency2 ; la scène règle ses images par l'attente de présentation")),
+            new(Words.Say("Present wait", "Attente de présentation"),
+                paceByScreen ? Panel.Rtx.Use : canWait ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                "VK_KHR_present_id, VK_KHR_present_wait"),
+            new("MSAA 4x", msaa ? Panel.Rtx.Use : Panel.Rtx.Offered, Words.Say("four samples a pixel, Low lighting", "quatre échantillons par pixel, éclairage Low")),
+        ];
 
         GlfwKeyCallback onKey = (w, key, scancode, action, mods) => Guard("a key", () =>
         {
@@ -1717,6 +1760,10 @@ internal static unsafe class Stage
             else if (key == GlfwKey.F1)
             {
                 keysShown = !keysShown;
+            }
+            else if (key == GlfwKey.F10)
+            {
+                rtxShown = !rtxShown;
             }
             else if (key == GlfwKey.H)
             {
@@ -2612,6 +2659,13 @@ internal static unsafe class Stage
                     keysTexture = Upload(keysCard, keysSet, keysTexture);
                 }
 
+                if (rtxShown && !splashing && rtxDrawn != (raysOn, (int)Math.Round(rtxFps), extent.Height, Words.Language))
+                {
+                    rtxDrawn = (raysOn, (int)Math.Round(rtxFps), extent.Height, Words.Language);
+                    rtxCard = Panel.RtxFeatures(gpu, driver, RtxRows(), rtxDrawn.Fps, extent.Height);
+                    rtxTexture = Upload(rtxCard, rtxSet, rtxTexture);
+                }
+
                 if (shelf.Open && !splashing && (shelf.Version != cardVersion || extent.Height != cardHeight))
                 {
                     cardVersion = shelf.Version;
@@ -3104,6 +3158,11 @@ internal static unsafe class Stage
                     Quad(keysSet, CardMargin(), extent.Height - keysCard.Height - CardMargin(), keysCard.Width, keysCard.Height, SN.Vector4.One);
                 }
 
+                if (rtxShown && !film.Playing && wheel.Shown <= 0f && rtxCard is not null && rtxTexture is not null)
+                {
+                    Quad(rtxSet, extent.Width - rtxCard.Width - CardMargin(), (extent.Height - rtxCard.Height) / 2, rtxCard.Width, rtxCard.Height, SN.Vector4.One);
+                }
+
                 if (wheel.Shown > 0f && wheelCard is not null && wheelTexture is not null && meterTexture is not null)
                 {
                     var k = wheel.Shown;
@@ -3238,6 +3297,8 @@ internal static unsafe class Stage
             else
             {
                 frameTimes.Add((presented - lastPresent) * 1000.0); // present to present
+                var each = presented - lastPresent;
+                rtxFps = rtxFps <= 0 ? 1.0 / each : rtxFps + ((1.0 / each) - rtxFps) * Math.Min(1.0, each); // F10's fps
                 if (presented - lastPresent >= 0.25)
                 {
                     // Where in the log a long frame falls says what came before it; where its time went, what the window did.

@@ -1241,6 +1241,16 @@ the wall, where the painted light drew only a disc under each. 55 fps either way
 present still paces it, so the trace's own cost is not isolated here, only shown to be below the frame's slack.
 This is a renderer's approximation of light, not a validated light simulation. DLSS (Streamline) is not used.
 
+## The RTX card, F10 (2026-11-14)
+
+The user asked to see NVIDIA's features as the Observatory's RTX scene shows them. F10 (or `--rtx` at start) shows a
+card on the right: the GPU, its driver (NVIDIA's numbering: 617.42 on the RTX 5080, as nvidia-smi says) and the frames
+a second, then a row each, green when the scene uses it, grey when the GPU offers it and the scene does not, red when
+the GPU lacks it: the traced shadows and occlusion (R), the ray tracing pipeline, shader execution reordering, opacity
+micromaps, DLSS (NGX's two Vulkan extensions only; using it needs NVIDIA's SDK), Reflex (`VK_NV_low_latency2`), present
+wait and 4x MSAA. It reads the device's extensions once; nothing it shows is switched on by showing it. Seen hidden at
+1280 × 720: the 5080 offers every row; in use, the traced light and MSAA (present wait is off in a hidden run).
+
 ## A wall of the scan's own bricks, laid by Blender (2026-11-14)
 
 The user asked for still better bricks, with ComfyUI or Blender. Up close the scan was good; from the hall's usual view
