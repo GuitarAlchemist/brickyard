@@ -103,6 +103,7 @@ func TestTheModuleIsTestedOnTheBrainsDocument(t *testing.T) {
 		}
 	}
 	kept, err := os.ReadFile(fixture)
+	kept = bytes.ReplaceAll(kept, []byte("\r\n"), []byte("\n")) // a Windows checkout may write it with CRLF
 	if err != nil || !bytes.Equal(kept, body) {
 		t.Fatalf("%s is not the brain's document for IX's figure-eight (%v); DELTA_UPDATE_FIXTURES=1 writes it", fixture, err)
 	}
