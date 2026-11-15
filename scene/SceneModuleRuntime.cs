@@ -89,12 +89,24 @@ internal sealed class LoadedSceneModule : IDisposable
     {
         ObjectDisposedException.ThrowIf(module is null, this);
         if (module is not ISceneTriangleModule capable) return null;
-        var source = capable.RenderTriangles()?.Triangles ?? throw new InvalidDataException("Module triangles are missing.");
+        var visual = capable.RenderTriangles() ?? throw new InvalidDataException("Module triangles are missing.");
+        var source = visual.Triangles ?? throw new InvalidDataException("Module triangles are missing.");
         var count = source.Count;
         if (count > ModuleTriangleValidation.MaxTriangles) throw new InvalidDataException("Module triangles exceed their budget.");
         var copy = new ModuleTriangle[count];
         for (var i = 0; i < count; i++) copy[i] = source[i];
-        var snapshot = new ModuleTriangleVisual(Array.AsReadOnly(copy));
+        var image = visual.Image;
+        ModuleTriangleImage? imageCopy = null;
+        if (image is not null)
+        {
+            var uvs = image.Uvs ?? throw new InvalidDataException("Module triangle image coordinates are missing.");
+            var uvCount = uvs.Count;
+            if (uvCount > count) throw new InvalidDataException("More image coordinates than triangles.");
+            var uvCopy = new ModuleTriangleUv[uvCount];
+            for (var i = 0; i < uvCount; i++) uvCopy[i] = uvs[i];
+            imageCopy = new ModuleTriangleImage(image.Name, Array.AsReadOnly(uvCopy));
+        }
+        var snapshot = new ModuleTriangleVisual(Array.AsReadOnly(copy)) { Image = imageCopy };
         ModuleTriangleValidation.Validate(snapshot);
         return snapshot;
     }

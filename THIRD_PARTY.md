@@ -62,6 +62,13 @@ Cilliers), `rough_wood` and `green_metal_rust` (Rob Tuytel). `tools/textures` do
 The brick wall is not the scan as photographed: Blender (GPL; run as a tool, nothing of it is copied) lays the scan's
 own bricks afresh with `tools/textures/wall.py`, and what it writes is packed in the scan's place.
 
+Gaia's planet is painted with NASA's Blue Marble: Next Generation, with topography and bathymetry (July 2004, 21600 ×
+10800), credited as NASA asks: **NASA Earth Observatory** (https://earthobservatory.nasa.gov/features/BlueMarble).
+NASA's imagery is not copyrighted in the United States; NASA's guidelines ask that it be credited and not used to imply
+NASA's endorsement. `tools/textures` (`-globes only` for the globe alone) downloads it and writes it at 8192 × 4096, in
+two halves, into `%LOCALAPPDATA%\delta\materials\globes\earth`, with `globe.json` holding its source, its credit and
+the download's SHA-256; neither this repository nor the release holds it.
+
 ## Ideas, not code
 
 The agents' office (`modules/AgentOffice`) takes its idea from

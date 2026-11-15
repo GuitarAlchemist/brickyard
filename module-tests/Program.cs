@@ -252,7 +252,8 @@ return failures == 0 ? 0 : 1;
 void Planet(string v11, string v12, ModuleOffer offer2)
 {
     var offer3 = LoadedSceneModule.Probe(v12);
-    Check(offer3.Version == new Version(1, 2, 0, 0), "V1.2 is a real 1.2 image of the same module");
+    // V1.2's planet, or V1.3's, the same planet painted with the host's Earth.
+    Check(offer3.Version == new Version(1, 2, 0, 0) || offer3.Version == new Version(1, 3, 0, 0), $"V1.2 is a real {offer3.Version.ToString(2)} image of the same module");
     var root = Path.Combine(Path.GetTempPath(), $"gaia-planet-{Guid.NewGuid():N}");
     var initial = Path.Combine(root, "initial", "GaiaPresence.Module.dll");
     var available = Path.Combine(root, "available", "GaiaPresence.Module.dll");
@@ -290,7 +291,9 @@ void Planet(string v11, string v12, ModuleOffer offer2)
         var planet = host.Surface.Triangles;
         Check(host.Version == offer3.Version && planet?.Triangles.Count == 7680 && host.Surface.Visual.Text.Any(t => t.Text == "Gaia - disconnected"),
             "the click activates V1.2: its 7680 triangles reach the surface, and its placard still says disconnected");
-        Check(v11Surface.Disposed && lifecycle.SequenceEqual(["allocate 1.2", "gpu-idle", "free 1.1"]),
+        Check(offer3.Version < new Version(1, 3, 0, 0) ? planet?.Image is null : planet?.Image is { Name: "earth", Uvs.Count: 7488 },
+            "V1.3's places on the host's Earth reach the surface with its triangles, copied and checked; V1.2 gives none");
+        Check(v11Surface.Disposed && lifecycle.SequenceEqual([$"allocate {offer3.Version.ToString(2)}", "gpu-idle", "free 1.1"]),
             "V1.2's resources are staged, the GPU finishes, then V1.1's are freed");
         var mutable = false;
         try { ((IList<ModuleTriangle>)planet!.Triangles)[0] = default; }

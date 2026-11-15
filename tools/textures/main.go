@@ -85,8 +85,16 @@ func main() {
 	out := flag.String("out", filepath.Join(cache, "delta", "materials"), "where the scene's textures are written")
 	list := flag.String("manifest", "textures.json", "the materials")
 	blender := flag.String("blender", "", "Blender's executable, for the laid materials (default: $BLENDER, else the newest under Program Files)")
+	globes := flag.String("globes", "also", "the globes (globe.go): also, only (no materials) or none")
 	flag.Parse()
-	if err := run(*list, *src, *out, *blender); err != nil {
+	var err error
+	if *globes != "only" {
+		err = run(*list, *src, *out, *blender)
+	}
+	if err == nil && *globes != "none" {
+		err = globe(*src, *out)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "textures:", err)
 		os.Exit(1)
 	}

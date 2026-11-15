@@ -1241,6 +1241,33 @@ the wall, where the painted light drew only a disc under each. 55 fps either way
 present still paces it, so the trace's own cost is not isolated here, only shown to be below the frame's slack.
 This is a renderer's approximation of light, not a validated light simulation. DLSS (Streamline) is not used.
 
+## Gaia's planet painted with NASA's Earth, V1.3 (2026-11-14)
+
+The user asked for a high-definition NASA texture on Gaia's globe. The planet is the GaiaPlanet module's sphere (V1.2,
+procedural colours on 96 × 40 points), and the module contract carried colours only, at most 8192 triangles and a 2 MB
+image: colouring the vertices from the Blue Marble would have given a blur of about 64 × 64 points. So:
+
+- The contract gains, additively, `ModuleTriangleVisual.Image`: the name of an image the host keeps and each of the
+  first triangles' places on it (`ModuleTriangleUv`, 0 to 1). The name is lowercase letters, digits and dashes, never a
+  path; the module ships no image bytes. Validation refuses a bad name, places off the image or not finite, and more
+  places than triangles. V1.0 to V1.2 images load as before (module-tests with the real V1, V1.1 and V1.2: 85 ok).
+- The host keeps globes (`GlobeImages`): `<materials>\globes\<name>\west.png` and `east.png`, two square halves of an
+  equirectangular map that become two layers of one mipmapped array image (binding 5), sampled clamped so that the
+  halves never blend with their far edges. `--globes DIR` reads another folder. The geometry gives a triangle whose
+  image the host holds `Material.Imaged`, its place in Edge; the Low shader paints it from the image, with a little
+  gloss where it is water. Without the image, or in the Flat lighting, the triangles keep their colours (seen).
+- GaiaPlanet 1.3 gives the sphere's places: the planet faces the hall at 30° W, the Atlantic between Ottawa's clock and
+  Paris's, east to the viewer's right; past the column where u would cross 0 it starts again from 1, so no triangle
+  spans the seam (module-mesh-tests: every sphere triangle, none of the ring's 192; −30.0° facing; 31 checks).
+- `tools/textures -globes only` downloads NASA's July 2004 map (21600 × 10800, topography and bathymetry), shrinks it
+  in linear light, each pixel the area-weighted average of those it covers, and writes the halves at 4096 (12.7 and
+  16.2 MB) in 29 s. Credit in THIRD_PARTY.md.
+
+Seen hidden (port 8899, `--module-dir` with 1.3 alone, `--cinematic-from 4`): Africa, Europe, Arabia and India the right
+way round, the ring and the stand as before; 56 fps; the Earth read in 632 ms. Not live: the live window's module and
+its materials folder are untouched. Going live needs the user's word: the textures tool into the live materials
+folder, and GaiaPlanet 1.3 offered to the live host like 1.2 was.
+
 ## The RTX card, F10 (2026-11-14)
 
 The user asked to see NVIDIA's features as the Observatory's RTX scene shows them. F10 (or `--rtx` at start) shows a

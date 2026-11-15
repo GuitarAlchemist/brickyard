@@ -60,16 +60,32 @@ internal static class SceneModuleGeometry
         return vertices.ToArray();
     }
 
+    // The images the host holds for module triangles, by name, each its first layer in the Low shader's globe images
+    // (Material.Imaged); set once they are loaded. A name it does not hold leaves those triangles in their colours.
+    public static IReadOnlyDictionary<string, int> Images { get; set; } = new Dictionary<string, int>();
+
     // A triangle has no face edge to round: Edge (0, 0, 1, 1) keeps the Low shader's lean at zero, and the tangent, one of
-    // the triangle's sides, is never parallel to its normals, so the shader's normalize stays defined.
+    // the triangle's sides, is never parallel to its normals, so the shader's normalize stays defined. A triangle painted
+    // with an image carries its corner's place on it in Edge instead, (u, v, the image's first layer, 0).
     private static void Triangles(List<Vertex> vertices, ModuleTriangleVisual triangles)
     {
         if (triangles.Triangles.Count > ModuleTriangleValidation.MaxTriangles) throw new InvalidDataException("Module triangles exceed their budget.");
         var flat = new SN.Vector4(0f, 0f, 1f, 1f);
+        var uvs = triangles.Image is { } image && Images.TryGetValue(image.Name, out var layer) ? (image.Uvs, Layer: layer) : default;
         vertices.EnsureCapacity(vertices.Count + (3 * triangles.Triangles.Count));
-        foreach (var t in triangles.Triangles)
+        for (var i = 0; i < triangles.Triangles.Count; i++)
         {
+            var t = triangles.Triangles[i];
             var tangent = SN.Vector3.Normalize(t.B.Position - t.A.Position);
+            if (uvs.Uvs is not null && i < uvs.Uvs.Count)
+            {
+                var uv = uvs.Uvs[i];
+                vertices.Add(new Vertex(t.A.Position, t.A.Normal, t.A.Color, Material.Imaged, tangent, new(uv.A, uvs.Layer, 0f)));
+                vertices.Add(new Vertex(t.B.Position, t.B.Normal, t.B.Color, Material.Imaged, tangent, new(uv.B, uvs.Layer, 0f)));
+                vertices.Add(new Vertex(t.C.Position, t.C.Normal, t.C.Color, Material.Imaged, tangent, new(uv.C, uvs.Layer, 0f)));
+                continue;
+            }
+
             foreach (var v in (ReadOnlySpan<ModuleVertex>)[t.A, t.B, t.C])
                 vertices.Add(new Vertex(v.Position, v.Normal, v.Color, Material.Matte, tangent, flat));
         }

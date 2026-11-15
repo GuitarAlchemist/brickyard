@@ -171,6 +171,7 @@ internal static unsafe class Stage
         layout(set = 0, binding = 1) uniform sampler2DArray albedoMaps; // colour, the height in alpha (MaterialTextures)
         layout(set = 0, binding = 2) uniform sampler2DArray normalMaps; // tangent space, green up
         layout(set = 0, binding = 3) uniform sampler2DArray armMaps;    // occlusion, roughness, metalness
+        layout(set = 0, binding = 5) uniform sampler2DArray globeMaps;  // GlobeImages: a globe's west and east halves
         layout(location = 0) out vec4 outColor;
 
         // Per photographed material (Material.BrickWall = 8 and on): its layer, its tile in metres (tools/textures), the
@@ -360,7 +361,20 @@ internal static unsafe class Stage
             float occlusion = 1.0;
             vec3 n;
             vec4 m;
-            if (vMaterial >= 8u && frame.options.x > 0.5)
+            if (vMaterial == 16u)
+            {
+                // A module's triangle painted with a globe (Material.Imaged): Edge holds its place, u from 180° W, v from
+                // the north pole, and the globe's first layer, its west half; the east half is the next. Water, bluer
+                // than it is red, takes a little gloss.
+                vec2 uv = vEdge.xy * vec2(2.0, 1.0);
+                vec2 dx = dFdx(uv), dy = dFdy(uv);
+                float east = uv.x >= 1.0 ? 1.0 : 0.0;
+                base = textureGrad(globeMaps, vec3(uv.x - east, uv.y, vEdge.z + east), dx, dy).rgb;
+                n = face;
+                float water = smoothstep(0.02, 0.08, base.b - base.r);
+                m = mix(materials[0], vec4(0.02, 70.0, 0.0, 0.7), water);
+            }
+            else if (vMaterial >= 8u && frame.options.x > 0.5)
             {
                 // A photographed material: its scan, its relief, its normals and its roughness; no rounded edges.
                 vec4 s = scans[min(vMaterial - 8u, 5u)];
@@ -1058,6 +1072,7 @@ internal static unsafe class Stage
                 new VkDescriptorSetLayoutBinding { Binding = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 2, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 3, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 5, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 .. (rayTraced
                     ? new[] { new VkDescriptorSetLayoutBinding { Binding = 4, DescriptorType = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit } }
                     : []),
@@ -1069,7 +1084,7 @@ internal static unsafe class Stage
             PoolSizes =
             [
                 new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight },
-                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 3 * FramesInFlight },
+                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 4 * FramesInFlight },
                 .. (rayTraced ? new[] { new VkDescriptorPoolSize { Type = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = FramesInFlight } } : []),
             ],
         }, null);
@@ -1109,6 +1124,14 @@ internal static unsafe class Stage
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
         var crate = new Mesh(device, physical, ArcadePlayer.CrateMesh()); // the small robot at the cabinet stands on it
+        // The globes module triangles may be painted with (GlobeImages), read before any module's triangles are made.
+        var globeClock = Stopwatch.StartNew();
+        var globeDir = quality == Quality.Low && !args.Contains("--no-textures") ? GlobeImages.Find(Option(args, "--globes")) : null;
+        GlobeImages.Pixels? globePixels = GlobeImages.Read(globeDir); // let go once uploaded: 130 MB of RGBA for the Earth
+        SceneModuleGeometry.Images = globePixels.Held;
+        Console.WriteLine(globePixels.Held.Count > 0
+            ? $"SCENE globes: {string.Join(", ", globePixels.Held.Keys)}, {2 * globePixels.Size} x {globePixels.Size} px, from {globeDir}, in {globeClock.Elapsed.TotalMilliseconds:F0} ms"
+            : $"SCENE globes: none{(quality != Quality.Low ? " (the Flat lighting)" : args.Contains("--no-textures") ? " (--no-textures)" : globeDir is null ? " (go -C tools/textures run . -globes only makes them)" : "")}");
         var moduleRoot = Option(args, "--module-dir") ?? Path.Combine(AppContext.BaseDirectory, "modules", "gaia");
         // The author's last validation, kept on this machine across rebuilds; an isolated --module-dir keeps its own.
         var validatedStore = Option(args, "--module-dir") is null
@@ -1236,6 +1259,21 @@ internal static unsafe class Stage
         upload.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
         var materialClock = Stopwatch.StartNew();
         var materials = new MaterialTextures(device, physical, upload, materialDir);
+        var globes = new GlobeImages(device, physical, upload, globePixels!);
+        globePixels = null;
+        // A globe's halves meet at the edges: clamped there, they never blend with the far side of their own half.
+        var globeSampler = device.CreateSampler(new VkSamplerCreateInfo
+        {
+            MagFilter = VkFilter.Linear,
+            MinFilter = VkFilter.Linear,
+            MipmapMode = VkSamplerMipmapMode.Linear,
+            AddressModeU = VkSamplerAddressMode.ClampToEdge,
+            AddressModeV = VkSamplerAddressMode.ClampToEdge,
+            AddressModeW = VkSamplerAddressMode.ClampToEdge,
+            AnisotropyEnable = anisotropic,
+            MaxAnisotropy = anisotropic ? 16f : 1f,
+            MaxLod = 16f,
+        }, null);
         var materialSampler = device.CreateSampler(new VkSamplerCreateInfo
         {
             MagFilter = VkFilter.Linear,
@@ -1282,17 +1320,20 @@ internal static unsafe class Stage
         queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploadHandle }], default);
         device.WaitIdle();
         materials.FreeStaging();
-        var maps = stackalloc VkDescriptorImageInfo[3];
+        globes.FreeStaging();
+        var maps = stackalloc VkDescriptorImageInfo[4];
         foreach (var frameSet in frameSets)
         {
             maps[0] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Albedo, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[1] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Normal, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[2] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Arm, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            maps[3] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = globes.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             device.UpdateDescriptorSets(
             [
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 1, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[0] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 2, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[1] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 3, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[2] },
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 5, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[3] },
             ], []);
         }
         var splashSets = new VkDescriptorSet[splashTextures.Length];
@@ -3494,6 +3535,8 @@ internal static unsafe class Stage
         device.DestroySampler(sampler, null);
         device.DestroySampler(materialSampler, null);
         materials.Dispose();
+        device.DestroySampler(globeSampler, null);
+        globes.Dispose();
         rays?.Dispose();
         Rays = null;
         device.DestroyShaderModule(splashVertex, null);

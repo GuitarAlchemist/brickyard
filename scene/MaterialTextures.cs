@@ -152,7 +152,7 @@ internal sealed unsafe class MaterialTextures : IDisposable
         return levels;
     }
 
-    private sealed class ArrayImage : IDisposable
+    internal sealed class ArrayImage : IDisposable
     {
         private readonly Device device;
         private readonly VkImage image;

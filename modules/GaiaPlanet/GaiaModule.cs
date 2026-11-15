@@ -4,7 +4,8 @@ using System.Numerics;
 namespace Delta.GaiaPresence;
 
 // Future module: requires the optional triangle contract AND a host that consumes it.
-// Static procedural geometry; no native handles, timers, services or external textures.
+// Static procedural geometry; no native handles, timers or services. V1.3 paints the sphere with the host's Earth
+// (NASA's Blue Marble, which the host keeps, not this module); its procedural colours stay for a host without it.
 public sealed class GaiaModule : ISceneTriangleModule
 {
     private readonly Dictionary<string, ModuleVisual> frames = [];
@@ -71,13 +72,21 @@ internal static class Planet
                     MathF.Cos(latitude), MathF.Sin(latitude) * MathF.Sin(longitude)));
             return new(Centre + Radius * n, n, Surface(n));
         }
+        // Where each point falls on the host's Earth (V1.3): the planet faces the hall (+Z) at 30° W, the Atlantic between
+        // Ottawa's clock and Paris's. Longitude grows eastwards to the viewer's right, u from 180° W; past the column
+        // where u would fall below 0 it starts again from 1, so that no triangle spans the seam.
+        List<ModuleTriangleUv> uvs = new(7680);
+        Vector2 Uv(int row, int column, int square) => new(
+            Math.Clamp(2f / 3f - (float)column / slices + (square >= slices * 2 / 3 ? 1f : 0f), 0f, 1f), (float)row / stacks);
         for (var row = 0; row < stacks; row++)
             for (var column = 0; column < slices; column++)
             {
                 var a = Point(row, column); var b = Point(row + 1, column);
                 var c = Point(row + 1, column + 1); var d = Point(row, column + 1);
-                if (row != stacks - 1) triangles.Add(new(a, c, b));
-                if (row != 0) triangles.Add(new(a, d, c));
+                Vector2 ua = Uv(row, column, column), ub = Uv(row + 1, column, column);
+                Vector2 uc = Uv(row + 1, column + 1, column), ud = Uv(row, column + 1, column);
+                if (row != stacks - 1) { triangles.Add(new(a, c, b)); uvs.Add(new(ua, uc, ub)); }
+                if (row != 0) { triangles.Add(new(a, d, c)); uvs.Add(new(ua, ud, uc)); }
             }
         // A quiet, opaque, very thin halo. No transparency/shader extension is required.
         var tilt = Matrix4x4.CreateRotationX(.48f) * Matrix4x4.CreateRotationZ(-.16f);
@@ -94,7 +103,7 @@ internal static class Planet
             var c = Ring(i + 1, .294f); var d = Ring(i, .294f);
             triangles.Add(new(a, b, c)); triangles.Add(new(a, c, d));
         }
-        return new(Array.AsReadOnly(triangles.ToArray()));
+        return new(Array.AsReadOnly(triangles.ToArray())) { Image = new("earth", Array.AsReadOnly(uvs.ToArray())) };
     }
 
     private static Vector3 Surface(Vector3 n)
