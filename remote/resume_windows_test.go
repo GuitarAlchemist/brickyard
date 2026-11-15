@@ -129,7 +129,9 @@ func TestResumeSaysWhyABuildThatExitsAtOnceDoesNotRun(t *testing.T) {
 	t.Parallel()
 	f, _ := resumeFolder(t, "broken", map[string]string{"arguments": "-port " + freePort(t)})
 	r := testResumer(f.dir, func() error { return nil })
-	r.tries = 2
+	// A build still running after settle counts as started. Under the whole suite, a copy of this binary freshly written
+	// (and scanned) took more than 1 s to exit, once in four runs on 2026-11-15, and the test failed.
+	r.tries, r.settle = 2, 5*time.Second
 
 	err := r.run()
 	if err == nil || !strings.Contains(err.Error(), "after 2 tries") || !strings.Contains(err.Error(), "no gateway runs") {
