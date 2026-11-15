@@ -1385,6 +1385,41 @@ motion passes exactly through those states and how much it bends the paper. The 
 interpolation, not a physical simulation: no forces, and faces passing through one another while moving are not
 checked.
 
+## The knots' floor, up a stair (2026-11-14)
+
+The user asked for a floor of the scene kept for knots, and a way up; of the proposals, mathematical knots read by IX,
+and a stair.
+
+- `brain -ix-knots` (ixknots.go) writes %LOCALAPPDATA%\delta\ix-knots.json (format delta-ix-knots v 1, `-ix-out`
+  elsewhere): eight exhibits, the trefoil 3₁, figure-eight 4₁, cinquefoil 5₁, three-twist 5₂, stevedore 6₁, septafoil
+  7₁, the torus knot T(3,4) = 8₁₉ and the Borromean rings L6a4, each a closed curve (torus knots, Lissajous knots,
+  three ellipses) tilted a little so that no two passages meet in the drawing. IX's ix_knot reads each drawing
+  (`over: "height"`): its crossings, writhe, components and Jones polynomial. An exhibit is `verified` when that
+  polynomial is the Knot Atlas's for it or its mirror's (`mirror`), and the components are its ropes; IX failing for one
+  exhibit fails the document, which then says why. All eight are verified, three as mirrors (5₂, 6₁, 8₁₉: the drawing is
+  the mirror image of the tables'). Equal Jones polynomials do not prove two knots the same in general; among the
+  tables' knots up to these crossings they tell these ones apart. The tube's radius keeps clear of the curve's own
+  passages (at least twice its radius apart). Tests replay IX's recorded readings (testdata/ix-knots,
+  TestRecordIXKnots with DELTA_IX_MCP): every exhibit verified, the wrong knot not, a mirror a mirror, a reading without
+  its polynomial refused.
+- The scene (KnotFloor) builds a mezzanine at the back right, 2 m up, 2.35 × 4.2 m, on three steel columns, against an
+  end wall: a stair of 16 concrete steps of 12.5 cm along the end wall from the hall's front, rails on both sides of
+  it and round the floor, and eight stone plinths in two rows. On each a knot as a tube round the curve IX read (its
+  diagram faces the walkway, turned 35° towards the stair), coloured, the Borromean rings red, green and blue, grey if
+  IX did not verify it; a plaque « 3₁ Trèfle · IX : 3 croisements, Jones des tables »; on the wall « L'étage des
+  nœuds », or why IX has not read them. `--knots FILE` reads another document; it is refused beyond its bounds (16
+  exhibits, 8 ropes, 256 points, the unit cube, a tube up to 0.1, short texts without controls).
+- The walking camera stands on levels: what is under it no more than 16 cm above its feet is walked onto (the steps),
+  the eye eased by the landing's spring; what rises higher across the body, below its head, stops it (rails, plinths,
+  the stair's side, columns); under the floor it walks on the hall's floor. 7 is the floor's view, at its stair's top.
+  Self-tests: up the stair to 2 m and down again without a frame's jump over 5 cm or a fall, the stair's side and the
+  floor's rail holding, a jump at the rail landing back on the floor, under it on the hall's floor to the wall, a
+  flight landing on whichever floor is under it; with the floor's solids left out, five of them fail.
+
+Seen hidden (port 8899, view 7, and from the hall's front at the stair's foot): the floor, its rails and stair, the
+eight knots with traced shadows, the sign; 52 to 55 fps at 1280 × 720 (474 312 vertices for the gallery, most of them
+the plaques' letters). Not live: the live window and %LOCALAPPDATA%\delta\ix-knots.json are untouched.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

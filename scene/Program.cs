@@ -15,8 +15,9 @@
 // --size WxH sizes the window, to measure a hidden one at a live one's size. --seconds closes it.
 // --quality picks the lighting, Low by default on a GPU and Flat, the first one, when the CPU draws; Low draws a cool
 // haze that thickens with distance and thins with height, which B or --no-fog turns off. --view N starts
-// the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks). H hides or shows
-// the wall clocks of Ottawa and Paris (WallClocks), shown by default.
+// the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks, 6 the arcade
+// cabinet, 7 the knots' floor). H hides or shows the wall clocks of Ottawa and Paris (WallClocks), shown by default.
+// --knots FILE reads the knots' floor's gallery (KnotFloor), else %LOCALAPPDATA%\delta\ix-knots.json.
 //
 // The camera has the Observatory's controls (FreeCamera): it walks, sprints, jumps, crouches, slides and leans, flies with
 // F, turns with the right button held or, after Ctrl and a click, with the mouse until the next Ctrl and click (a click
@@ -1120,7 +1121,18 @@ internal static unsafe class Stage
         // (MaterialTextures), the wall is one surface carrying the scan of real brick, its relief drawn by the shader.
         var materialDir = quality == Quality.Low && !args.Contains("--no-textures") ? MaterialTextures.Find(Option(args, "--textures")) : null;
         var hallVertices = Brickwork.Build(photographed: materialDir is not null);
-        var hall = new Mesh(device, physical, hallVertices);
+        var hall = new Mesh(device, physical, [.. hallVertices, .. KnotFloor.Build(photographed: materialDir is not null)]);
+        // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
+        var knotsPath = KnotFloor.Path(Option(args, "--knots"));
+        var knotGallery = KnotFloor.Load(knotsPath);
+        var knots = new Dictionary<bool, Mesh>
+        {
+            [false] = new Mesh(device, physical, KnotFloor.BuildGallery(knotGallery, fr: false)),
+            [true] = new Mesh(device, physical, KnotFloor.BuildGallery(knotGallery, fr: true)),
+        };
+        Console.WriteLine(knotGallery.Exhibits.Length > 0
+            ? $"SCENE knots: {knotGallery.Exhibits.Length} from {knotsPath}, {knotGallery.Exhibits.Count(e => e.Verified)} verified by IX, {knots[false].Count} vertices"
+            : $"SCENE knots: none ({knotGallery.Why}, {knotsPath})");
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
         var crate = new Mesh(device, physical, ArcadePlayer.CrateMesh()); // the small robot at the cabinet stands on it
@@ -2986,6 +2998,8 @@ internal static unsafe class Stage
                     }
                 }
 
+                Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
+
                 // The hall last: what stands in front of the floor and the wall is already in the depth buffer, so
                 // their fragments hidden behind it are never shaded (nor their rays traced).
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
@@ -3493,6 +3507,11 @@ internal static unsafe class Stage
             presence.Dispose();
         }
         hall.Dispose();
+        foreach (var gallery in knots.Values)
+        {
+            gallery.Dispose();
+        }
+
         clocks.Dispose();
         Console.WriteLine($"SCENE native mesh buffers remaining after disposal {Mesh.LiveCount}");
         foreach (var texture in splashTextures)

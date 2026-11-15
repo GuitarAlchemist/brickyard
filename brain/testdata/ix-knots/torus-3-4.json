@@ -1,0 +1,24 @@
+{
+ "closure_crossings": 0,
+ "components": 1,
+ "crossings": 8,
+ "jones": {
+  "terms": [
+   [
+    -8.0,
+    -1
+   ],
+   [
+    -5.0,
+    1
+   ],
+   [
+    -3.0,
+    1
+   ]
+  ],
+  "text": "-t^-8 + t^-5 + t^-3"
+ },
+ "jones_symmetric": false,
+ "writhe": -8
+}

@@ -71,8 +71,9 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	ixKnotName := flag.String("ix-knot", "", "ask IX for this catalogue knot (figure-eight, overhand…) with its 3D path, write it for the hall's IX workshop, then exit (ixatelier.go)")
 	ixOrigami := flag.String("ix-origami", "", "ask IX to check this fold, a .origami sequence or a FOLD object, write its verdict for the hall's origami table, then exit (ixorigami.go)")
-	ixMCP := flag.String("ix-mcp", "", "with -ix-knot or -ix-origami, IX's MCP server executable (default: ix-mcp on the PATH)")
-	ixOut := flag.String("ix-out", "", "with -ix-knot, -ix-origami or -origami-play, where to write the document (default: %LOCALAPPDATA%\\delta\\ix-atelier.json, ix-origami.json or ix-origami-play.json)")
+	ixKnots := flag.Bool("ix-knots", false, "ask IX to read each knot of the hall's knots' floor, write the gallery with IX's verdicts, then exit (ixknots.go)")
+	ixMCP := flag.String("ix-mcp", "", "with -ix-knot, -ix-knots or -ix-origami, IX's MCP server executable (default: ix-mcp on the PATH)")
+	ixOut := flag.String("ix-out", "", "with -ix-knot, -ix-knots, -ix-origami or -origami-play, where to write the document (default: %LOCALAPPDATA%\\delta\\ix-atelier.json, ix-knots.json, ix-origami.json or ix-origami-play.json)")
 	origamiPlayCommand := flag.String("origami-play", "", "steer the origami table's fold shown step by step: next, prev, auto or a step's number, then exit (origamiplay.go)")
 	flag.Parse()
 	if *showVersion {
@@ -84,6 +85,9 @@ func main() {
 	}
 	if *ixOrigami != "" {
 		os.Exit(runIXOrigami(*ixOrigami, *ixMCP, *ixOut, os.Stdout, os.Stderr))
+	}
+	if *ixKnots {
+		os.Exit(runIXKnots(*ixMCP, *ixOut, os.Stdout, os.Stderr))
 	}
 	if *origamiPlayCommand != "" {
 		os.Exit(runOrigamiPlay(*origamiPlayCommand, *ixOut, os.Stdout, os.Stderr))

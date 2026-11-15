@@ -6,11 +6,12 @@ using SN = System.Numerics;
 // too, tapped alone), C while sprinting slides and ends crouched, Q and E (A and E on AZERTY) lean, Alt with the moving
 // keys leans or peeks up and down, the body standing, Caps Lock walks at half pace; a landing dips the eye, a sprint
 // widens the field, a slide and a lean roll it. The wheel sets the pace, the right button held or Ctrl and a click turn
-// the view, F flies (Space or E up, C down). 2 to 6 are views, 1 or Home the drift, and going to any of them is a flight
+// the view, F flies (Space or E up, C down). 2 to 7 are views, 1 or Home the drift, and going to any of them is a flight
 // after Grand Theft Auto V's character switch, as the Observatory's view_move.gd: the camera lifts, looks down over the
 // hall and settles, its field widening on the way. The Observatory's heights are scaled by its eye's, 1.7 m, to this
 // one's, 1.1 m; its times are kept. Only the front of the hall is built, so the camera stays between the wall and the
-// front of the slabs. Kept apart from the window so that it can be tested alone.
+// front of the slabs. The body walks up the stair to the knots' floor and stands there (KnotFloor.Solids, GroundAt).
+// Kept apart from the window so that it can be tested alone.
 internal sealed class FreeCamera
 {
     internal const float WalkHeight = 1.1f;
@@ -20,6 +21,9 @@ internal sealed class FreeCamera
     internal static readonly SN.Vector3 Min = new(-6f, 0.25f, -3.1f);
     internal static readonly SN.Vector3 Max = new(6f, 4.2f, 5.5f);
     internal const float Radius = 0.3f * Scale; // the walking body's, against what stands on the floor
+    internal const float SolidRadius = 0.15f; // the walking body's, against the knots' floor's solids (Collide)
+    internal const float StepUp = 0.16f; // the highest step the body walks onto, above a stair's 0.125 m
+    internal const float Height = 1.25f; // what passes over the body's head stops nothing (the knots' floor's slab)
 
     // What stands on the hall's floor, as walk_physics.gd's boxes: a centre, a turn about the vertical and half sizes
     // across and deep, the walking body kept Radius out of each. The office's desks and rails are low, stepped over.
@@ -69,7 +73,8 @@ internal sealed class FreeCamera
 
     private SN.Vector2 body; // the feet on the floor, x and z, without the lean
     private SN.Vector2 velocity;
-    private float feet; // above the floor
+    private float feet; // above the hall's floor
+    private float ground; // what the feet stand on, or fall to: the floor's 0, a stair's tread or the knots' floor
     private float rise; // m/s up
     private float eye = WalkHeight;
     private float dip, dipSpeed, lean, peek, kick, roll, slide, jumpAsked;
@@ -104,7 +109,9 @@ internal sealed class FreeCamera
 
     public bool Sliding => slide > 0f;
 
-    public bool Airborne => feet > 0f || rise > 0f;
+    public bool Airborne => feet > ground + 1e-4f || rise > 0f;
+
+    public float Feet => feet;
 
     public bool InFlight => flightTime >= 0f;
 
@@ -242,6 +249,8 @@ internal sealed class FreeCamera
             velocity = SN.Vector2.Zero;
             eye = WalkHeight;
             feet = Math.Max(0f, position.Y - WalkHeight);
+            ground = GroundAt(body, feet);
+            feet = Math.Max(feet, ground);
             rise = 0f;
             Crouched = false;
             slide = 0f;
@@ -259,7 +268,7 @@ internal sealed class FreeCamera
 
     internal const int ArcadeView = 6; // the arcade cabinet's, where a click on it walks to
 
-    // The views the keys 2 to 6 go to, as the Observatory's presets; 1 is the drift. A view frames from its own eye, even
+    // The views the keys 2 to 7 go to, as the Observatory's presets; 1 is the drift. A view frames from its own eye, even
     // above eye height, without flying: the first step walks from there, its eye easing down to the floor's, as
     // fly_camera.gd's presets and walk_physics.gd's first step do. Only F flies.
     internal static readonly (SN.Vector3 Eye, SN.Vector3 Target)[] Views =
@@ -269,9 +278,10 @@ internal sealed class FreeCamera
         (new(3.4f, 3.1f, 5.2f), new(0f, 0.6f, -0.6f)), // the whole hall
         (new(0f, 1.75f, 0.6f), new(0f, 1.78f, -3.3f)), // the clocks of Ottawa and Paris
         ArcadeCabinet.View, // in front of the arcade cabinet, at a player's height
+        (new(5.05f, KnotFloor.Level + WalkHeight, 0.6f), new(5.05f, KnotFloor.Level + 0.9f, -3f)), // the knots' floor, at the stair's top
     ];
 
-    // 1 for the drift, 2 to 6 for the views; false for any other number. A cut lands at once, as behind the cinematic's
+    // 1 for the drift, 2 to 7 for the views; false for any other number. A cut lands at once, as behind the cinematic's
     // black after Shift and a view's key.
     public bool GoTo(int view, bool cut = false)
     {
@@ -299,7 +309,8 @@ internal sealed class FreeCamera
         yaw = MathF.Atan2(d.X, -d.Z);
         pitch = MathF.Asin(d.Y);
         position = SN.Vector3.Clamp(eye, Min, Max);
-        framed = !Flying && MathF.Abs(position.Y - WalkHeight) > 0.01f; // a view frames; it never takes off (F does)
+        var standing = GroundAt(new(position.X, position.Z), position.Y - WalkHeight) + WalkHeight;
+        framed = !Flying && MathF.Abs(position.Y - standing) > 0.01f; // a view frames; it never takes off (F does)
         Free = true;
         Settle();
     }
@@ -346,9 +357,9 @@ internal sealed class FreeCamera
     {
         body = new(position.X, position.Z);
         velocity = SN.Vector2.Zero;
-        feet = 0f;
+        feet = ground = GroundAt(body, position.Y - WalkHeight); // on the floor, a stair or the knots' floor under the eye
         rise = 0f;
-        eye = framed ? position.Y : WalkHeight; // from a view's eye, the first step eases down to the floor's
+        eye = framed ? position.Y - feet : WalkHeight; // from a view's eye, the first step eases down to the floor's
         dip = dipSpeed = lean = peek = kick = roll = slide = jumpAsked = 0f;
         crouchAsked = false;
         Crouched = false;
@@ -368,53 +379,89 @@ internal sealed class FreeCamera
 
     // The body, a circle of Radius at p, out of what stands on the floor by the nearest way, its speed into it lost so that
     // it slides along: walk_physics.gd's _push_box and _block, twice over for corners.
+    // On the knots' floor too: what rises across the body, from above a step to above its head, stops it as a wall (the
+    // floor's rails, its plinths, the stair's side and its columns); a step no higher than StepUp is walked onto (GroundAt).
+    // Those are kept SolidRadius out, under a tread's depth, so that the next step up does not stop the body on the stair.
     private SN.Vector2 Collide(SN.Vector2 p)
     {
         for (var pass = 0; pass < 2; pass++)
         {
-            foreach (var (centre, turn, half) in Obstacles)
+            if (feet < KnotFloor.Level - 0.5f)
             {
-                var (u, v) = (new SN.Vector2(MathF.Cos(turn), -MathF.Sin(turn)), new SN.Vector2(MathF.Sin(turn), MathF.Cos(turn)));
-                var d = p - centre;
-                var local = new SN.Vector2(SN.Vector2.Dot(d, u), SN.Vector2.Dot(d, v));
-                if (MathF.Abs(local.X) > half.X + Radius || MathF.Abs(local.Y) > half.Y + Radius)
+                foreach (var (centre, turn, half) in Obstacles)
                 {
-                    continue;
+                    p = Push(p, centre, turn, half, Radius);
                 }
+            }
 
-                var q = SN.Vector2.Clamp(local, -half, half);
-                var outward = local - q;
-                var distance = outward.Length();
-                if (distance >= Radius)
+            foreach (var s in KnotFloor.Solids)
+            {
+                if (s.Min.Y < feet + Height && s.Max.Y > feet + StepUp)
                 {
-                    continue;
+                    var (lo, hi) = (new SN.Vector2(s.Min.X, s.Min.Z), new SN.Vector2(s.Max.X, s.Max.Z));
+                    p = Push(p, (lo + hi) / 2f, 0f, (hi - lo) / 2f, SolidRadius);
                 }
-
-                if (distance > 1e-5f)
-                {
-                    local = q + (outward / distance * Radius);
-                }
-                else if (half.X - MathF.Abs(local.X) < half.Y - MathF.Abs(local.Y))
-                {
-                    local.X = (half.X + Radius) * (local.X >= 0f ? 1f : -1f); // the centre inside: out by the nearest side
-                }
-                else
-                {
-                    local.Y = (half.Y + Radius) * (local.Y >= 0f ? 1f : -1f);
-                }
-
-                var pushed = centre + (u * local.X) + (v * local.Y);
-                if (pushed != p)
-                {
-                    var n = SN.Vector2.Normalize(pushed - p);
-                    velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
-                }
-
-                p = pushed;
             }
         }
 
         return p;
+    }
+
+    private SN.Vector2 Push(SN.Vector2 p, SN.Vector2 centre, float turn, SN.Vector2 half, float radius)
+    {
+        var (u, v) = (new SN.Vector2(MathF.Cos(turn), -MathF.Sin(turn)), new SN.Vector2(MathF.Sin(turn), MathF.Cos(turn)));
+        var d = p - centre;
+        var local = new SN.Vector2(SN.Vector2.Dot(d, u), SN.Vector2.Dot(d, v));
+        if (MathF.Abs(local.X) > half.X + radius || MathF.Abs(local.Y) > half.Y + radius)
+        {
+            return p;
+        }
+
+        var q = SN.Vector2.Clamp(local, -half, half);
+        var outward = local - q;
+        var distance = outward.Length();
+        if (distance >= radius)
+        {
+            return p;
+        }
+
+        if (distance > 1e-5f)
+        {
+            local = q + (outward / distance * radius);
+        }
+        else if (half.X - MathF.Abs(local.X) < half.Y - MathF.Abs(local.Y))
+        {
+            local.X = (half.X + radius) * (local.X >= 0f ? 1f : -1f); // the centre inside: out by the nearest side
+        }
+        else
+        {
+            local.Y = (half.Y + radius) * (local.Y >= 0f ? 1f : -1f);
+        }
+
+        var pushed = centre + (u * local.X) + (v * local.Y);
+        if (pushed != p)
+        {
+            var n = SN.Vector2.Normalize(pushed - p);
+            velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
+        }
+
+        return pushed;
+    }
+
+    // The height the body at p stands on, its feet at from: the highest top under it no more than a step above them, the
+    // hall's floor otherwise.
+    internal static float GroundAt(SN.Vector2 p, float from)
+    {
+        var ground = 0f;
+        foreach (var s in KnotFloor.Solids)
+        {
+            if (p.X >= s.Min.X && p.X <= s.Max.X && p.Y >= s.Min.Z && p.Y <= s.Max.Z && s.Max.Y <= from + StepUp && s.Max.Y > ground)
+            {
+                ground = s.Max.Y;
+            }
+        }
+
+        return ground;
     }
 
     private void Walk(Held held, float dt)
@@ -441,7 +488,7 @@ internal sealed class FreeCamera
 
         var sprinting = held.Fast && intent.LengthSquared() > 0.01f;
         var speed = velocity.Length();
-        var grounded = feet <= 0f && rise <= 0f;
+        var grounded = feet <= ground + 1e-4f && rise <= 0f;
         if (crouchAsked)
         {
             crouchAsked = false;
@@ -467,7 +514,7 @@ internal sealed class FreeCamera
         {
             jumpAsked = 0f;
             rise = JumpSpeed;
-            feet = Math.Max(feet, 0.001f);
+            feet = Math.Max(feet, ground + 0.001f);
             Crouched = false; // a jump out of a slide keeps its speed
             slide = 0f;
             grounded = false;
@@ -513,14 +560,32 @@ internal sealed class FreeCamera
 
         body = inside;
 
+        // A step up or down the stair is walked, the eye kept where it was and eased to its height by the dip's spring;
+        // beyond a step down, a fall.
+        var under = GroundAt(body, feet);
+        if (grounded && MathF.Abs(under - feet) > 1e-5f)
+        {
+            if (under > feet || feet - under <= StepUp)
+            {
+                dip += ReducedMotion ? 0f : feet - under;
+                feet = under;
+            }
+            else
+            {
+                grounded = false;
+            }
+        }
+
+        ground = under;
+
         // Up and down: a jump or a fall, then gravity; the eye lowers for a crouch or a slide.
         if (!grounded)
         {
             rise -= Gravity * dt;
             feet += rise * dt;
-            if (feet <= 0f)
+            if (feet <= ground)
             {
-                feet = 0f;
+                feet = ground;
                 if (!ReducedMotion)
                 {
                     dipSpeed -= Math.Min(MathF.Abs(rise), LandCap) * 0.5f;
@@ -784,7 +849,7 @@ internal sealed class FreeCamera
             views &= eye.X >= Min.X && eye.X <= Max.X && eye.Y >= Min.Y && eye.Y <= Max.Y && eye.Z >= Min.Z && eye.Z <= Max.Z;
         }
 
-        Check(views && !camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(7) && !camera.GoTo(0), "the views stand where they say, inside the hall, without flying; 1 is the drift");
+        Check(views && !camera.Flying && camera.GoTo(1) && !camera.Free && !camera.GoTo(Views.Length + 2) && !camera.GoTo(0), "the views stand where they say, inside the hall, without flying; 1 is the drift");
 
         // From the whole hall's view, 3.1 m up, looking down: the first steps walk, down to the floor's eye, level.
         camera.GoTo(4, cut: true);
@@ -801,6 +866,93 @@ internal sealed class FreeCamera
         SelfTestBody(Check);
         SelfTestObstacles(Check);
         SelfTestFlight(Check);
+        SelfTestKnotFloor(Check);
+    }
+
+    // The stair walks up to the knots' floor and down again, the eye never jumping; its rails stop the body; under it the
+    // body walks on the hall's floor; landing from a flight lands on whichever floor is under it.
+    private static void SelfTestKnotFloor(Action<bool, string> Check)
+    {
+        static FreeCamera At(SN.Vector2 body, float yaw)
+        {
+            var camera = new FreeCamera();
+            camera.Look(0f, 1e-9, 0);
+            camera.Move(0f, default, 1f / 60f);
+            camera.body = body;
+            camera.yaw = yaw;
+            camera.pitch = 0f;
+            camera.Move(0f, default, 1f / 60f);
+            return camera;
+        }
+
+        float Walk(FreeCamera camera, float seconds, FreeCamera.Held held)
+        {
+            var jump = 0f;
+            var (last, _) = camera.View(0f);
+            for (var t = 0f; t < seconds; t += 1f / 60f)
+            {
+                camera.Move(0f, held, 1f / 60f);
+                var (e, _) = camera.View(0f);
+                jump = Math.Max(jump, MathF.Abs(e.Y - last.Y));
+                last = e;
+            }
+
+            return jump;
+        }
+
+        // Up: from in front of the stair's foot, straight on towards the wall.
+        var camera = At(new(5.7f, 4.6f), 0f);
+        var jumpUp = Walk(camera, 5f, new(1, 0, 0, false));
+        Walk(camera, 1f, default);
+        var (eye, _) = camera.View(0f);
+        Check(MathF.Abs(camera.feet - KnotFloor.Level) < 1e-4f && MathF.Abs(eye.Y - (KnotFloor.Level + WalkHeight)) < 2e-3f && camera.body.Y < 0.9f && !camera.Airborne,
+            $"forward up the stair stands on the knots' floor, {KnotFloor.Level} m up (feet {camera.feet:F3}, eye {eye.Y:F3}, z {camera.body.Y:F2})");
+        Check(jumpUp < 0.05f, $"the eye climbs the stair smoothly, never more than 5 cm a frame ({jumpUp:F3} m)");
+
+        // Down again, turned round.
+        camera.yaw = MathF.PI;
+        var jumpDown = Walk(camera, 5f, new(1, 0, 0, false));
+        Walk(camera, 1f, default);
+        (eye, _) = camera.View(0f);
+        Check(camera.feet == 0f && MathF.Abs(eye.Y - WalkHeight) < 2e-3f && camera.body.Y > 4f && camera.Landings == 0 && jumpDown < 0.05f,
+            $"back down the stair to the hall's floor, step by step, without a fall (feet {camera.feet:F3}, z {camera.body.Y:F2}, a frame's {jumpDown:F3} m)");
+
+        // The stair's side is a wall from the hall.
+        camera = At(new(4.6f, 2.5f), MathF.PI / 2f);
+        Walk(camera, 3f, new(1, 0, 0, true));
+        Check(camera.feet == 0f && camera.body.X < 5.2f - SolidRadius + 1e-3f, $"the stair's side stops the body walking at it from the hall (x {camera.body.X:F2})");
+
+        // Under the floor: the hall's floor all the way to the wall, between the columns.
+        camera = At(new(4.75f, 2.2f), 0f);
+        var highest = 0f;
+        for (var i = 0; i < 300; i++)
+        {
+            camera.Move(0f, new(1, 0, 0, false), 1f / 60f);
+            highest = Math.Max(highest, camera.feet);
+        }
+
+        Check(highest == 0f && camera.body.Y < -2.9f, $"under the knots' floor the body walks on the hall's floor to the wall (z {camera.body.Y:F2})");
+
+        // On the floor: its rail on the hall's side holds, and a jump lands on the floor, not in the hall.
+        camera = At(new(5.05f, -1.6f), -MathF.PI / 2f);
+        camera.feet = camera.ground = KnotFloor.Level;
+        Walk(camera, 3f, new(1, 0, 0, true));
+        Check(camera.feet == KnotFloor.Level && camera.body.X > 3.93f + SolidRadius - 1e-3f, $"the rail stops the body at the floor's edge (x {camera.body.X:F2})");
+        camera.Jump(0f);
+        Walk(camera, 1.5f, new(1, 0, 0, false));
+        Check(camera.Jumps == 1 && camera.Landings == 1 && camera.feet == KnotFloor.Level, "a jump at the rail lands back on the knots' floor");
+
+        // Flying off the floor over the hall and landing falls to the hall's floor; landing above the floor stays on it.
+        camera.ToggleFlying(0f);
+        Walk(camera, 1.5f, new(1, 0, 0, false));
+        camera.ToggleFlying(0f);
+        Walk(camera, 2f, default);
+        Check(camera.feet == 0f && camera.Landings == 2 && camera.body.X < 3.9f, $"landing from a flight over the hall falls to its floor (x {camera.body.X:F2})");
+        Check(camera.GoTo(7, cut: true) && camera.feet == KnotFloor.Level && !camera.framed, "view 7 stands on the knots' floor, at walking height");
+        camera.ToggleFlying(0f);
+        camera.ToggleFlying(0f);
+        Walk(camera, 1f, default);
+        Check(camera.feet == KnotFloor.Level && !camera.Airborne, "landing from a flight above the knots' floor stays on it");
     }
 
     // What stands on the floor stops the walking body, which slides along it, and lets a flight pass over.

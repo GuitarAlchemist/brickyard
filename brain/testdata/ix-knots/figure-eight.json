@@ -1,0 +1,32 @@
+{
+ "closure_crossings": 0,
+ "components": 1,
+ "crossings": 4,
+ "jones": {
+  "terms": [
+   [
+    -2.0,
+    1
+   ],
+   [
+    -1.0,
+    -1
+   ],
+   [
+    0.0,
+    1
+   ],
+   [
+    1.0,
+    -1
+   ],
+   [
+    2.0,
+    1
+   ]
+  ],
+  "text": "t^-2 - t^-1 + 1 - t + t^2"
+ },
+ "jones_symmetric": true,
+ "writhe": 0
+}

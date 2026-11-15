@@ -627,6 +627,7 @@ internal sealed class Link(Func<double> clock)
         GaiaPresence.SelfTest(Check);
         SceneModulePicking.SelfTest(Check);
         FreeCamera.SelfTest(Check);
+        KnotFloor.SelfTest(Check);
         Cinematic.SelfTest(Check);
         ToolWheel.SelfTest(Check);
         WallClocks.SelfTest(Check);
