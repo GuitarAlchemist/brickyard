@@ -37,9 +37,28 @@ internal sealed unsafe class PathTracer : IDisposable
     private readonly VkDescriptorSet composite;
     private readonly VkSampler compositeSampler;
     private readonly Target[] targets = new Target[Images.Length];
+    private readonly VkPipeline raygen; // the ray tracing pipeline's, with SER when offered; default when traced in compute
+    private readonly Gpu.Buffer? table; // its shader binding table: ray generation, miss, hit group
+    private readonly VkStridedDeviceAddressRegionKHR generate, miss, hits;
+    private readonly VkQueryPool timestamps;
+    private readonly bool[] timed;
+    private readonly float tick; // nanoseconds a timestamp's unit
     private SN.Matrix4x4 previousViewProj;
     private bool fresh = true;
     private uint frame;
+
+    private const VkShaderStageFlags Stages = VkShaderStageFlags.ComputeBit | VkShaderStageFlags.RaygenBitKHR;
+
+    // How the rays are traced: from the ray tracing pipeline with shader execution reordering, from it without, or
+    // from the compute pass's ray queries.
+    public string How { get; }
+
+    public bool Pipeline => table is not null;
+
+    public bool Reordering { get; }
+
+    // The GPU's milliseconds for the trace and the filter, each frame's, as the timestamps measured them.
+    public List<double> GpuMilliseconds { get; } = [];
 
     // The images, their bindings from 7 on: positions, normals, kept light, colour and glow, each this frame's and
     // last frame's; the filter's two; the picture.
@@ -57,25 +76,26 @@ internal sealed unsafe class PathTracer : IDisposable
     private const int Output = 12; // the picture's index in Images
 
     public PathTracer(Device device, PhysicalDevice physical, int slots, RayScene rays, VkImageView albedo, VkImageView normal, VkImageView arm, VkSampler materialSampler,
-        VkImageView globes, VkSampler globeSampler, DescriptorPoolEx splashPool, DescriptorSetLayoutEx splashLayout)
+        VkImageView globes, VkSampler globeSampler, DescriptorPoolEx splashPool, DescriptorSetLayoutEx splashLayout, bool rtPipeline, bool reorder, float timestampPeriod)
     {
         this.device = device;
         this.physical = physical;
         this.rays = rays;
+        var stages = rtPipeline ? Stages : VkShaderStageFlags.ComputeBit;
         var bindings = new List<VkDescriptorSetLayoutBinding>
         {
-            new() { Binding = 0, DescriptorType = VkDescriptorType.UniformBuffer, DescriptorCount = 1, StageFlags = VkShaderStageFlags.ComputeBit },
-            new() { Binding = 1, DescriptorType = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 1, StageFlags = VkShaderStageFlags.ComputeBit },
-            new() { Binding = 2, DescriptorType = VkDescriptorType.StorageBuffer, DescriptorCount = 1, StageFlags = VkShaderStageFlags.ComputeBit },
+            new() { Binding = 0, DescriptorType = VkDescriptorType.UniformBuffer, DescriptorCount = 1, StageFlags = stages },
+            new() { Binding = 1, DescriptorType = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 1, StageFlags = stages },
+            new() { Binding = 2, DescriptorType = VkDescriptorType.StorageBuffer, DescriptorCount = 1, StageFlags = stages },
         };
         for (var b = 3; b <= 6; b++)
         {
-            bindings.Add(new() { Binding = b, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.ComputeBit });
+            bindings.Add(new() { Binding = b, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = stages });
         }
 
         for (var i = 0; i < Images.Length; i++)
         {
-            bindings.Add(new() { Binding = 7 + i, DescriptorType = VkDescriptorType.StorageImage, DescriptorCount = 1, StageFlags = VkShaderStageFlags.ComputeBit });
+            bindings.Add(new() { Binding = 7 + i, DescriptorType = VkDescriptorType.StorageImage, DescriptorCount = 1, StageFlags = stages });
         }
 
         setLayout = device.CreateDescriptorSetLayout(new DescriptorSetLayoutEx.CreateInfo { Bindings = [.. bindings] }, null);
@@ -117,10 +137,26 @@ internal sealed unsafe class PathTracer : IDisposable
             ], []);
         }
 
-        var pushRange = new VkPushConstantRange { StageFlags = VkShaderStageFlags.ComputeBit, Offset = ByteSize.Zero, Size = ByteSize.Of<PassPush>() };
+        pushStages = stages;
+        var pushRange = new VkPushConstantRange { StageFlags = stages, Offset = ByteSize.Zero, Size = ByteSize.Of<PassPush>() };
         layout = device.CreatePipelineLayout([setLayout], [pushRange], null);
-        trace = Compute(Header + TraceShader, "path-trace.comp");
-        filter = Compute(Header + FilterShader, "path-filter.comp");
+        filter = Compute("#version 460\n" + Header + FilterShader, "path-filter.comp");
+        if (rtPipeline)
+        {
+            Reordering = reorder;
+            (raygen, table, generate, miss, hits) = RayPipeline(reorder);
+            How = reorder ? "the ray tracing pipeline, with shader execution reordering" : "the ray tracing pipeline";
+        }
+        else
+        {
+            trace = Compute("#version 460\n" + Header + TraceShader, "path-trace.comp");
+            How = "ray queries in compute";
+        }
+
+        // Two timestamps a slot, around the trace and the filter.
+        tick = timestampPeriod;
+        timed = new bool[slots];
+        timestamps = device.CreateQueryPool(new VkQueryPoolCreateInfo { QueryType = VkQueryType.Timestamp, QueryCount = 2 * slots }, null);
 
         // The picture, drawn over the raster pass's by the splash's pipeline: one of its sets, nearest, as the pixels are.
         compositeSampler = device.CreateSampler(new VkSamplerCreateInfo
@@ -178,20 +214,35 @@ internal sealed unsafe class PathTracer : IDisposable
     // Before the render pass, after RayScene.Record: the frame traced, kept and filtered into the picture.
     public void Record(CommandBuffer cb, int slot, SN.Matrix4x4 viewProj, SN.Vector3 eye, float fovDegrees, float haze, bool photographed, SN.Vector4 background)
     {
+        // The slot's last timestamps, its fence waited for before this recording.
+        if (timed[slot])
+        {
+            var stamps = stackalloc ulong[2];
+            device.GetQueryPoolResults(timestamps, 2 * slot, 2, new ReadOnlySpan<byte>(stamps, 16), new ByteSize64(8UL), VkQueryResultFlags._64Bit);
+            if (stamps[1] > stamps[0] && GpuMilliseconds.Count < 100_000)
+            {
+                GpuMilliseconds.Add((stamps[1] - stamps[0]) * (double)tick / 1e6);
+            }
+        }
+
+        cb.ResetQueryPool(timestamps, 2 * slot, 2);
+        timed[slot] = true;
+
         SN.Matrix4x4.Invert(viewProj, out var inverse);
         var reset = fresh;
+        var tracing = Pipeline ? VkPipelineStageFlags.RayTracingShaderBitKHR : VkPipelineStageFlags.ComputeShaderBit;
         if (fresh)
         {
             // Every image from nothing to General, where it stays.
             var barriers = targets.Select(t => Stage.Barrier(t.Image, VkImageLayout.Undefined, VkImageLayout.General, VkAccessFlags.None, VkAccessFlags.ShaderReadBit | VkAccessFlags.ShaderWriteBit)).ToArray();
-            cb.PipelineBarrier(VkPipelineStageFlags.TopOfPipeBit, VkPipelineStageFlags.ComputeShaderBit, VkDependencyFlags.None, [], [], barriers);
+            cb.PipelineBarrier(VkPipelineStageFlags.TopOfPipeBit, tracing | VkPipelineStageFlags.ComputeShaderBit, VkDependencyFlags.None, [], [], barriers);
             previousViewProj = viewProj;
             fresh = false;
         }
         else
         {
             // Last frame's filter and picture read and written before this one's trace starts.
-            Memory(cb, VkPipelineStageFlags.ComputeShaderBit | VkPipelineStageFlags.FragmentShaderBit, VkPipelineStageFlags.ComputeShaderBit);
+            Memory(cb, VkPipelineStageFlags.ComputeShaderBit | VkPipelineStageFlags.FragmentShaderBit, tracing);
         }
 
         var pixelAngle = 2f * MathF.Tan(fovDegrees * MathF.PI / 360f) / Height;
@@ -208,21 +259,48 @@ internal sealed unsafe class PathTracer : IDisposable
         var parity = (int)(frame & 1);
         frame++;
 
+        // Written once everything before it is done (the ray scene's build, the last frame), so that the two stamps
+        // hold the trace and the filter alone.
+        cb.WriteTimestamp(VkPipelineStageFlags.BottomOfPipeBit, timestamps, 2 * slot);
         var (gx, gy) = ((Width + Group - 1) / Group, (Height + Group - 1) / Group);
-        cb.BindPipeline(VkPipelineBindPoint.Compute, trace);
-        cb.BindDescriptorSets(VkPipelineBindPoint.Compute, layout, 0, [sets[slot]], []);
         Push(cb, new PassPush(parity, 0, 0));
-        cb.Dispatch(gx, gy, 1);
+        if (Pipeline)
+        {
+            cb.BindPipeline(VkPipelineBindPoint.RayTracingKHR, raygen);
+            cb.BindDescriptorSets(VkPipelineBindPoint.RayTracingKHR, layout, 0, [sets[slot]], []);
+            var (g, m, h, none) = (generate, miss, hits, default(VkStridedDeviceAddressRegionKHR));
+            cb.TraceRaysKHR(&g, &m, &h, &none, Width, Height, 1);
+        }
+        else
+        {
+            cb.BindPipeline(VkPipelineBindPoint.Compute, trace);
+            cb.BindDescriptorSets(VkPipelineBindPoint.Compute, layout, 0, [sets[slot]], []);
+            cb.Dispatch(gx, gy, 1);
+        }
 
         cb.BindPipeline(VkPipelineBindPoint.Compute, filter);
+        cb.BindDescriptorSets(VkPipelineBindPoint.Compute, layout, 0, [sets[slot]], []);
         for (var pass = 0; pass < 3; pass++)
         {
-            Memory(cb, VkPipelineStageFlags.ComputeShaderBit, VkPipelineStageFlags.ComputeShaderBit);
+            Memory(cb, pass == 0 ? tracing : VkPipelineStageFlags.ComputeShaderBit, VkPipelineStageFlags.ComputeShaderBit);
             Push(cb, new PassPush(parity, pass, pass == 2 ? 1 : 0));
             cb.Dispatch(gx, gy, 1);
         }
 
+        cb.WriteTimestamp(VkPipelineStageFlags.BottomOfPipeBit, timestamps, (2 * slot) + 1);
         Memory(cb, VkPipelineStageFlags.ComputeShaderBit, VkPipelineStageFlags.FragmentShaderBit);
+    }
+
+    // The trace's and the filter's GPU time, the middle and the 95th percentile, for the log.
+    public string Measured()
+    {
+        if (GpuMilliseconds.Count == 0)
+        {
+            return "no frame measured";
+        }
+
+        var sorted = GpuMilliseconds.Order().ToArray();
+        return $"GPU {sorted[sorted.Length / 2]:F2} ms p50, {sorted[(int)(sorted.Length * 0.95)]:F2} ms p95 over {sorted.Length} frames, by {How}";
     }
 
     // In the render pass, after the meshes: the picture over them, through the splash's pipeline.
@@ -238,7 +316,17 @@ internal sealed unsafe class PathTracer : IDisposable
     public void Dispose()
     {
         DestroyTargets();
-        device.DestroyPipeline(trace, null);
+        if (Pipeline)
+        {
+            device.DestroyPipeline(raygen, null);
+            table!.Dispose();
+        }
+        else
+        {
+            device.DestroyPipeline(trace, null);
+        }
+
+        device.DestroyQueryPool(timestamps, null);
         device.DestroyPipeline(filter, null);
         device.DestroyPipelineLayout(layout, null);
         device.DestroyDescriptorPool(pool, null);
@@ -256,8 +344,71 @@ internal sealed unsafe class PathTracer : IDisposable
         }
     }
 
+    private readonly VkShaderStageFlags pushStages;
+
     private void Push(CommandBuffer cb, PassPush push) =>
-        cb.PushConstants(layout, VkShaderStageFlags.ComputeBit, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(PassPush)));
+        cb.PushConstants(layout, pushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(PassPush)));
+
+    // The ray tracing pipeline: the trace as a ray generation shader, a miss shader that does nothing (the hit objects
+    // are read in the ray generation shader, no hit shader runs) and a triangles' hit group without shaders; and its
+    // shader binding table, each group's handle at the base alignment.
+    private (VkPipeline, Gpu.Buffer, VkStridedDeviceAddressRegionKHR, VkStridedDeviceAddressRegionKHR, VkStridedDeviceAddressRegionKHR) RayPipeline(bool reorder)
+    {
+        var source = "#version 460\n#define RAYGEN 1\n" + (reorder ? "#define SER 1\n" : "") + Header + TraceShader;
+        var generateModule = Stage.Shader(device, source, ShaderKind.RayGenShader, "path-trace.rgen", vulkan13: true);
+        var missModule = Stage.Shader(device, "#version 460\n#extension GL_EXT_ray_tracing : require\nlayout(location = 0) rayPayloadInEXT float unused;\nvoid main() { }\n",
+            ShaderKind.MissShader, "path-trace.rmiss", vulkan13: true);
+        const int unused = ~0;
+        var entry = "main"u8;
+        VkPipeline pipeline;
+        fixed (byte* entryName = entry)
+        {
+            var shaderStages = stackalloc VkPipelineShaderStageCreateInfo[]
+            {
+                new() { Stage = VkShaderStageFlags.RaygenBitKHR, Module = generateModule, Name = entryName },
+                new() { Stage = VkShaderStageFlags.MissBitKHR, Module = missModule, Name = entryName },
+            };
+            var groups = stackalloc VkRayTracingShaderGroupCreateInfoKHR[]
+            {
+                new() { Type = VkRayTracingShaderGroupTypeKHR.GeneralKHR, GeneralShader = 0, ClosestHitShader = unused, AnyHitShader = unused, IntersectionShader = unused },
+                new() { Type = VkRayTracingShaderGroupTypeKHR.GeneralKHR, GeneralShader = 1, ClosestHitShader = unused, AnyHitShader = unused, IntersectionShader = unused },
+                new() { Type = VkRayTracingShaderGroupTypeKHR.TrianglesHitGroupKHR, GeneralShader = unused, ClosestHitShader = unused, AnyHitShader = unused, IntersectionShader = unused },
+            };
+            device.CreateRayTracingPipelinesKHR(default, default,
+                [new VkRayTracingPipelineCreateInfoKHR { StageCount = 2, Stages = shaderStages, GroupCount = 3, Groups = groups, MaxPipelineRayRecursionDepth = 1, Layout = layout }],
+                default, new Span<VkPipeline>(&pipeline, 1));
+        }
+
+        device.DestroyShaderModule(generateModule, null);
+        device.DestroyShaderModule(missModule, null);
+
+        var properties = new VkPhysicalDeviceRayTracingPipelinePropertiesKHR();
+        var asked = new VkPhysicalDeviceProperties2 { Next = &properties };
+        physical.GetProperties2(ref asked);
+        var handle = (int)properties.ShaderGroupHandleSize;
+        var step = Align(Align(handle, (int)properties.ShaderGroupHandleAlignment), (int)properties.ShaderGroupBaseAlignment);
+        var handles = new byte[3 * handle];
+        device.GetRayTracingShaderGroupHandlesKHR(pipeline, 0, 3, handles);
+        var align = (int)properties.ShaderGroupBaseAlignment;
+        var buffer = new Gpu.Buffer(device, physical, (ulong)((3 * step) + align), VkBufferUsageFlags.ShaderBindingTableBitKHR | VkBufferUsageFlags.ShaderDeviceAddressBit, hostVisible: true);
+        var start = (int)((ulong)Align((long)buffer.Address, align) - buffer.Address);
+        for (var g = 0; g < 3; g++)
+        {
+            handles.AsSpan(g * handle, handle).CopyTo(new Span<byte>(buffer.Mapped + start + (g * step), handle));
+        }
+
+        VkStridedDeviceAddressRegionKHR Region(int g) => new()
+        {
+            DeviceAddress = new VkDeviceAddress(buffer.Address + (ulong)start + (ulong)(g * step)),
+            Stride = new ByteSize64((ulong)step),
+            Size = new ByteSize64((ulong)step),
+        };
+        return (pipeline, buffer, Region(0), Region(1), Region(2));
+    }
+
+    private static int Align(int value, int to) => (value + to - 1) / to * to;
+
+    private static long Align(long value, int to) => (value + to - 1) / to * to;
 
     private static void Memory(CommandBuffer cb, VkPipelineStageFlags from, VkPipelineStageFlags to)
     {
@@ -353,12 +504,20 @@ internal sealed unsafe class PathTracer : IDisposable
         }
     }
 
+    // After #version and the defines: RAYGEN for the ray tracing pipeline's ray generation shader, SER with NVIDIA's
+    // hit objects and their reordering.
     private const string Header = """
-        #version 460
         #extension GL_EXT_ray_query : require
         #extension GL_EXT_buffer_reference : require
         #extension GL_EXT_buffer_reference_uvec2 : require
+        #ifdef RAYGEN
+        #extension GL_EXT_ray_tracing : require
+        #else
         layout(local_size_x = 8, local_size_y = 8) in;
+        #endif
+        #ifdef SER
+        #extension GL_NV_shader_invocation_reorder : require
+        #endif
         layout(set = 0, binding = 0) uniform Trace { mat4 invViewProj; mat4 prevViewProj; vec4 eye; vec4 size; vec4 options; vec4 background; } t;
         layout(set = 0, binding = 1) uniform accelerationStructureEXT hallRays;
         struct Inst { uvec2 vertices; uint count; uint pad; vec4 glow; vec4 prev0; vec4 prev1; vec4 prev2; };
@@ -483,8 +642,37 @@ internal sealed unsafe class PathTracer : IDisposable
 
         // The first surface along d from o within tmax, read from its mesh: false when there is none. spread is the
         // ray's width there, in metres, for the scans' detail.
-        bool hit(vec3 o, vec3 d, float tmax, float spread, out Surface s)
+        #ifdef SER
+        layout(location = 0) rayPayloadEXT float unusedPayload;
+        layout(location = 0) hitObjectAttributeNV vec2 hitBarycentrics;
+        #endif
+
+        bool hit(vec3 o, vec3 d, float tmax, float spread, bool sort, out Surface s)
         {
+            #ifdef SER
+            // Traced into a hit object; a bounce's invocations are then sorted by the instance they hit, so that those
+            // reading the same mesh, scans and material run together (the eye's rays are coherent already, and sorting
+            // them cost more than it gave). No hit shader runs.
+            hitObjectNV q;
+            hitObjectTraceRayNV(q, hallRays, gl_RayFlagsOpaqueEXT, 0xFFu, 0u, 0u, 0u, o, 0.0, d, tmax, 0);
+            if (sort)
+            {
+                uint hint = hitObjectIsHitNV(q) ? uint(hitObjectGetInstanceIdNV(q)) + 1u : 0u;
+                reorderThreadNV(q, hint, 8);
+            }
+            if (!hitObjectIsHitNV(q))
+            {
+                return false;
+            }
+
+            float h = hitObjectGetRayTMaxNV(q);
+            Inst ins = inst[hitObjectGetInstanceIdNV(q)];
+            int prim = hitObjectGetPrimitiveIndexNV(q);
+            hitObjectGetAttributesNV(q, 0);
+            vec2 bc = hitBarycentrics;
+            mat4x3 toWorld = hitObjectGetObjectToWorldNV(q);
+            mat4x3 toObject = hitObjectGetWorldToObjectNV(q);
+            #else
             rayQueryEXT q;
             rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT, 0xFFu, o, 0.0, d, tmax);
             while (rayQueryProceedEXT(q))
@@ -502,6 +690,7 @@ internal sealed unsafe class PathTracer : IDisposable
             vec2 bc = rayQueryGetIntersectionBarycentricsEXT(q, true);
             mat4x3 toWorld = rayQueryGetIntersectionObjectToWorldEXT(q, true);
             mat4x3 toObject = rayQueryGetIntersectionWorldToObjectEXT(q, true);
+            #endif
             Floats v = Floats(ins.vertices);
             int i0 = prim * 51, i1 = i0 + 17, i2 = i0 + 34;
             vec3 w = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
@@ -580,7 +769,9 @@ internal sealed unsafe class PathTracer : IDisposable
             return rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
         }
 
-        vec3 fresnel(vec3 f0, float c) { return f0 + (1.0 - f0) * pow(1.0 - c, 5.0); }
+        // pow of a negative number is undefined: a cosine a hair over 1 gave NaN in the ray generation shader's build
+        // (black blots spread by the filter) though not in the compute pass's.
+        vec3 fresnel(vec3 f0, float c) { return f0 + (1.0 - f0) * pow(clamp(1.0 - c, 0.0, 1.0), 5.0); }
 
         float ggx(float nh, float a) { float a2 = a * a; float d = nh * nh * (a2 - 1.0) + 1.0; return a2 / (PI * d * d); }
 
@@ -627,7 +818,7 @@ internal sealed unsafe class PathTracer : IDisposable
             {
                 float a2 = s.alpha * s.alpha;
                 float c = sqrt((1.0 - u2) / (1.0 + (a2 - 1.0) * u2));
-                float sn = sqrt(1.0 - c * c);
+                float sn = sqrt(max(1.0 - c * c, 0.0));
                 vec3 h = normalize(tt * cos(2.0 * PI * u1) * sn + bb * sin(2.0 * PI * u1) * sn + s.n * c);
                 l = reflect(-v, h);
             }
@@ -680,7 +871,11 @@ internal sealed unsafe class PathTracer : IDisposable
 
         void main()
         {
+            #ifdef RAYGEN
+            ivec2 px = ivec2(gl_LaunchIDEXT.xy);
+            #else
             ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+            #endif
             ivec2 size = ivec2(t.size.xy);
             if (px.x >= size.x || px.y >= size.y)
             {
@@ -696,7 +891,7 @@ internal sealed unsafe class PathTracer : IDisposable
             vec3 d = normalize(far.xyz / far.w - eye);
 
             Surface s;
-            if (!hit(eye, d, 60.0, t.background.w, s))
+            if (!hit(eye, d, 60.0, t.background.w, false, s))
             {
                 // Nothing: the surroundings, kept as nothing.
                 store(px, vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(t.background.rgb, 0.0));
@@ -733,7 +928,7 @@ internal sealed unsafe class PathTracer : IDisposable
 
                 Surface next;
                 spread += 0.02 + at.alpha * 0.2;
-                if (!hit(at.p + at.face * 0.002, l, 60.0, spread, next))
+                if (!hit(at.p + at.face * 0.002, l, 60.0, spread, true, next))
                 {
                     light += through * hall(l);
                     break;

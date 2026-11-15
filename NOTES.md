@@ -1423,7 +1423,8 @@ the plaques' letters). Not live: the live window and %LOCALAPPDATA%\delta\ix-kno
 ## Path tracing, F9 (2026-11-14)
 
 The user asked for path tracing in Delta and NVIDIA's other features. This first part is the path tracing, with what
-the GPU's ray queries give; the ray tracing pipeline with shader execution reordering, Reflex and DLSS come after.
+the GPU's ray queries give; the ray tracing pipeline with shader execution reordering follows below, Reflex and DLSS
+come after.
 
 - `PathTracer` (F9, `--path-tracing`, with the ray scene): a compute pass traces each pixel from the eye through the
   frame's top level (RayScene), jittered within the pixel. It reads the surface it meets from its mesh's own vertices by
@@ -1449,7 +1450,28 @@ sample instead of the pixel's centre (each frame blurred the picture a little mo
 Not done or not exact: the objects' places are the last frame's (the ray scene is built from the frame before); the
 screens drawn by their own pipelines are not in the ray scene, so they neither light the room nor show in reflections;
 light from glowing surfaces is found by bounces only, not aimed at; the robot's moving shadow lags by about the 32
-frames kept; the GPU time of the pass is not measured apart from the frame's.
+frames kept.
+
+### The ray tracing pipeline, SER and the GPU's time
+
+- When the GPU offers `VK_KHR_ray_tracing_pipeline`, the trace runs from a ray generation shader (`TraceRaysKHR`, an
+  empty miss and a hit group with no shader, the rays still traced by ray queries) built from the same source as the
+  compute pass; `--pt-compute` keeps the compute pass, to compare.
+- NVIDIA's shader execution reordering (`VK_NV_ray_tracing_invocation_reorder`) is there behind `--ser`: each bounce's
+  rays are traced into hit objects and sorted by the instance they hit (`reorderThreadNV` with a hint; the eye's rays
+  are not sorted). It is not the default because it measured slower here.
+- Two timestamps around the trace and the filter give their GPU time, printed at exit (`path tracing GPU … ms p50`).
+
+Measured hidden at 3840 × 2160 (the window 3840 × 2130), view 7, about 12 s each, GPU p50 over two runs: the
+pipeline 26-34 ms, the compute pass 34-38 ms, the pipeline with SER 38-40 ms; at 1280 × 720 all about 1 ms. The rays
+are few and coherent and the shading is one shader whatever is hit, so SER has nothing to regroup and costs its sort; a
+plain `reorderThreadNV` on every ray was slower too. The runs vary by several milliseconds, but SER was the slowest in
+every one.
+
+A mistake found on the way: the pipeline's picture had black blots that the compute pass's had not. `fresnel` took
+`pow(1 - c, 5)`, and a cosine a hair over 1 made it the power of a negative number, NaN in the ray generation shader's
+build (the compute pass's evidently multiplied it out); the filter spread each NaN into a blot. The base is clamped
+now, and the GGX sample's sine too; the two pictures match (views 3 and 7).
 
 ## Known problems
 

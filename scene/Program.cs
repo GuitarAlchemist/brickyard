@@ -760,9 +760,35 @@ internal static unsafe class Stage
         rayV12.BufferDeviceAddress = true;
         rayStructures.AccelerationStructure = true;
         rayQueries.RayQuery = true;
+        // The ray tracing pipeline, when offered with the ray queries: the path tracer traces from a ray generation
+        // shader. --pt-compute keeps it on the compute pass, to compare. NVIDIA's shader execution reordering (SER) is
+        // there behind --ser only: sorting a bounce's rays by the instance they hit measured slower here (4K, view 7,
+        // GPU p50: 38-40 ms against 26-34 ms without), the shading being one shader whatever is hit.
+        var rtPipeline = rayTraced && !args.Contains("--pt-compute") && offered.Contains("VK_KHR_ray_tracing_pipeline");
+        var reorder = rtPipeline && args.Contains("--ser") && offered.Contains("VK_NV_ray_tracing_invocation_reorder");
+        var pipelineFeature = new VkPhysicalDeviceRayTracingPipelineFeaturesKHR();
+        var reorderFeature = new VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV();
+        if (rtPipeline)
+        {
+            pipelineFeature.Next = reorder ? &reorderFeature : null;
+            var asked = new VkPhysicalDeviceFeatures2 { Next = &pipelineFeature };
+            physical.GetFeatures2(ref asked);
+            rtPipeline = pipelineFeature.RayTracingPipeline;
+            reorder &= rtPipeline && reorderFeature.RayTracingInvocationReorder;
+            pipelineFeature = new VkPhysicalDeviceRayTracingPipelineFeaturesKHR { RayTracingPipeline = rtPipeline };
+            reorderFeature = new VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV { RayTracingInvocationReorder = reorder };
+        }
+
         if (rayTraced)
         {
             rayQueries.Next = enabledFeatures.Next;
+            if (rtPipeline)
+            {
+                reorderFeature.Next = rayQueries.Next;
+                pipelineFeature.Next = reorder ? &reorderFeature : rayQueries.Next;
+                rayQueries.Next = &pipelineFeature;
+            }
+
             rayStructures.Next = &rayQueries;
             rayV12.Next = &rayStructures;
             enabledFeatures.Next = &rayV12;
@@ -770,9 +796,10 @@ internal static unsafe class Stage
 
         Mesh.RayTraced = rayTraced;
         string[] deviceExtensions = canWait ? ["VK_KHR_swapchain", "VK_KHR_present_id", "VK_KHR_present_wait"] : ["VK_KHR_swapchain"];
+        string[] pipelineExtensions = rtPipeline ? reorder ? ["VK_KHR_ray_tracing_pipeline", "VK_NV_ray_tracing_invocation_reorder"] : ["VK_KHR_ray_tracing_pipeline"] : [];
         var device = physical.CreateDevice(new Device.CreateInfo
         {
-            Extensions = rayTraced ? [.. deviceExtensions, .. RayScene.Extensions] : [.. deviceExtensions],
+            Extensions = rayTraced ? [.. deviceExtensions, .. RayScene.Extensions, .. pipelineExtensions] : [.. deviceExtensions],
             QueueCreateInfos = new ReadOnlySpan<VkDeviceQueueCreateInfo>(&queueInfo, 1),
             Next = &enabledFeatures,
         });
@@ -1334,10 +1361,16 @@ internal static unsafe class Stage
         materials.FreeStaging();
         globes.FreeStaging();
         // Path tracing (F9, --path-tracing), with the ray scene: the hall drawn by following light through it.
+        if (rays is not null && rtPipeline)
+        {
+            rays.ReadBy |= VkPipelineStageFlags.RayTracingShaderBitKHR;
+        }
+
         var tracer = rays is not null
-            ? new PathTracer(device, physical, FramesInFlight, rays, materials.Albedo, materials.Normal, materials.Arm, materialSampler, globes.View, globeSampler, descriptorPool, setLayout)
+            ? new PathTracer(device, physical, FramesInFlight, rays, materials.Albedo, materials.Normal, materials.Arm, materialSampler, globes.View, globeSampler, descriptorPool, setLayout,
+                rtPipeline, reorder, properties.Limits.TimestampPeriod)
             : null;
-        Console.WriteLine(tracer is not null ? $"SCENE path tracing: offered, {PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames; F9 or --path-tracing" : "SCENE path tracing: none (no ray queries)");
+        Console.WriteLine(tracer is not null ? $"SCENE path tracing: offered, by {tracer.How}, {PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames; F9 or --path-tracing" : "SCENE path tracing: none (no ray queries)");
         var maps = stackalloc VkDescriptorImageInfo[4];
         foreach (var frameSet in frameSets)
         {
@@ -1689,14 +1722,18 @@ internal static unsafe class Stage
                     : Words.Say("VK_KHR_ray_query · Low lighting without --no-rays", "VK_KHR_ray_query · éclairage Low sans --no-rays")),
             new("Path tracing",
                 tracer is not null && pathTracing ? Panel.Rtx.Use : tracer is not null || RayScene.Offered(physical, rtxOffered) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                Words.Say($"ray queries in compute, {PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames, filtered · F9: on or off",
-                    $"requêtes de rayons en compute, {PathTracer.Bounces} rebonds, gardé {PathTracer.MaxHistory} images, filtré · F9 : activer ou couper")),
+                Words.Say($"{PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames, filtered · F9: on or off",
+                    $"{PathTracer.Bounces} rebonds, gardé {PathTracer.MaxHistory} images, filtré · F9 : activer ou couper")),
             new(Words.Say("Ray tracing pipeline", "Pipeline de lancer de rayons"),
-                Has("VK_KHR_ray_tracing_pipeline") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                "VK_KHR_ray_tracing_pipeline"),
+                tracer is { Pipeline: true } && pathTracing ? Panel.Rtx.Use : Has("VK_KHR_ray_tracing_pipeline") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                tracer is { Pipeline: true }
+                    ? Words.Say("VK_KHR_ray_tracing_pipeline · the path tracer's ray generation shader", "VK_KHR_ray_tracing_pipeline · le shader de génération du path tracer")
+                    : "VK_KHR_ray_tracing_pipeline"),
             new(Words.Say("Shader execution reordering", "Réordonnancement des shaders (SER)"),
-                Has("VK_NV_ray_tracing_invocation_reorder") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                "VK_NV_ray_tracing_invocation_reorder"),
+                tracer is { Reordering: true } && pathTracing ? Panel.Rtx.Use : Has("VK_NV_ray_tracing_invocation_reorder") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                tracer is { Reordering: true }
+                    ? Words.Say("VK_NV_ray_tracing_invocation_reorder · each bounce's rays sorted by the object they hit (--ser)", "VK_NV_ray_tracing_invocation_reorder · les rayons de chaque rebond triés par l'objet touché (--ser)")
+                    : "VK_NV_ray_tracing_invocation_reorder"),
             new(Words.Say("Opacity micromaps", "Micro-cartes d'opacité"),
                 Has("VK_EXT_opacity_micromap") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 "VK_EXT_opacity_micromap"),
@@ -3581,6 +3618,11 @@ internal static unsafe class Stage
         materials.Dispose();
         device.DestroySampler(globeSampler, null);
         globes.Dispose();
+        if (tracer is { GpuMilliseconds.Count: > 0 })
+        {
+            Console.WriteLine($"SCENE path tracing {tracer.Measured()} at {tracer.Width}x{tracer.Height}");
+        }
+
         tracer?.Dispose();
         rays?.Dispose();
         Rays = null;

@@ -152,8 +152,12 @@ internal sealed unsafe class RayScene : IDisposable
         };
         var range = new VkAccelerationStructureBuildRangeInfoKHR { PrimitiveCount = n };
         cb.BuildAccelerationStructuresKHR([info], [new Ptr<VkAccelerationStructureBuildRangeInfoKHR>(&range)]);
-        Barrier(cb, VkPipelineStageFlags.FragmentShaderBit | VkPipelineStageFlags.ComputeShaderBit);
+        Barrier(cb, ReadBy);
     }
+
+    // The stages that read the top level: the Low shader's and the path tracer's, its ray generation shader's too when
+    // the ray tracing pipeline is on.
+    public VkPipelineStageFlags ReadBy { get; set; } = VkPipelineStageFlags.FragmentShaderBit | VkPipelineStageFlags.ComputeShaderBit;
 
     // What a draw remembers for the next frame's structure: the mesh, its world rows and its glow.
     public void Remember(Mesh mesh, in Push push)
