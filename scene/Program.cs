@@ -674,6 +674,33 @@ internal static unsafe class Stage
             extensions.Add(Marshal.PtrToStringUTF8((nint)glfwExtensions[i])!);
         }
 
+        // NVIDIA Streamline (Streamline.cs) with --dlss: initialised before the instance and the device, whose extensions,
+        // features and queues it adds to.
+        Streamline.Needs[] streamlineNeeds = [];
+        if (args.Contains("--dlss"))
+        {
+            var dir = Option(args, "--streamline") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "streamline");
+            if (Streamline.Init(dir, args.Contains("--dlss-g") ? Streamline.FrameGeneration : Streamline.Upscaling, args.Contains("--streamline-log")) is { } why)
+            {
+                Console.WriteLine($"SCENE streamline: not used ({why}) from {dir}");
+            }
+            else
+            {
+                streamlineNeeds = [.. Streamline.Features.Select(Streamline.Requirements).OfType<Streamline.Needs>()];
+                foreach (var (feature, needs) in Streamline.Features.Zip(Streamline.Features.Select(Streamline.Requirements)))
+                {
+                    Console.WriteLine(needs is null
+                        ? $"SCENE streamline {Streamline.FeatureName(feature)}: no requirements (not loaded)"
+                        : $"SCENE streamline {Streamline.FeatureName(feature)}: instance [{string.Join(' ', needs.InstanceExtensions)}] device [{string.Join(' ', needs.DeviceExtensions)}] 1.2 [{string.Join(' ', needs.Features12)}] 1.3 [{string.Join(' ', needs.Features13)}] queues graphics {needs.GraphicsQueues} compute {needs.ComputeQueues} optical flow {needs.OpticalFlowQueues}");
+                }
+
+                foreach (var needs in streamlineNeeds)
+                {
+                    extensions.UnionWith(needs.InstanceExtensions);
+                }
+            }
+        }
+
         var instance = Vulkan.CreateInstance(new Instance.CreateInfo
         {
             AppInfo = new VkApplicationInfo { ApiVersion = ApiVersion13 },
@@ -721,6 +748,14 @@ internal static unsafe class Stage
         // renderer does.
         var properties = physical.GetProperties();
         var gpu = Marshal.PtrToStringUTF8((nint)properties.DeviceName) ?? "this GPU";
+        if (Streamline.Loaded)
+        {
+            foreach (var feature in Streamline.Features)
+            {
+                var supported = Streamline.Supported(feature, physical.VkHandle);
+                Console.WriteLine($"SCENE streamline {Streamline.FeatureName(feature)} on {gpu}: {(supported == 0 ? "supported" : Streamline.ResultName(supported))}");
+            }
+        }
         var (quality, because) = qualityAsked switch
         {
             "flat" => (Quality.Flat, "--quality asks for it"),
@@ -733,8 +768,6 @@ internal static unsafe class Stage
         var msaa = samples != VkSampleCountFlags._1Bit;
         Console.WriteLine($"SCENE quality {quality.ToString().ToLowerInvariant()} because {because}{(msaa ? ", with 4x MSAA" : "")}");
 
-        var priority = 1.0f;
-        var queueInfo = new VkDeviceQueueCreateInfo { QueueFamilyIndex = family, QueueCount = 1, QueuePriorities = &priority };
         // The screen's pace (VK_KHR_present_id and VK_KHR_present_wait), when the GPU offers it: a frame can wait for the
         // last one to be on screen.
         var presentWaitFeature = new VkPhysicalDevicePresentWaitFeaturesKHR();
@@ -792,11 +825,127 @@ internal static unsafe class Stage
             rayV12.TimelineSemaphore = reflexOn;
         }
 
-        if (!rayTraced && reflexOn)
+        // Streamline's needs (--dlss), merged into the device: the extensions it names that the GPU offers, its Vulkan 1.2
+        // and 1.3 features, and its queues after the scene's own one (sl_helpers_vk.h: "where first SL queue starts after
+        // host's queues"). DLSS-G's optical flow takes the first queue of a family that does nothing else.
+        var slExtensions = new List<string>();
+        var sl12 = new HashSet<string>();
+        var sl13 = new HashSet<string>();
+        int slGraphics = 0, slCompute = 0, slFlow = 0;
+        foreach (var needs in streamlineNeeds)
+        {
+            foreach (var e in needs.DeviceExtensions)
+            {
+                if (!offered.Contains(e))
+                {
+                    Console.WriteLine($"SCENE streamline: {gpu} does not offer {e}");
+                }
+                else if (!slExtensions.Contains(e))
+                {
+                    slExtensions.Add(e);
+                }
+            }
+
+            sl12.UnionWith(needs.Features12);
+            sl13.UnionWith(needs.Features13);
+            slGraphics += needs.GraphicsQueues;
+            slCompute += needs.ComputeQueues;
+            slFlow += needs.OpticalFlowQueues;
+        }
+
+        var offered12 = new VkPhysicalDeviceVulkan12Features();
+        var offered13 = new VkPhysicalDeviceVulkan13Features { Next = &offered12 };
+        if (sl12.Count + sl13.Count > 0)
+        {
+            var asked = new VkPhysicalDeviceFeatures2 { Next = &offered13 };
+            physical.GetFeatures2(ref asked);
+        }
+
+        if (!rayTraced && (reflexOn || sl12.Count > 0))
         {
             rayV12.BufferDeviceAddress = false;
             rayV12.Next = enabledFeatures.Next;
             enabledFeatures.Next = &rayV12;
+        }
+
+        foreach (var f in sl12)
+        {
+            bool on = false, known = true;
+            switch (f)
+            {
+                case "timelineSemaphore": on = rayV12.TimelineSemaphore = offered12.TimelineSemaphore; break;
+                case "descriptorIndexing": on = rayV12.DescriptorIndexing = offered12.DescriptorIndexing; break;
+                case "bufferDeviceAddress": on = rayV12.BufferDeviceAddress = offered12.BufferDeviceAddress; break;
+                default: known = false; break;
+            }
+
+            if (!on)
+            {
+                Console.WriteLine($"SCENE streamline: Vulkan 1.2 {f} {(known ? "not offered" : "not known to the scene")}");
+            }
+        }
+
+        var v13 = new VkPhysicalDeviceVulkan13Features();
+        foreach (var f in sl13)
+        {
+            bool on = false, known = f == "synchronization2";
+            if (known)
+            {
+                on = v13.Synchronization2 = offered13.Synchronization2;
+            }
+
+            if (!on)
+            {
+                Console.WriteLine($"SCENE streamline: Vulkan 1.3 {f} {(known ? "not offered" : "not known to the scene")}");
+            }
+        }
+
+        // The queue families Streamline's queues come from: a compute family that does not draw, else the scene's own;
+        // an optical flow family apart from both.
+        var familyFlags = new VkQueueFamilyProperties[physical.GetQueueFamilyProperties_Count()];
+        physical.GetQueueFamilyProperties_Write(familyFlags);
+        const VkQueueFlags OpticalFlowBit = (VkQueueFlags)0x100;
+        var computeFamily = Array.FindIndex(familyFlags, f => f.QueueFlags.HasFlag(VkQueueFlags.ComputeBit) && !f.QueueFlags.HasFlag(VkQueueFlags.GraphicsBit));
+        if (computeFamily < 0 || slCompute == 0)
+        {
+            computeFamily = family;
+        }
+
+        var flowFamily = slFlow == 0 ? -1 : Array.FindIndex(familyFlags, f => f.QueueFlags.HasFlag(OpticalFlowBit));
+        if (flowFamily == family || flowFamily == computeFamily)
+        {
+            flowFamily = -1;
+        }
+
+        var graphicsCount = (int)Math.Min(1 + slGraphics + (computeFamily == family ? slCompute : 0), familyFlags[family].QueueCount);
+        var computeCount = computeFamily == family ? 0 : (int)Math.Min(slCompute, familyFlags[computeFamily].QueueCount);
+        if (graphicsCount < 1 + slGraphics + (computeFamily == family ? slCompute : 0) || computeCount < (computeFamily == family ? 0 : slCompute))
+        {
+            Console.WriteLine($"SCENE streamline: fewer queues than asked (graphics {graphicsCount}, compute {computeCount})");
+        }
+
+        if (slFlow > 0 && flowFamily < 0)
+        {
+            Console.WriteLine("SCENE streamline: no optical flow queue family apart; DLSS-G would run its optical flow in interop");
+        }
+
+        var priorities = stackalloc float[32];
+        for (var i = 0; i < 32; i++)
+        {
+            priorities[i] = 1.0f;
+        }
+
+        var queueInfos = stackalloc VkDeviceQueueCreateInfo[3];
+        var queueInfoCount = 0;
+        queueInfos[queueInfoCount++] = new VkDeviceQueueCreateInfo { QueueFamilyIndex = family, QueueCount = Math.Min(graphicsCount, 32), QueuePriorities = priorities };
+        if (computeCount > 0)
+        {
+            queueInfos[queueInfoCount++] = new VkDeviceQueueCreateInfo { QueueFamilyIndex = computeFamily, QueueCount = Math.Min(computeCount, 32), QueuePriorities = priorities };
+        }
+
+        if (flowFamily >= 0)
+        {
+            queueInfos[queueInfoCount++] = new VkDeviceQueueCreateInfo { QueueFamilyIndex = flowFamily, QueueCount = 1, QueuePriorities = priorities };
         }
 
         if (rayTraced)
@@ -822,13 +971,26 @@ internal static unsafe class Stage
         }
 
         string[] pipelineExtensions = rtPipeline ? reorder ? ["VK_KHR_ray_tracing_pipeline", "VK_NV_ray_tracing_invocation_reorder"] : ["VK_KHR_ray_tracing_pipeline"] : [];
+        if (sl13.Count > 0)
+        {
+            v13.Next = enabledFeatures.Next;
+            enabledFeatures.Next = &v13;
+        }
+
+        string[] ownExtensions = rayTraced ? [.. deviceExtensions, .. RayScene.Extensions, .. pipelineExtensions] : [.. deviceExtensions];
         var device = physical.CreateDevice(new Device.CreateInfo
         {
-            Extensions = rayTraced ? [.. deviceExtensions, .. RayScene.Extensions, .. pipelineExtensions] : [.. deviceExtensions],
-            QueueCreateInfos = new ReadOnlySpan<VkDeviceQueueCreateInfo>(&queueInfo, 1),
+            Extensions = [.. ownExtensions, .. slExtensions.Where(e => !ownExtensions.Contains(e))],
+            QueueCreateInfos = new ReadOnlySpan<VkDeviceQueueCreateInfo>(queueInfos, queueInfoCount),
             Next = &enabledFeatures,
         });
         var queue = device.GetQueue(family, 0);
+        if (Streamline.Loaded)
+        {
+            var told = Streamline.SetVulkanInfo(device.VkHandle, instance.VkHandle, physical.VkHandle, (uint)family, 1,
+                (uint)computeFamily, computeFamily == family ? (uint)(1 + slGraphics) : 0, flowFamily < 0 ? 0 : (uint)flowFamily, 0, flowFamily >= 0);
+            Console.WriteLine($"SCENE streamline told of the device: {Streamline.ResultName(told)}; queues graphics {family}x{graphicsCount} compute {computeFamily}x{(computeFamily == family ? slCompute : computeCount)} optical flow {(flowFamily < 0 ? "none" : $"{flowFamily}x1")}");
+        }
         var reflex = reflexOn ? new Reflex(device, args.Contains("--reflex")) : null;
 
         // What the GPU offers of NVIDIA's RTX, for the F10 card: the extensions it names, and its driver as NVIDIA
@@ -3756,6 +3918,7 @@ internal static unsafe class Stage
         device.DestroyRenderPass(renderPass, null);
         device.DestroySwapchainKHR(swapchain, null);
         tray?.Dispose();
+        Streamline.Shutdown();
         device.Dispose();
         instance.DestroySurfaceKHR(surface, null);
         instance.Dispose();

@@ -1506,6 +1506,27 @@ default: shown, the present wait already reads the keys after the last frame is 
 measured on a shown window (that would open one on the user's screen). The remaining latency is about two frames: the
 scene keeps two frames in flight.
 
+### Streamline, --dlss: the bootstrap, and the updater that reached the network (2026-11-15)
+
+The author: "Vas-y pour DLSS et la génération d'images", with NVIDIA's SDK and DLLs. `Streamline.cs` loads Streamline
+2.10.0 from a folder of NVIDIA's signed DLLs (`--streamline DIR`, else `%LOCALAPPDATA%\delta\streamline`), each DLL's
+Authenticode signature checked first, in manual hooking mode (BRUTAL keeps its own `vulkan-1.dll`). `--dlss` loads
+DLSS and Ray Reconstruction; `--dlss --dlss-g` adds frame generation, Reflex and PCL. The instance and the device take
+the extensions, Vulkan 1.2/1.3 features and queues each feature asks for (`slGetFeatureRequirements`), the queues after
+the scene's own; `slSetVulkanInfo` then says ok. Measured hidden on the RTX 5080: every feature supported; with all
+five, queues graphics 0×2, compute 2×2, optical flow 5×1. `SelfTest` holds the C# structures to the sizes and offsets a
+probe compiled against the SDK's headers printed. `--streamline-log` prints Streamline's verbose log. Nothing is
+evaluated yet: DLSS on the path tracer and frame generation are the next slices.
+
+**Not to be used until the author's word.** Optional over-the-air updates (`eAllowOTA`) and downloaded plugins are off,
+as in the Godot fork's `harden_streamline.py`, yet `slInit` runs the driver's NGX updater
+(`DriverStore\...\nvngx_update.exe -api bootstrap|update`) for every feature loaded: Streamline's
+`pluginManager.cpp` does so in every production build, whatever the flags. It costs about 1.4 s a feature (15 s to
+the first frame with five), and during one run on 2026-11-15 an updater process held a TCP connection to
+72.136.195.99:443. So `--dlss` contacts NVIDIA as the driver's DLSS updater does in any DLSS game; the Observatory's
+fork does the same. *To verify / decide*: whether the author accepts that, or Streamline is built from source without
+`SL_PRODUCTION` (then unsigned, and NGX may refuse it).
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
