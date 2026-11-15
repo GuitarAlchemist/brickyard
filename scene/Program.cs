@@ -1709,6 +1709,38 @@ internal static unsafe class Stage
         var hazy = !args.Contains("--no-fog"); // B: the Low lighting's haze
         var raysOn = !args.Contains("--rays-off"); // R: traced shadows and occlusion, or painted (with rays offered)
         var pathTracing = tracer is not null && args.Contains("--path-tracing"); // F9: the hall path traced (PathTracer)
+
+        // F6 or --max-out, as the Observatory's Max out: every effect at its best, the path tracer with more bounces and
+        // paths, the haze and the traced rays on; again, back to what it found. Without DLSS or frame generation, which
+        // the scene has not, the frame rate is what the GPU draws.
+        var maxOut = false;
+        (bool PathTracing, bool Hazy, bool RaysOn) beforeMax = default;
+        void MaxOut(bool on)
+        {
+            if (tracer is null || on == maxOut)
+            {
+                return;
+            }
+
+            if (on)
+            {
+                beforeMax = (pathTracing, hazy, raysOn);
+                (pathTracing, hazy, raysOn) = (true, true, true);
+            }
+            else
+            {
+                (pathTracing, hazy, raysOn) = beforeMax;
+            }
+
+            maxOut = on;
+            tracer.MaxOut = on;
+            tracer.Forget();
+            Console.WriteLine(on
+                ? $"SCENE max out: path traced, {PathTracer.MaxOutBounces} bounces, {PathTracer.MaxOutSamples} paths a pixel, haze and rays on"
+                : "SCENE max out off: back to the settings before");
+        }
+
+        MaxOut(args.Contains("--max-out"));
         var looking = false; // the right button is held
         var locked = false; // Ctrl and a click lock the view to the mouse, the Observatory's click; again, or the right button, frees it
         var ctrlAlone = false; // Ctrl down with nothing else since: let go, it crouches
@@ -1746,10 +1778,14 @@ internal static unsafe class Stage
         var rtxSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? rtxTexture = null;
         Panel.Card? rtxCard = null;
-        var rtxDrawn = (Rays: false, Path: false, Fps: -1, Height: 0, Language: "");
+        var rtxDrawn = (Rays: false, Path: false, Max: false, Fps: -1, Height: 0, Language: "");
         var rtxFps = 0.0; // frames a second, averaged over about a second
         List<Panel.RtxRow> RtxRows() =>
         [
+            new("Max out",
+                maxOut ? Panel.Rtx.Use : tracer is not null ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                Words.Say($"every effect at its best: path traced, {PathTracer.MaxOutBounces} bounces, {PathTracer.MaxOutSamples} paths a pixel · F6",
+                    $"tous les effets au maximum : path tracing, {PathTracer.MaxOutBounces} rebonds, {PathTracer.MaxOutSamples} chemins par pixel · F6")),
             new(Words.Say("Ray-traced shadows and occlusion", "Ombres et occlusion tracées"),
                 rays is not null && raysOn && !pathTracing ? Panel.Rtx.Use : RayScene.Offered(physical, rtxOffered) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 rays is not null
@@ -1757,8 +1793,8 @@ internal static unsafe class Stage
                     : Words.Say("VK_KHR_ray_query · Low lighting without --no-rays", "VK_KHR_ray_query · éclairage Low sans --no-rays")),
             new("Path tracing",
                 tracer is not null && pathTracing ? Panel.Rtx.Use : tracer is not null || RayScene.Offered(physical, rtxOffered) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                Words.Say($"{PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames, filtered · F9: on or off",
-                    $"{PathTracer.Bounces} rebonds, gardé {PathTracer.MaxHistory} images, filtré · F9 : activer ou couper")),
+                Words.Say($"{(maxOut ? PathTracer.MaxOutBounces : PathTracer.Bounces)} bounces, kept {PathTracer.MaxHistory} frames, filtered · F9: on or off",
+                    $"{(maxOut ? PathTracer.MaxOutBounces : PathTracer.Bounces)} rebonds, gardé {PathTracer.MaxHistory} images, filtré · F9 : activer ou couper")),
             new(Words.Say("Ray tracing pipeline", "Pipeline de lancer de rayons"),
                 tracer is { Pipeline: true } && pathTracing ? Panel.Rtx.Use : Has("VK_KHR_ray_tracing_pipeline") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 tracer is { Pipeline: true }
@@ -1916,8 +1952,15 @@ internal static unsafe class Stage
                 raysOn = !raysOn;
                 Console.WriteLine($"SCENE rays {(raysOn ? "traced" : "off: the shadows painted")}");
             }
+            else if (key == GlfwKey.F6 && tracer is not null)
+            {
+                MaxOut(!maxOut);
+            }
             else if (key == GlfwKey.F9 && tracer is not null)
             {
+                // The path tracer by hand: Max out no longer holds, and F9 acts on what is shown.
+                maxOut = false;
+                tracer.MaxOut = false;
                 pathTracing = !pathTracing;
                 tracer.Forget();
                 Console.WriteLine($"SCENE path tracing {(pathTracing ? "on" : "off")}");
@@ -2810,9 +2853,9 @@ internal static unsafe class Stage
                     keysTexture = Upload(keysCard, keysSet, keysTexture);
                 }
 
-                if (rtxShown && !splashing && rtxDrawn != (raysOn, pathTracing, (int)Math.Round(rtxFps), extent.Height, Words.Language))
+                if (rtxShown && !splashing && rtxDrawn != (raysOn, pathTracing, maxOut, (int)Math.Round(rtxFps), extent.Height, Words.Language))
                 {
-                    rtxDrawn = (raysOn, pathTracing, (int)Math.Round(rtxFps), extent.Height, Words.Language);
+                    rtxDrawn = (raysOn, pathTracing, maxOut, (int)Math.Round(rtxFps), extent.Height, Words.Language);
                     rtxCard = Panel.RtxFeatures(gpu, driver, RtxRows(), rtxDrawn.Fps, extent.Height);
                     rtxTexture = Upload(rtxCard, rtxSet, rtxTexture);
                 }

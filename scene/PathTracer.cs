@@ -19,6 +19,13 @@ using SN = System.Numerics;
 internal sealed unsafe class PathTracer : IDisposable
 {
     public const int Bounces = 3;
+
+    // Max out (F6, as the Observatory's): more bounces and several paths a pixel from its first surface, for less noise
+    // and more light carried into the corners, at a cost the exit line measures.
+    public const int MaxOutBounces = 5;
+    public const int MaxOutSamples = 4;
+
+    public bool MaxOut { get; set; }
     public const int MaxHistory = 32; // frames a pixel's light is averaged over: about half a second at 60 fps
 
     private const int Group = 8;
@@ -251,8 +258,8 @@ internal sealed unsafe class PathTracer : IDisposable
             InvViewProj = inverse,
             PrevViewProj = previousViewProj,
             Eye = new(eye, haze),
-            Size = new(Width, Height, frame, 0f),
-            Options = new(photographed ? 1f : 0f, Bounces, MaxHistory, reset ? 1f : 0f),
+            Size = new(Width, Height, frame, MaxOut ? MaxOutSamples : 1),
+            Options = new(photographed ? 1f : 0f, MaxOut ? MaxOutBounces : Bounces, MaxHistory, reset ? 1f : 0f),
             Background = background with { W = pixelAngle },
         };
         previousViewProj = viewProj;
@@ -869,42 +876,14 @@ internal sealed unsafe class PathTracer : IDisposable
             return light;
         }
 
-        void main()
+        // One path from s, met by the ray d from the eye: the light it carries back.
+        vec3 path(Surface s, vec3 d, int bounces)
         {
-            #ifdef RAYGEN
-            ivec2 px = ivec2(gl_LaunchIDEXT.xy);
-            #else
-            ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-            #endif
-            ivec2 size = ivec2(t.size.xy);
-            if (px.x >= size.x || px.y >= size.y)
-            {
-                return;
-            }
-
-            seed = uint(px.x) * 1973u + uint(px.y) * 9277u + uint(t.size.z) * 26699u;
-            rnd();
-            vec2 jitter = vec2(rnd(), rnd());
-            vec2 ndc = (vec2(px) + jitter) / vec2(size) * 2.0 - 1.0;
-            vec4 far = t.invViewProj * vec4(ndc, 0.5, 1.0);
-            vec3 eye = t.eye.xyz;
-            vec3 d = normalize(far.xyz / far.w - eye);
-
-            Surface s;
-            if (!hit(eye, d, 60.0, t.background.w, false, s))
-            {
-                // Nothing: the surroundings, kept as nothing.
-                store(px, vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(t.background.rgb, 0.0));
-                return;
-            }
-
-            // The path: the surface's own light, then up to the bounces' count of surfaces further, each lit.
             vec3 light = vec3(0.0);
             vec3 through = vec3(1.0);
             Surface at = s;
             vec3 v = -d;
             float spread = s.dist * t.background.w;
-            int bounces = int(t.options.y);
             for (int b = 0; b < bounces; b++)
             {
                 light += through * direct(at, v);
@@ -939,6 +918,49 @@ internal sealed unsafe class PathTracer : IDisposable
                 at = next;
                 v = -l;
             }
+
+            return light;
+        }
+
+        void main()
+        {
+            #ifdef RAYGEN
+            ivec2 px = ivec2(gl_LaunchIDEXT.xy);
+            #else
+            ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+            #endif
+            ivec2 size = ivec2(t.size.xy);
+            if (px.x >= size.x || px.y >= size.y)
+            {
+                return;
+            }
+
+            seed = uint(px.x) * 1973u + uint(px.y) * 9277u + uint(t.size.z) * 26699u;
+            rnd();
+            vec2 jitter = vec2(rnd(), rnd());
+            vec2 ndc = (vec2(px) + jitter) / vec2(size) * 2.0 - 1.0;
+            vec4 far = t.invViewProj * vec4(ndc, 0.5, 1.0);
+            vec3 eye = t.eye.xyz;
+            vec3 d = normalize(far.xyz / far.w - eye);
+
+            Surface s;
+            if (!hit(eye, d, 60.0, t.background.w, false, s))
+            {
+                // Nothing: the surroundings, kept as nothing.
+                store(px, vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(t.background.rgb, 0.0));
+                return;
+            }
+
+            // The path: the surface's own light, then up to the bounces' count of surfaces further, each lit; Max out
+            // takes several paths from the same first surface and averages them.
+            vec3 light = vec3(0.0);
+            int paths = max(int(t.size.w), 1);
+            for (int k = 0; k < paths; k++)
+            {
+                light += path(s, d, int(t.options.y));
+            }
+
+            light /= float(paths);
 
             // The light over the surface's colour, so that the filter keeps the scans' detail; bright outliers cut.
             vec3 albedo = max(s.base, vec3(0.03));

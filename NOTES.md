@@ -1473,6 +1473,19 @@ A mistake found on the way: the pipeline's picture had black blots that the comp
 build (the compute pass's evidently multiplied it out); the filter spread each NaN into a blot. The base is clamped
 now, and the GGX sample's sine too; the two pictures match (views 3 and 7).
 
+### Max out, F6
+
+The user asked to test a max out « comme dans la scène de l'observatoire » (its F6: path traced, 3 bounces, DLSS
+Quality, frame generation). Here F6 or `--max-out` turns on the path tracer with 5 bounces and 4 paths a pixel from
+each pixel's first surface (`path()` in the shader, averaged), the haze and the traced rays; F6 again puts back what it
+found, and F9 by hand leaves Max out. The RTX card's first row shows it. Without DLSS and frame generation, which the
+scene has not, what is shown is what is drawn.
+
+Measured hidden, view 7, GPU p50 of the trace and the filter: 1280 × 720, 3.4 ms against 10.5 ms; 1920 × 1080,
+10.7 against 29.1 ms; 3840 × 2160, 28-29 against 92-94 ms, about 10 frames a second. In a still view the pictures differ
+little (views 3 and 7), the 32 frames kept already converging; the extra paths should matter in motion, where fewer
+frames are kept, which has not been measured.
+
 ### Reflex, --reflex
 
 - `Reflex` (`VK_NV_low_latency2`, with the present ids and a timeline semaphore): the swapchain is made with the latency
