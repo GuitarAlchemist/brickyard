@@ -8,7 +8,8 @@
 // --demo plays idle, listening, thinking, speaking, a compaction, each expression, the caption of a sentence let pass
 // and the pairing card in a loop without the brain, while the context gauge fills, and --shots DIR saves a PNG of each. The scene
 // waits for vsync unless --immediate: shown, through FIFO with each frame waiting for the last to be on screen
-// (VK_KHR_present_wait; --present-wait hidden too), else through Mailbox when the GPU offers it (--mailbox), at twice
+// (VK_KHR_present_wait; --present-wait hidden too; --reflex paces by NVIDIA Reflex instead, Reflex.cs), else through
+// Mailbox when the GPU offers it (--mailbox), at twice
 // the refresh of the window's screen unless --cap says otherwise, and through plain FIFO with --fifo or when hidden;
 // --cap N limits it to N frames a second, 60 by
 // default when hidden (nothing paces a hidden window), so that it never takes the GPU from a live view beside it.
@@ -779,6 +780,25 @@ internal static unsafe class Stage
             reorderFeature = new VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV { RayTracingInvocationReorder = reorder };
         }
 
+        // NVIDIA Reflex (Reflex.cs) with --reflex, when offered with the present ids and timeline semaphores it needs.
+        // --reflex-measure sets its markers and reads its times with the low latency mode off, to compare.
+        var reflexOn = (args.Contains("--reflex") || args.Contains("--reflex-measure")) && canWait && offered.Contains(Reflex.Extension);
+        if (reflexOn)
+        {
+            var v12 = new VkPhysicalDeviceVulkan12Features();
+            var asked = new VkPhysicalDeviceFeatures2 { Next = &v12 };
+            physical.GetFeatures2(ref asked);
+            reflexOn = v12.TimelineSemaphore;
+            rayV12.TimelineSemaphore = reflexOn;
+        }
+
+        if (!rayTraced && reflexOn)
+        {
+            rayV12.BufferDeviceAddress = false;
+            rayV12.Next = enabledFeatures.Next;
+            enabledFeatures.Next = &rayV12;
+        }
+
         if (rayTraced)
         {
             rayQueries.Next = enabledFeatures.Next;
@@ -796,6 +816,11 @@ internal static unsafe class Stage
 
         Mesh.RayTraced = rayTraced;
         string[] deviceExtensions = canWait ? ["VK_KHR_swapchain", "VK_KHR_present_id", "VK_KHR_present_wait"] : ["VK_KHR_swapchain"];
+        if (reflexOn)
+        {
+            deviceExtensions = [.. deviceExtensions, Reflex.Extension];
+        }
+
         string[] pipelineExtensions = rtPipeline ? reorder ? ["VK_KHR_ray_tracing_pipeline", "VK_NV_ray_tracing_invocation_reorder"] : ["VK_KHR_ray_tracing_pipeline"] : [];
         var device = physical.CreateDevice(new Device.CreateInfo
         {
@@ -804,6 +829,7 @@ internal static unsafe class Stage
             Next = &enabledFeatures,
         });
         var queue = device.GetQueue(family, 0);
+        var reflex = reflexOn ? new Reflex(device, args.Contains("--reflex")) : null;
 
         // What the GPU offers of NVIDIA's RTX, for the F10 card: the extensions it names, and its driver as NVIDIA
         // numbers it (10 bits major, 8 minor) or as Vulkan does.
@@ -832,7 +858,7 @@ internal static unsafe class Stage
         Span<VkPresentModeKHR> modes = stackalloc VkPresentModeKHR[modeCount];
         physical.GetSurfacePresentModesKHR_Write(surface, modes);
         var presentMode = VkPresentModeKHR.FifoKHR;
-        var paceByScreen = vsync && canWait && !args.Contains("--fifo") && !args.Contains("--mailbox") && (!hidden || args.Contains("--present-wait"));
+        var paceByScreen = vsync && canWait && reflex is not { LowLatency: true } &&!args.Contains("--fifo") && !args.Contains("--mailbox") && (!hidden || args.Contains("--present-wait"));
         if (!vsync)
         {
             foreach (var wanted in new[] { VkPresentModeKHR.ImmediateKHR, VkPresentModeKHR.MailboxKHR })
@@ -850,7 +876,7 @@ internal static unsafe class Stage
             // Mailbox below drew at twice the refresh against the screen's clock, and the picture it showed was by turns
             // fresh and 8 ms old: the user saw it jerk. --present-wait does it hidden too, for measuring.
         }
-        else if (!hidden && !args.Contains("--fifo") && modes.Contains(VkPresentModeKHR.MailboxKHR))
+        else if (!hidden && reflex is not { LowLatency: true } && !args.Contains("--fifo") && modes.Contains(VkPresentModeKHR.MailboxKHR))
         {
             // Shown, Mailbox when offered: no tearing, and the screen takes the newest picture instead of FIFO's queue
             // of them, so a move shows a refresh or two sooner; paced at twice the refresh of the screen the window is
@@ -862,6 +888,12 @@ internal static unsafe class Stage
                 paceToScreen = true;
                 cap = 120;
             }
+        }
+
+        if (reflex is { LowLatency: true })
+        {
+            // Reflex paces to the cap itself (Reflex.IntervalUs); the scene's own sleep is left out below.
+            reflex.IntervalUs = cap > 0 ? 1_000_000 / cap : 0;
         }
 
         // The swapchain and what is as large as the window, built by Build and rebuilt when the window changes size.
@@ -966,8 +998,10 @@ internal static unsafe class Stage
             }
 
             var old = swapchain;
+            var latency = new VkSwapchainLatencyCreateInfoNV { LatencyModeEnable = true };
             swapchain = device.CreateSwapchainKHR(new VkSwapchainCreateInfoKHR
             {
+                Next = reflex is null ? null : &latency,
                 Surface = surface,
                 MinImageCount = imageCount,
                 ImageFormat = surfaceFormat.Format,
@@ -988,6 +1022,7 @@ internal static unsafe class Stage
             }
 
             hasSwapchain = true;
+            reflex?.Mode(swapchain);
             images = new VkImage[device.GetSwapchainImagesKHR_Count(swapchain)];
             device.GetSwapchainImagesKHR_Write(swapchain, images);
 
@@ -1736,13 +1771,15 @@ internal static unsafe class Stage
                     : "VK_NV_ray_tracing_invocation_reorder"),
             new(Words.Say("Opacity micromaps", "Micro-cartes d'opacité"),
                 Has("VK_EXT_opacity_micromap") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                "VK_EXT_opacity_micromap"),
+                Words.Say("VK_EXT_opacity_micromap · for alpha-tested leaves and fences; the hall has none", "VK_EXT_opacity_micromap · pour le feuillage et les grillages découpés ; la salle n'en a pas")),
             new("DLSS (Super Resolution, Ray Reconstruction)",
                 nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 Words.Say("NGX's extensions, VK_NVX_binary_import and VK_NVX_image_view_handle; needs NVIDIA's SDK", "extensions de NGX, VK_NVX_binary_import et VK_NVX_image_view_handle ; demande le SDK de NVIDIA")),
             new("Reflex",
-                Has("VK_NV_low_latency2") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                Words.Say("VK_NV_low_latency2; the scene paces frames by present wait instead", "VK_NV_low_latency2 ; la scène règle ses images par l'attente de présentation")),
+                reflex is { LowLatency: true } ? Panel.Rtx.Use : Has("VK_NV_low_latency2") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                reflex is { LowLatency: true }
+                    ? Words.Say("VK_NV_low_latency2 · low latency mode with boost, pacing the frames (--reflex)", "VK_NV_low_latency2 · mode basse latence avec boost, qui règle les images (--reflex)")
+                    : Words.Say("VK_NV_low_latency2; --reflex uses it in place of the present wait", "VK_NV_low_latency2 ; --reflex l'utilise à la place de l'attente de présentation")),
             new(Words.Say("Present wait", "Attente de présentation"),
                 paceByScreen ? Panel.Rtx.Use : canWait ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 "VK_KHR_present_id, VK_KHR_present_wait"),
@@ -2465,6 +2502,14 @@ internal static unsafe class Stage
                 }
 
                 waitFor = 0;
+            }
+
+            if (reflex is not null && hasSwapchain)
+            {
+                // Reflex holds the frame back here, then is told where it starts and where its input is read.
+                reflex.Sleep(swapchain);
+                reflex.Mark(swapchain, presentCount + 1, VkLatencyMarkerNV.SimulationStartNV);
+                reflex.Mark(swapchain, presentCount + 1, VkLatencyMarkerNV.InputSampleNV);
             }
 
             if (poll)
@@ -3337,10 +3382,19 @@ internal static unsafe class Stage
             var commandHandle = cb.Handle;
             var waitSemaphore = acquired[slot];
             var signalSemaphore = renderDone[imageIndex];
+            var frameId = presentCount + 1;
+            var submitted = new VkLatencySubmissionPresentIdNV { PresentID = (nint)frameId };
+            if (reflex is not null)
+            {
+                reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.SimulationEndNV);
+                reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.RendersubmitStartNV);
+            }
+
             queue.Submit(
                 [
                     new VkSubmitInfo
                     {
+                        Next = reflex is null ? null : &submitted,
                         WaitSemaphoreCount = 1,
                         WaitSemaphores = &waitSemaphore,
                         WaitDstStageMask = &waitStage,
@@ -3355,6 +3409,12 @@ internal static unsafe class Stage
             var presentId = (nint)(++presentCount);
             var presentIdInfo = new VkPresentIdKHR { SwapchainCount = 1, PresentIds = &presentId };
             var presentSwapchain = swapchain; // Build reassigns swapchain, whose address cannot be taken
+            if (reflex is not null)
+            {
+                reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.RendersubmitEndNV);
+                reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.PresentStartNV);
+            }
+
             try
             {
                 result = queue.PresentKHR(new VkPresentInfoKHR
@@ -3364,12 +3424,18 @@ internal static unsafe class Stage
                     SwapchainCount = 1,
                     Swapchains = &presentSwapchain,
                     ImageIndices = &presentIndex,
-                    Next = paceByScreen ? &presentIdInfo : null,
+                    Next = paceByScreen || reflex is not null ? &presentIdInfo : null,
                 });
             }
             catch (VkResultError e) when (e.Result == VkResult.ErrorOutOfDateKHR)
             {
                 result = e.Result; // the window changed while the frame was drawn, as on 2026-10-22 at 16:35
+            }
+
+            if (reflex is not null)
+            {
+                reflex.Mark(presentSwapchain, frameId, VkLatencyMarkerNV.PresentEndNV);
+                reflex.Read(presentSwapchain);
             }
 
             if (result is VkResult.ErrorOutOfDateKHR or VkResult.SuboptimalKHR)
@@ -3465,7 +3531,7 @@ internal static unsafe class Stage
                 cabinet.TakeSound(); // the game's sound before the film rolls is not the film's
             }
 
-            if (cap > 0)
+            if (cap > 0 && reflex is not { LowLatency: true })
             {
                 // Pace to the cap: sleep while more than 1.5 ms is left, then spin. A frame that falls more than one
                 // period behind resets the schedule instead of bursting to catch up.
@@ -3623,6 +3689,12 @@ internal static unsafe class Stage
             Console.WriteLine($"SCENE path tracing {tracer.Measured()} at {tracer.Width}x{tracer.Height}");
         }
 
+        if (reflex is not null)
+        {
+            Console.WriteLine($"SCENE reflex {reflex.Measured()}");
+        }
+
+        reflex?.Dispose();
         tracer?.Dispose();
         rays?.Dispose();
         Rays = null;

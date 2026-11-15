@@ -1473,6 +1473,26 @@ A mistake found on the way: the pipeline's picture had black blots that the comp
 build (the compute pass's evidently multiplied it out); the filter spread each NaN into a blot. The base is clamped
 now, and the GGX sample's sine too; the two pictures match (views 3 and 7).
 
+### Reflex, --reflex
+
+- `Reflex` (`VK_NV_low_latency2`, with the present ids and a timeline semaphore): the swapchain is made with the latency
+  mode, the low latency mode is set with boost, each frame sleeps in `vkLatencySleepNV` before its keys and mouse are
+  read, and the markers (simulation, input, submit, present) frame the driver's report, read every 30 frames. With it
+  the frames are paced by Reflex: FIFO without the present wait, and a cap (60 when hidden) given to Reflex as its
+  minimum interval instead of the scene's own sleep, which held each frame's input a frame longer (720p: 44 ms).
+- `--reflex-measure` sets the same markers and reads the same report with the low latency mode off, to compare with the
+  same instrument. The exit line: `SCENE reflex … keys read to GPU done ms p50 … p95 …`.
+- The RTX card: Reflex ON with `--reflex`, offered otherwise. Opacity micromaps stay offered and unused, and the card
+  says why: they speed up rays through alpha-tested geometry (leaves, fences), and every surface in the hall is opaque.
+
+Measured hidden, view 7, path tracing on, about 12 s each, keys read to GPU done as the driver times it (not to the
+screen): at 3840 × 2160, GPU-bound near 35 fps, 67-81 ms p50 with Reflex against 86-105 ms without over two runs (an
+earlier run without the interval: 59 against 80-84), p95 close (98-119 against 95-129), 2-3 fps fewer; at 1280 × 720
+capped at 60, 22.5 against 25 ms. So it helps most where the GPU is the bottleneck, as NVIDIA says, and is not the
+default: shown, the present wait already reads the keys after the last frame is on screen, and Reflex has not been
+measured on a shown window (that would open one on the user's screen). The remaining latency is about two frames: the
+scene keeps two frames in flight.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
