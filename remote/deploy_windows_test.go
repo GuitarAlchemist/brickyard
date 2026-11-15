@@ -589,12 +589,29 @@ func TestDeployStartsAGatewayThatDiedWithItsArguments(t *testing.T) {
 		p.Kill()
 		p.Wait()
 	}
+	// deploy.json as a deploy.ps1 older than -resume left it, without the build: the live folder on 2026-11-12.
+	file := filepath.Join(f.dir, "deploy.json")
+	var old map[string]any
+	if data, err := os.ReadFile(file); err != nil || json.Unmarshal(data, &old) != nil {
+		t.Fatalf("deploy.json: %v", err)
+	}
+	delete(old, "current")
+	data, _ := json.Marshal(old)
+	if err := os.WriteFile(file, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := f.deploy("-Exe", f.newer); err != nil {
 		t.Fatal(err)
 	}
 	if again := f.await(f.newer, died.PID); !reflect.DeepEqual(again.Args, f.args) {
 		t.Errorf("the gateway came back with %q, not %q", again.Args, f.args)
+	}
+	// -resume starts the build deploy.json names, so the deploy that brought it back names it.
+	data, _ = os.ReadFile(file)
+	var state deployState
+	if json.Unmarshal(data, &state) != nil || !strings.EqualFold(state.Current, f.newer) {
+		t.Errorf("deploy.json does not name the build it started: %s", data)
 	}
 }
 

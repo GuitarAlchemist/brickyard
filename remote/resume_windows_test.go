@@ -261,6 +261,33 @@ func launchInJob(t *testing.T, folder string, flags uint32) syscall.Handle {
 	return job
 }
 
+// The Startup shortcut runs a launcher kept in the gateway's folder under a delta-remote-* name, with no gateway running:
+// it must not take itself for one.
+func TestResumeFromALauncherInTheFolderStartsTheGateway(t *testing.T) {
+	t.Parallel()
+	f, exe := resumeFolder(t, "new", map[string]string{"arguments": "-port " + freePort(t)})
+	body, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(f.dir, "delta-remote-resume.exe")
+	if err := os.WriteFile(launcher, body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "go"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(launcher)
+	cmd.Env = append(os.Environ(), fakeLauncherEnv+"="+f.dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the launcher: %v\n%s\nresume.log:\n%s", err, out, resumeLog(t, f.dir))
+	}
+	f.await(exe)
+	if log := resumeLog(t, f.dir); !strings.Contains(log, filepath.Base(exe)+" runs, PID") {
+		t.Errorf("resume.log does not say the gateway runs:\n%s", log)
+	}
+}
+
 // A logon's launcher may run in a job that ends its processes when it closes, as a shell's may: the gateway leaves it.
 func TestResumeStartsTheGatewayOutsideTheLauncherJob(t *testing.T) {
 	t.Parallel()

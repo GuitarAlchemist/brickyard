@@ -930,6 +930,29 @@ Not done: the live gateway is still stopped (the restart from this tool was refu
 shortcut is installed, and no firewall rule was changed. Still to verify: the restart, the tablet, one real logon
 through the shortcut.
 
+## The resume build on the live gateway (2026-11-15)
+
+The author restarted `2ca5e6c` on 2026-11-12 at 06:14:22Z, from this tool. A launcher, a copy of `df38c53` named
+`delta-remote-resume-df38c53.exe`, sits in the gateway's folder. A Startup shortcut runs it with `-resume <folder>`,
+minimized. Run once by hand at 06:15:47Z, it found the gateway already running and started nothing.
+
+The author deployed `df38c53` from a PowerShell of their own, and it has run since 2026-11-15 at 15:26:52Z.
+- It listens on the same four ports.
+- `deploy.json` names it as `current`, with `2ca5e6c` as `previous`.
+- It has an inbound allow rule, Private and Public.
+
+Two tests now cover what had only been seen live:
+- **A launcher in the folder.** The tests' launchers sat elsewhere, under other names. Now one sits in the folder under a
+  `delta-remote-*` name, with no gateway running. It starts the gateway, and `resume.log` says so. Without the check that
+  makes `-resume` skip its own process, it takes itself for the gateway, starts nothing, and the test fails after 15 s.
+- **A dead gateway with an old `deploy.json`.** That `deploy.json` has no `current`, as on 2026-11-12. `-Exe` restarts
+  the gateway, and `deploy.json` then names it. If the deploy keeps the old `current` when no gateway runs, the test
+  fails.
+
+Still to verify:
+- a real Windows restart through the shortcut;
+- the tablet.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
