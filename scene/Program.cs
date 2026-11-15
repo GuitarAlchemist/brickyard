@@ -1448,6 +1448,12 @@ internal static unsafe class Stage
         }
 
         // Per frame in flight: a command pool and buffer, a fence and an image-acquired semaphore.
+        // Each frame's GPU time, from its first command to its last (two timestamps a slot), read when the slot comes
+        // round again; with the time from reading the keys to the submit, what a frame takes when drawn alone.
+        var frameStamps = device.CreateQueryPool(new VkQueryPoolCreateInfo { QueryType = VkQueryType.Timestamp, QueryCount = 2 * FramesInFlight }, null);
+        var stamped = new bool[FramesInFlight];
+        var cpuOf = new double[FramesInFlight];
+        var tick = properties.Limits.TimestampPeriod;
         var pools = new VkCommandPool[FramesInFlight];
         var commands = new CommandBuffer[FramesInFlight];
         var fences = new VkFence[FramesInFlight];
@@ -2637,6 +2643,44 @@ internal static unsafe class Stage
         long presentCount = 0; // the presents' ids, rising across swapchains
         nint waitFor = 0; // the last frame presented, which the next waits for on screen; 0 for none
         var waitForInput = 0.0; // when that frame read the keys
+        // paceByScreen, one frame ahead: when frames drawn one after another miss the refresh (keys to submit plus the GPU's
+        // time beyond 90% of it, 5 of the last 30), each frame waits for the one before the last to be on screen, so that
+        // it is drawn while the last waits for the screen: a refresh more of latency instead of half the frames. Back to
+        // none ahead when 90 frames in a row take under 70% of the refresh. At 3840x2054 with the rays and 4x MSAA a frame
+        // alone took more than a refresh at 60 Hz and the window showed 30 fps (2026-11-15).
+        var ahead = false;
+        var aheadFrames = 0;
+        nint lastPresented = 0;
+        var lastInput = 0.0;
+        var refreshMs = 1000.0 / 60;
+        var refreshSeen = double.NegativeInfinity;
+        var work = new Queue<double>();
+        var gpuTimes = new FrameStats();
+
+        void Pace(double ms)
+        {
+            work.Enqueue(ms);
+            if (work.Count > 90)
+            {
+                work.Dequeue();
+            }
+
+            if (!paceByScreen)
+            {
+                return;
+            }
+
+            if (!ahead && work.Count >= 30 && work.Skip(work.Count - 30).Count(w => w > 0.9 * refreshMs) >= 5)
+            {
+                ahead = true;
+                Console.WriteLine($"SCENE pace: one frame ahead, frames take {work.Last():F1} ms against a refresh of {refreshMs:F1} ms");
+            }
+            else if (ahead && work.Count == 90 && work.All(w => w < 0.7 * refreshMs))
+            {
+                ahead = false;
+                Console.WriteLine($"SCENE pace: none ahead again, frames take {work.Last():F1} ms against a refresh of {refreshMs:F1} ms");
+            }
+        }
         var frame = 0;
         var shot = 0;
         var last = filmDir is null ? clock.Elapsed.TotalSeconds : 0.0;
@@ -2732,6 +2776,13 @@ internal static unsafe class Stage
                 placement.Apply(window, tray); // a minimise or a move asked for waits until the hand lets go
             }
             var now = filmDir is null ? clock.Elapsed.TotalSeconds : frame / (double)FilmFps; // a film's time is its frames'
+            if (paceByScreen && now >= refreshSeen + 2.0)
+            {
+                refreshSeen = now;
+                var hz = Placement.MonitorOf(window).VideoMode.RefreshRate;
+                refreshMs = hz > 0 ? 1000.0 / hz : refreshMs;
+            }
+
             if (paceToScreen && now >= screenSeen + 2.0)
             {
                 screenSeen = now;
@@ -2967,6 +3018,7 @@ internal static unsafe class Stage
             if (stale)
             {
                 var rebuilding = Stopwatch.StartNew();
+                lastPresented = 0;
                 device.WaitIdle();
                 Teardown();
                 if (!Build())
@@ -3168,6 +3220,18 @@ internal static unsafe class Stage
 
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
+            if (stamped[slot])
+            {
+                var stamps = stackalloc ulong[2];
+                device.GetQueryPoolResults(frameStamps, 2 * slot, 2, new ReadOnlySpan<byte>(stamps, 16), new ByteSize64(8UL), VkQueryResultFlags._64Bit);
+                if (stamps[1] > stamps[0])
+                {
+                    var gpuMs = (stamps[1] - stamps[0]) * tick / 1e6;
+                    gpuTimes.Add(gpuMs);
+                    Pace(cpuOf[slot] + gpuMs);
+                }
+            }
+
             Guard("Gaia module frame", () =>
             {
                 gaiaModule?.PollAvailable(now);
@@ -3238,6 +3302,8 @@ internal static unsafe class Stage
 
             var cb = commands[slot];
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+            cb.ResetQueryPool(frameStamps, 2 * slot, 2);
+            cb.WriteTimestamp(VkPipelineStageFlags.TopOfPipeBit, frameStamps, 2 * slot);
             rays?.Record(cb, slot);
             if (tracer is not null && pathTracing && !splashing)
             {
@@ -3581,6 +3647,8 @@ internal static unsafe class Stage
                     [Barrier(images[imageIndex], VkImageLayout.TransferSrcOptimal, VkImageLayout.PresentSrcKHR, default, default)]);
             }
 
+            cb.WriteTimestamp(VkPipelineStageFlags.BottomOfPipeBit, frameStamps, (2 * slot) + 1);
+            stamped[slot] = true;
             cb.End();
 
             var waitStage = VkPipelineStageFlags.ColorAttachmentOutputBit;
@@ -3610,6 +3678,7 @@ internal static unsafe class Stage
                     },
                 ],
                 fences[slot]);
+            cpuOf[slot] = (clock.Elapsed.TotalSeconds - inputAt) * 1000.0;
             var presentIndex = imageIndex;
             var presentId = (nint)(++presentCount);
             var presentIdInfo = new VkPresentIdKHR { SwapchainCount = 1, PresentIds = &presentId };
@@ -3646,11 +3715,17 @@ internal static unsafe class Stage
             if (result is VkResult.ErrorOutOfDateKHR or VkResult.SuboptimalKHR)
             {
                 stale = true;
+                lastPresented = 0; // the next swapchain's frames are waited for, not this one's
             }
             else if (paceByScreen && result == VkResult.Success)
             {
-                waitFor = presentId;
-                waitForInput = inputAt;
+                // One frame ahead, the next frame waits for the one before this: it is drawn while this one waits.
+                var older = ahead && lastPresented != 0;
+                waitFor = older ? lastPresented : presentId;
+                waitForInput = older ? lastInput : inputAt;
+                lastPresented = presentId;
+                lastInput = inputAt;
+                aheadFrames += older ? 1 : 0;
             }
 
             var presented = filmDir is null ? clock.Elapsed.TotalSeconds : now;
@@ -3811,6 +3886,8 @@ internal static unsafe class Stage
             device.DestroyCommandPool(pools[i], null);
         }
 
+        device.DestroyQueryPool(frameStamps, null);
+
         if (readsBack)
         {
             device.UnmapMemory(readbackMemory);
@@ -3927,6 +4004,10 @@ internal static unsafe class Stage
 
         double P(double q) => frameTimes.Percentile(q);
         Console.WriteLine($"SCENE frames {frame} in {loopSeconds:F2} s ({frame / loopSeconds:F0} fps); frame ms p50 {P(0.5):F3} p95 {P(0.95):F3} p99 {P(0.99):F3} max {frameTimes.Max:F3}");
+        if (gpuTimes.Count > 0)
+        {
+            Console.WriteLine($"SCENE gpu ms a frame p50 {gpuTimes.Percentile(0.5):F2} p95 {gpuTimes.Percentile(0.95):F2} max {gpuTimes.Max:F2}{(paceByScreen ? $"; one frame ahead for {aheadFrames} of {frame} frames" : "")}");
+        }
         if (screenTimes.Count > 0)
         {
             double Q(double q) => screenTimes.Percentile(q);

@@ -1506,6 +1506,20 @@ default: shown, the present wait already reads the keys after the last frame is 
 measured on a shown window (that would open one on the user's screen). The remaining latency is about two frames: the
 scene keeps two frames in flight.
 
+### 30 fps on the live window, and a frame ahead (2026-11-15)
+
+The author: "pourquoi on a que 30 fps alors que l'observatoire fait du 60 FPS en ray tracing ??" (RTX card: the rays and
+4x MSAA on, path tracing off, present wait on). The live window is 3840x2054. Uncapped and hidden at that size the hall
+draws 152 fps: the GPU keeps up when frames overlap. But shown, each frame waited for the last to be on screen before it
+read the keys (the present wait), so a frame's CPU and GPU never overlapped another's, and one that took more than a
+refresh showed at the next but one: hidden with `--present-wait` at 3840x2054, 39 fps; without the rays 56. Each frame's
+GPU time is now timed (two timestamps a slot): 13.6 ms p50, 22 ms p95 at 4K with the rays and MSAA, 7 ms without the
+rays. When frames miss the refresh (keys to submit plus GPU beyond 90% of it, 5 of the last 30), the next frame waits
+for the one before the last instead (`SCENE pace: one frame ahead`), and comes back when 90 in a row take under 70%:
+same run, 54 fps, keys to screen 33 ms p50 instead of 22. The exit line gives the GPU's times and how many frames were
+ahead. The Observatory reaches 60 at 4K by drawing fewer pixels (DLSS upscales) and showing generated frames, and
+Godot keeps frames in flight. *To verify*: the live window, shown; the rays' share (6.6 ms at 4K) is the next lever.
+
 ### Streamline, --dlss: the bootstrap, and the updater that reached the network (2026-11-15)
 
 The author: "Vas-y pour DLSS et la génération d'images", with NVIDIA's SDK and DLLs. `Streamline.cs` loads Streamline
