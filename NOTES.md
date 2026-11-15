@@ -1420,6 +1420,37 @@ Seen hidden (port 8899, view 7, and from the hall's front at the stair's foot): 
 eight knots with traced shadows, the sign; 52 to 55 fps at 1280 × 720 (474 312 vertices for the gallery, most of them
 the plaques' letters). Not live: the live window and %LOCALAPPDATA%\delta\ix-knots.json are untouched.
 
+## Path tracing, F9 (2026-11-14)
+
+The user asked for path tracing in Delta and NVIDIA's other features. This first part is the path tracing, with what
+the GPU's ray queries give; the ray tracing pipeline with shader execution reordering, Reflex and DLSS come after.
+
+- `PathTracer` (F9, `--path-tracing`, with the ray scene): a compute pass traces each pixel from the eye through the
+  frame's top level (RayScene), jittered within the pixel. It reads the surface it meets from its mesh's own vertices by
+  their device address (RayScene's instance table: the vertices, the glow, and the instance's rows at the structure
+  before): colour, material, the photographed scans with their normals and roughness (`textureLod` by the ray's width),
+  the globe, the rounded edges. Up to 3 bounces, Lambert under GGX, each surface lit by the key (4° across) and the
+  fill through traced shadows, shaped by the Low lighting's pool around the robot as their beams; Russian roulette after
+  the first bounce; a ray leaving the hall sees the Low lighting's surroundings; what glows lights what is near it.
+- Kept over frames: each pixel's surface is followed to where it was a frame ago (the camera's move and the mesh's own),
+  and of the four pixels around that place those that showed the same surface (place and normal) give its past, light,
+  colour and glow alike, up to 32 frames; a glow that changes (a clock's digit) starts the pixel over. The light is kept
+  over the surface's colour, three passes of an edge-aware à-trous filter (normal, plane, light; the light's bar
+  narrowing as frames are kept) smooth it, and the colour, the shoulder, the glow and the haze are put back.
+- The picture goes over the raster pass's through the splash's pipeline; the raster pass still draws the meshes (its
+  traced shadows off), so the depth stays for the Pong screens, the cabinet's and the wall's, drawn after.
+- The RTX card's row: « Path tracing ON », and the traced shadows offered rather than in use while it is.
+
+Seen hidden at 1280 × 720, views 3, 4 and 7: soft shadows and the floor's bounce, the robot's and the knots' edges
+smooth, the clocks' digits readable; 54 to 56 fps paced by vsync, as the Low lighting. Two mistakes found on the way and
+fixed: the colour and glow were not kept (digits and textures shimmered), and the past was looked up at the jittered
+sample instead of the pixel's centre (each frame blurred the picture a little more).
+
+Not done or not exact: the objects' places are the last frame's (the ray scene is built from the frame before); the
+screens drawn by their own pipelines are not in the ray scene, so they neither light the room nor show in reflections;
+light from glowing surfaces is found by bounces only, not aimed at; the robot's moving shadow lags by about the 32
+frames kept; the GPU time of the pass is not measured apart from the frame's.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a

@@ -1255,8 +1255,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 23, // the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 23 }], // one image each
+            MaxSets = 24, // the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 24 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -1333,6 +1333,11 @@ internal static unsafe class Stage
         device.WaitIdle();
         materials.FreeStaging();
         globes.FreeStaging();
+        // Path tracing (F9, --path-tracing), with the ray scene: the hall drawn by following light through it.
+        var tracer = rays is not null
+            ? new PathTracer(device, physical, FramesInFlight, rays, materials.Albedo, materials.Normal, materials.Arm, materialSampler, globes.View, globeSampler, descriptorPool, setLayout)
+            : null;
+        Console.WriteLine(tracer is not null ? $"SCENE path tracing: offered, {PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames; F9 or --path-tracing" : "SCENE path tracing: none (no ray queries)");
         var maps = stackalloc VkDescriptorImageInfo[4];
         foreach (var frameSet in frameSets)
         {
@@ -1635,6 +1640,7 @@ internal static unsafe class Stage
         var keysShown = args.Contains("--keys"); // F1: the camera's keys
         var hazy = !args.Contains("--no-fog"); // B: the Low lighting's haze
         var raysOn = !args.Contains("--rays-off"); // R: traced shadows and occlusion, or painted (with rays offered)
+        var pathTracing = tracer is not null && args.Contains("--path-tracing"); // F9: the hall path traced (PathTracer)
         var looking = false; // the right button is held
         var locked = false; // Ctrl and a click lock the view to the mouse, the Observatory's click; again, or the right button, frees it
         var ctrlAlone = false; // Ctrl down with nothing else since: let go, it crouches
@@ -1672,16 +1678,20 @@ internal static unsafe class Stage
         var rtxSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? rtxTexture = null;
         Panel.Card? rtxCard = null;
-        var rtxDrawn = (Rays: false, Fps: -1, Height: 0, Language: "");
+        var rtxDrawn = (Rays: false, Path: false, Fps: -1, Height: 0, Language: "");
         var rtxFps = 0.0; // frames a second, averaged over about a second
         List<Panel.RtxRow> RtxRows() =>
         [
             new(Words.Say("Ray-traced shadows and occlusion", "Ombres et occlusion tracées"),
-                rays is not null && raysOn ? Panel.Rtx.Use : RayScene.Offered(physical, rtxOffered) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                rays is not null && raysOn && !pathTracing ? Panel.Rtx.Use : RayScene.Offered(physical, rtxOffered) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 rays is not null
                     ? Words.Say("VK_KHR_ray_query, 3 shadow and 5 occlusion rays a pixel · R: on or off", "VK_KHR_ray_query, 3 rayons d'ombre et 5 d'occlusion par pixel · R : activer ou couper")
                     : Words.Say("VK_KHR_ray_query · Low lighting without --no-rays", "VK_KHR_ray_query · éclairage Low sans --no-rays")),
-            new(Words.Say("Ray tracing pipeline (path tracing)", "Pipeline de lancer de rayons (path tracing)"),
+            new("Path tracing",
+                tracer is not null && pathTracing ? Panel.Rtx.Use : tracer is not null || RayScene.Offered(physical, rtxOffered) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                Words.Say($"ray queries in compute, {PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames, filtered · F9: on or off",
+                    $"requêtes de rayons en compute, {PathTracer.Bounces} rebonds, gardé {PathTracer.MaxHistory} images, filtré · F9 : activer ou couper")),
+            new(Words.Say("Ray tracing pipeline", "Pipeline de lancer de rayons"),
                 Has("VK_KHR_ray_tracing_pipeline") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 "VK_KHR_ray_tracing_pipeline"),
             new(Words.Say("Shader execution reordering", "Réordonnancement des shaders (SER)"),
@@ -1831,6 +1841,12 @@ internal static unsafe class Stage
             {
                 raysOn = !raysOn;
                 Console.WriteLine($"SCENE rays {(raysOn ? "traced" : "off: the shadows painted")}");
+            }
+            else if (key == GlfwKey.F9 && tracer is not null)
+            {
+                pathTracing = !pathTracing;
+                tracer.Forget();
+                Console.WriteLine($"SCENE path tracing {(pathTracing ? "on" : "off")}");
             }
             else if (key is GlfwKey.Home or GlfwKey.Enter) // back to the first view, from wherever the player got stuck
             {
@@ -2712,9 +2728,9 @@ internal static unsafe class Stage
                     keysTexture = Upload(keysCard, keysSet, keysTexture);
                 }
 
-                if (rtxShown && !splashing && rtxDrawn != (raysOn, (int)Math.Round(rtxFps), extent.Height, Words.Language))
+                if (rtxShown && !splashing && rtxDrawn != (raysOn, pathTracing, (int)Math.Round(rtxFps), extent.Height, Words.Language))
                 {
-                    rtxDrawn = (raysOn, (int)Math.Round(rtxFps), extent.Height, Words.Language);
+                    rtxDrawn = (raysOn, pathTracing, (int)Math.Round(rtxFps), extent.Height, Words.Language);
                     rtxCard = Panel.RtxFeatures(gpu, driver, RtxRows(), rtxDrawn.Fps, extent.Height);
                     rtxTexture = Upload(rtxCard, rtxSet, rtxTexture);
                 }
@@ -2929,13 +2945,19 @@ internal static unsafe class Stage
                 return true;
             }
 
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed, rays is not null && raysOn);
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
 
             var cb = commands[slot];
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
             rays?.Record(cb, slot);
+            if (tracer is not null && pathTracing && !splashing)
+            {
+                tracer.Resize(extent.Width, extent.Height);
+                tracer.Record(cb, slot, viewProj, eye, pose.Fov, hazy ? Haze : 0f, materials.Photographed,
+                    hazy && quality == Quality.Low ? new SN.Vector4(0.075f, 0.09f, 0.115f, 0f) : new SN.Vector4(0.006f, 0.005f, 0.005f, 0f));
+            }
             if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
             cabinet.WallParsec = wall.Showing == WallSource.Kind.Parsec;
             if (wall.Showing == WallSource.Kind.Pong && arcade is not null) pongWall?.UploadAfterFence(cb, slot, arcade.Frame);
@@ -3003,6 +3025,9 @@ internal static unsafe class Stage
                 // The hall last: what stands in front of the floor and the wall is already in the depth buffer, so
                 // their fragments hidden behind it are never shaded (nor their rays traced).
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
+
+                // Path traced, the picture goes over what the meshes drew, whose depth stays for the screens after.
+                if (tracer is not null && pathTracing) tracer.Composite(cb, splashPipeline, splashLayout);
 
                 // The Pong screen binds its own pipeline and descriptor set, so it comes after every mesh drawn with ours.
                 chestView = worlds[Robot.Torso] * viewProj;
@@ -3556,6 +3581,7 @@ internal static unsafe class Stage
         materials.Dispose();
         device.DestroySampler(globeSampler, null);
         globes.Dispose();
+        tracer?.Dispose();
         rays?.Dispose();
         Rays = null;
         device.DestroyShaderModule(splashVertex, null);

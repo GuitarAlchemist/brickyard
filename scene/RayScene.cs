@@ -31,10 +31,18 @@ internal sealed unsafe class RayScene : IDisposable
         }
     }
 
-    // A frame's meshes and their world transforms' three rows (Push's Row0 to Row2), as the frame drew them.
-    public List<(Mesh Mesh, System.Numerics.Vector4 R0, System.Numerics.Vector4 R1, System.Numerics.Vector4 R2)> Drawn { get; private set; } = [];
+    // A frame's meshes, their world transforms' three rows (Push's Row0 to Row2) and their glow, as the frame drew them.
+    public List<(Mesh Mesh, System.Numerics.Vector4 R0, System.Numerics.Vector4 R1, System.Numerics.Vector4 R2, System.Numerics.Vector4 Glow)> Drawn { get; private set; } = [];
 
-    private List<(Mesh Mesh, System.Numerics.Vector4 R0, System.Numerics.Vector4 R1, System.Numerics.Vector4 R2)> last = [];
+    private List<(Mesh Mesh, System.Numerics.Vector4 R0, System.Numerics.Vector4 R1, System.Numerics.Vector4 R2, System.Numerics.Vector4 Glow)> last = [];
+
+    // Where each drawn mesh stood at the structure before, by the mesh and its turn among its own draws (the robot's
+    // parts are drawn twice): the path tracer follows a moving surface back to its last place (PathTracer).
+    private Dictionary<(Mesh, int), (System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4)> before = [];
+    private Dictionary<(Mesh, int), (System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4)> now = [];
+
+    // Each slot's table of what its instances are, in the top level's order (InstanceInfo), for the path tracer.
+    public Gpu.Buffer Infos(int slot) => slots[slot].Infos;
 
     public int Instances { get; private set; }
 
@@ -86,7 +94,7 @@ internal sealed unsafe class RayScene : IDisposable
         }
 
         var fresh = false;
-        foreach (var (mesh, _, _, _) in last)
+        foreach (var (mesh, _, _, _, _) in last)
         {
             if (!mesh.Disposed && mesh.Blas is null && mesh.Count >= 3)
             {
@@ -102,14 +110,26 @@ internal sealed unsafe class RayScene : IDisposable
 
         var s = slots[slot];
         var instances = (Instance*)s.Instances.Mapped;
+        var infos = (InstanceInfo*)s.Infos.Mapped;
         var n = 0;
-        foreach (var (mesh, r0, r1, r2) in last)
+        (before, now) = (now, before);
+        now.Clear();
+        foreach (var (mesh, r0, r1, r2, glow) in last)
         {
+            var turn = 0;
+            while (now.ContainsKey((mesh, turn)))
+            {
+                turn++;
+            }
+
+            now[(mesh, turn)] = (r0, r1, r2);
             if (n == MaxInstances || mesh.Disposed || mesh.Blas is not Blas blas)
             {
                 continue;
             }
 
+            var (p0, p1, p2) = before.TryGetValue((mesh, turn), out var was) ? was : (r0, r1, r2);
+            infos[n] = new InstanceInfo(blas.Vertices, (uint)mesh.Count, glow, p0, p1, p2);
             instances[n++] = new Instance(r0, r1, r2, blas.Address);
         }
 
@@ -132,15 +152,15 @@ internal sealed unsafe class RayScene : IDisposable
         };
         var range = new VkAccelerationStructureBuildRangeInfoKHR { PrimitiveCount = n };
         cb.BuildAccelerationStructuresKHR([info], [new Ptr<VkAccelerationStructureBuildRangeInfoKHR>(&range)]);
-        Barrier(cb, VkPipelineStageFlags.FragmentShaderBit);
+        Barrier(cb, VkPipelineStageFlags.FragmentShaderBit | VkPipelineStageFlags.ComputeShaderBit);
     }
 
-    // What a draw remembers for the next frame's structure: the mesh and its world rows.
+    // What a draw remembers for the next frame's structure: the mesh, its world rows and its glow.
     public void Remember(Mesh mesh, in Push push)
     {
         if (Drawn.Count < MaxInstances)
         {
-            Drawn.Add((mesh, push.Row0, push.Row1, push.Row2));
+            Drawn.Add((mesh, push.Row0, push.Row1, push.Row2, push.Glow));
         }
     }
 
@@ -195,7 +215,10 @@ internal sealed unsafe class RayScene : IDisposable
         var triangles = mesh.Count / 3;
         var sizes = new VkAccelerationStructureBuildSizesInfoKHR();
         device.GetAccelerationStructureBuildSizesKHR(VkAccelerationStructureBuildTypeKHR.DeviceKHR, ref info, [triangles], ref sizes);
-        var blas = new Blas(device, physical, sizes.AccelerationStructureSize, VkAccelerationStructureTypeKHR.BottomLevelKHR);
+        var blas = new Blas(device, physical, sizes.AccelerationStructureSize, VkAccelerationStructureTypeKHR.BottomLevelKHR)
+        {
+            Vertices = Gpu.Address(device, mesh.Buffer),
+        };
         var scratch = new Gpu.Buffer(device, physical, sizes.BuildScratchSize, VkBufferUsageFlags.StorageBufferBit | VkBufferUsageFlags.ShaderDeviceAddressBit, hostVisible: false);
         info.DstAccelerationStructure = blas.Handle;
         info.ScratchData = new VkDeviceOrHostAddressKHR { DeviceAddress = new VkDeviceAddress(scratch.Address) };
@@ -218,6 +241,20 @@ internal sealed unsafe class RayScene : IDisposable
         public uint IndexAndMask = 0xFFu << 24;
         public uint OffsetAndFlags = 0x5u << 24; // TRIANGLE_FACING_CULL_DISABLE | FORCE_OPAQUE
         public ulong Blas = blas;
+    }
+
+    // What the path tracer reads of an instance, 80 bytes as std430 lays it out: its vertices' address and count (each
+    // Vertex 17 floats, three a triangle), its glow, and the rows of its world transform at the structure before.
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct InstanceInfo(ulong vertices, uint count, System.Numerics.Vector4 glow, System.Numerics.Vector4 p0, System.Numerics.Vector4 p1, System.Numerics.Vector4 p2)
+    {
+        public ulong Vertices = vertices;
+        public uint Count = count;
+        public uint Pad = 0;
+        public System.Numerics.Vector4 Glow = glow;
+        public System.Numerics.Vector4 Previous0 = p0;
+        public System.Numerics.Vector4 Previous1 = p1;
+        public System.Numerics.Vector4 Previous2 = p2;
     }
 
     private sealed class Slot : IDisposable
@@ -243,7 +280,10 @@ internal sealed unsafe class RayScene : IDisposable
             scene.device.GetAccelerationStructureBuildSizesKHR(VkAccelerationStructureBuildTypeKHR.DeviceKHR, ref info, [MaxInstances], ref sizes);
             top = new Blas(scene.device, scene.physical, sizes.AccelerationStructureSize, VkAccelerationStructureTypeKHR.TopLevelKHR);
             Scratch = new Gpu.Buffer(scene.device, scene.physical, sizes.BuildScratchSize, VkBufferUsageFlags.StorageBufferBit | VkBufferUsageFlags.ShaderDeviceAddressBit, hostVisible: false);
+            Infos = new Gpu.Buffer(scene.device, scene.physical, (ulong)(MaxInstances * sizeof(InstanceInfo)), VkBufferUsageFlags.StorageBufferBit, hostVisible: true);
         }
+
+        public Gpu.Buffer Infos { get; }
 
         public Gpu.Buffer Instances { get; }
 
@@ -256,6 +296,7 @@ internal sealed unsafe class RayScene : IDisposable
             top.Dispose();
             Scratch.Dispose();
             Instances.Dispose();
+            Infos.Dispose();
         }
     }
 }
@@ -277,6 +318,8 @@ internal sealed unsafe class Blas : IDisposable
     public VkAccelerationStructureKHR Handle { get; }
 
     public ulong Address { get; }
+
+    public ulong Vertices { get; init; } // a bottom level's: its mesh's vertex buffer's address
 
     public bool Disposed { get; private set; }
 
