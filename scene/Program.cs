@@ -681,6 +681,7 @@ internal static unsafe class Stage
         // leaves it out.
         Streamline.Needs[] streamlineNeeds = [];
         var rayReconstruction = false; // DLSS-RR's functions bound once the device is told
+        var frameGeneration = false; // DLSS-G's, with the swapchain through Streamline (--dlss-g)
         var streamlineHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "streamline");
         var dlssByItself = !hidden && !args.Contains("--no-dlss") && File.Exists(Path.Combine(streamlineHome, "sl.interposer.dll"));
         if (args.Contains("--dlss") || args.Contains("--dlss-g") || dlssByItself)
@@ -825,8 +826,10 @@ internal static unsafe class Stage
         }
 
         // NVIDIA Reflex (Reflex.cs) with --reflex, when offered with the present ids and timeline semaphores it needs.
-        // --reflex-measure sets its markers and reads its times with the low latency mode off, to compare.
-        var reflexOn = (args.Contains("--reflex") || args.Contains("--reflex-measure")) && canWait && offered.Contains(Reflex.Extension);
+        // --reflex-measure sets its markers and reads its times with the low latency mode off, to compare. Frame generation
+        // (--dlss-g) runs Reflex through Streamline instead, on the swapchain Streamline owns.
+        var reflexOn = (args.Contains("--reflex") || args.Contains("--reflex-measure")) && canWait && offered.Contains(Reflex.Extension)
+            && !Streamline.Features.Contains(Streamline.FeatureDlssG);
         if (reflexOn)
         {
             var v12 = new VkPhysicalDeviceVulkan12Features();
@@ -1012,6 +1015,33 @@ internal static unsafe class Stage
                 rayReconstruction = bound is null;
                 Console.WriteLine($"SCENE streamline ray reconstruction: {bound ?? "ready"}");
             }
+
+            // Frame generation (--dlss-g): its functions, the swapchain's proxies and Reflex's low latency mode, then
+            // the window's surface made again through the interposer, so that DLSS-G knows it.
+            if (told == 0 && rayReconstruction && Streamline.Features.Contains(Streamline.FeatureDlssG))
+            {
+                var supported = Streamline.Supported(Streamline.FeatureDlssG, physical.VkHandle);
+                var bound = supported != 0 ? Streamline.ResultName(supported) : Streamline.BindFrameGeneration(device.VkHandle);
+                if (bound is null)
+                {
+                    instance.DestroySurfaceKHR(surface, null);
+                    var (made, why) = Streamline.CreateSurface(instance.VkHandle, ModalDrill.Own());
+                    if (why is not null)
+                    {
+                        Console.Error.WriteLine($"SCENE FAIL: the window's surface through Streamline: {why}");
+                        return 1;
+                    }
+
+                    surface = new VkSurfaceKHR(made);
+                    frameGeneration = true;
+                    if (uint.TryParse(Option(args, "--dlss-g-frames"), out var generated))
+                    {
+                        Streamline.FramesToGenerate = generated;
+                    }
+                }
+
+                Console.WriteLine($"SCENE streamline frame generation: {bound ?? $"ready, {Streamline.FramesToGenerate + 1}x the frames drawn, Reflex through Streamline"}");
+            }
         }
         var reflex = reflexOn ? new Reflex(device, args.Contains("--reflex")) : null;
 
@@ -1042,7 +1072,8 @@ internal static unsafe class Stage
         Span<VkPresentModeKHR> modes = stackalloc VkPresentModeKHR[modeCount];
         physical.GetSurfacePresentModesKHR_Write(surface, modes);
         var presentMode = VkPresentModeKHR.FifoKHR;
-        var paceByScreen = vsync && canWait && reflex is not { LowLatency: true } &&!args.Contains("--fifo") && !args.Contains("--mailbox") && (!hidden || args.Contains("--present-wait"));
+        // Not with frame generation: Streamline presents its frames and those it makes from a queue of its own.
+        var paceByScreen = vsync && canWait && !frameGeneration && reflex is not { LowLatency: true } &&!args.Contains("--fifo") && !args.Contains("--mailbox") && (!hidden || args.Contains("--present-wait"));
         if (!vsync)
         {
             foreach (var wanted in new[] { VkPresentModeKHR.ImmediateKHR, VkPresentModeKHR.MailboxKHR })
@@ -1059,6 +1090,11 @@ internal static unsafe class Stage
             // keys and the mouse, so a move shows at the next refresh and every refresh shows a new picture, an even step.
             // Mailbox below drew at twice the refresh against the screen's clock, and the picture it showed was by turns
             // fresh and 8 ms old: the user saw it jerk. --present-wait does it hidden too, for measuring.
+        }
+        else if (frameGeneration)
+        {
+            // Frame generation: FIFO, at the screen's pace, which Streamline keeps with the frames it presents (drawn and
+            // generated); a mailbox at twice the refresh would throw away the frames it makes.
         }
         else if (!hidden && reflex is not { LowLatency: true } && !args.Contains("--fifo") && modes.Contains(VkPresentModeKHR.MailboxKHR))
         {
@@ -1095,6 +1131,8 @@ internal static unsafe class Stage
         var views = Array.Empty<VkImageView>();
         var framebuffers = Array.Empty<VkFramebuffer>();
         var renderDone = Array.Empty<VkSemaphore>();
+        var streamlineImages = Array.Empty<VkImage>(); // frame generation: Streamline's back buffers; images are then the canvases
+        var canvasMemory = Array.Empty<VkDeviceMemory>();
 
         // One subpass: colour to present, depth cleared and discarded. With MSAA, the colour's samples are discarded too
         // once resolved into the swapchain's image, the third attachment.
@@ -1183,7 +1221,7 @@ internal static unsafe class Stage
 
             var old = swapchain;
             var latency = new VkSwapchainLatencyCreateInfoNV { LatencyModeEnable = true };
-            swapchain = device.CreateSwapchainKHR(new VkSwapchainCreateInfoKHR
+            var swapchainInfo = new VkSwapchainCreateInfoKHR
             {
                 Next = reflex is null ? null : &latency,
                 Surface = surface,
@@ -1199,16 +1237,68 @@ internal static unsafe class Stage
                 PresentMode = presentMode,
                 Clipped = true,
                 OldSwapchain = old,
-            }, null);
-            if (hasSwapchain)
+            };
+            if (frameGeneration)
             {
-                device.DestroySwapchainKHR(old, null);
+                // Through Streamline's proxies: the images it hands back are its own, drawn off screen and presented
+                // by it with the frames it generates between them.
+                // DLSS-G refuses sRGB back buffers: Streamline's are the same bytes as UNORM, and the scene draws into
+                // sRGB images of its own (canvases), copied into Streamline's at the frame's end, bit for bit.
+                swapchainInfo.ImageFormat = surfaceFormat.Format switch
+                {
+                    VkFormat.B8G8R8A8SRGB => VkFormat.B8G8R8A8UNorm,
+                    VkFormat.R8G8B8A8SRGB => VkFormat.R8G8B8A8UNorm,
+                    var f => f,
+                };
+                swapchainInfo.ImageUsage = VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.TransferDstBit;
+                var made = Streamline.CreateSwapchain(&swapchainInfo, out var proxied);
+                if (made != 0)
+                {
+                    throw new InvalidOperationException($"vkCreateSwapchainKHR through Streamline: {(VkResult)made}");
+                }
+
+                swapchain = new VkSwapchainKHR(proxied);
+                if (hasSwapchain)
+                {
+                    Streamline.DestroySwapchain(old.VkHandle);
+                }
+
+                streamlineImages = [.. Streamline.SwapchainImages(swapchain.VkHandle).Select(i => new VkImage(i))];
+                images = new VkImage[streamlineImages.Length];
+                canvasMemory = new VkDeviceMemory[streamlineImages.Length];
+                for (var i = 0; i < images.Length; i++)
+                {
+                    images[i] = device.CreateImage(new VkImageCreateInfo
+                    {
+                        ImageType = VkImageType._2D,
+                        Format = surfaceFormat.Format,
+                        Extent = new VkExtent3D { Width = extent.Width, Height = extent.Height, Depth = 1 },
+                        MipLevels = 1,
+                        ArrayLayers = 1,
+                        Samples = VkSampleCountFlags._1Bit,
+                        Tiling = VkImageTiling.Optimal,
+                        Usage = VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.TransferSrcBit,
+                        SharingMode = VkSharingMode.Exclusive,
+                        InitialLayout = VkImageLayout.Undefined,
+                    }, null);
+                    canvasMemory[i] = device.AllocateMemory(physical, images[i], VkMemoryPropertyFlags.DeviceLocalBit, null);
+                    device.BindImageMemory(images[i], canvasMemory[i], ByteSize.Zero);
+                }
+            }
+            else
+            {
+                swapchain = device.CreateSwapchainKHR(swapchainInfo, null);
+                if (hasSwapchain)
+                {
+                    device.DestroySwapchainKHR(old, null);
+                }
+
+                images = new VkImage[device.GetSwapchainImagesKHR_Count(swapchain)];
+                device.GetSwapchainImagesKHR_Write(swapchain, images);
             }
 
             hasSwapchain = true;
             reflex?.Mode(swapchain);
-            images = new VkImage[device.GetSwapchainImagesKHR_Count(swapchain)];
-            device.GetSwapchainImagesKHR_Write(swapchain, images);
 
             depthImage = device.CreateImage(new VkImageCreateInfo
             {
@@ -1288,6 +1378,15 @@ internal static unsafe class Stage
                 device.DestroyImage(msaaImage, null);
                 device.FreeMemory(msaaMemory, null);
             }
+
+            for (var i = 0; i < canvasMemory.Length; i++)
+            {
+                device.DestroyImage(images[i], null);
+                device.FreeMemory(canvasMemory[i], null);
+            }
+
+            canvasMemory = [];
+            streamlineImages = [];
             images = [];
         }
 
@@ -2013,9 +2112,17 @@ internal static unsafe class Stage
                     ? Words.Say($"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}): the path tracer at {t.Width}x{t.Height}, denoised and upscaled to {t.OutputWidth}x{t.OutputHeight} (--dlss)",
                         $"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}) : le path tracer à {t.Width}x{t.Height}, débruité et agrandi à {t.OutputWidth}x{t.OutputHeight} (--dlss)")
                     : Words.Say("NGX's extensions, VK_NVX_binary_import and VK_NVX_image_view_handle; --dlss with NVIDIA's Streamline", "extensions de NGX, VK_NVX_binary_import et VK_NVX_image_view_handle ; --dlss avec Streamline de NVIDIA")),
+            new(Words.Say("DLSS Frame Generation", "Génération d'images DLSS"),
+                Streamline.Generating ? Panel.Rtx.Use : frameGeneration || (nvidia && Has("VK_NV_optical_flow")) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                frameGeneration
+                    ? Words.Say($"{Streamline.FramesToGenerate} frame(s) generated between two path-traced, {Streamline.FramesPerDrawn} presented for each drawn (--dlss-g)",
+                        $"{Streamline.FramesToGenerate} image(s) générée(s) entre deux tracées, {Streamline.FramesPerDrawn} présentée(s) pour chaque dessinée (--dlss-g)")
+                    : Words.Say("VK_NV_optical_flow; --dlss-g, with the path tracer and Ray Reconstruction", "VK_NV_optical_flow ; --dlss-g, avec le path tracer et Ray Reconstruction")),
             new("Reflex",
-                reflex is { LowLatency: true } ? Panel.Rtx.Use : Has("VK_NV_low_latency2") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                reflex is { LowLatency: true }
+                reflex is { LowLatency: true } || Streamline.Generating ? Panel.Rtx.Use : Has("VK_NV_low_latency2") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                Streamline.Generating
+                    ? Words.Say("through Streamline, low latency mode, with frame generation", "par Streamline, mode basse latence, avec la génération d'images")
+                    : reflex is { LowLatency: true }
                     ? Words.Say("VK_NV_low_latency2 · low latency mode with boost, pacing the frames (--reflex)", "VK_NV_low_latency2 · mode basse latence avec boost, qui règle les images (--reflex)")
                     : Words.Say("VK_NV_low_latency2; --reflex uses it in place of the present wait", "VK_NV_low_latency2 ; --reflex l'utilise à la place de l'attente de présentation")),
             new(Words.Say("Present wait", "Attente de présentation"),
@@ -2716,6 +2823,8 @@ internal static unsafe class Stage
             }
         }
         var frame = 0;
+        var generationHeld = 0; // frames left before frame generation may turn on again
+        var generationStatus = uint.MaxValue; // DLSS-G's status as last printed
         var shot = 0;
         var last = filmDir is null ? clock.Elapsed.TotalSeconds : 0.0;
         var firstFrame = -1.0;
@@ -2793,6 +2902,11 @@ internal static unsafe class Stage
                 reflex.Sleep(swapchain);
                 reflex.Mark(swapchain, presentCount + 1, VkLatencyMarkerNV.SimulationStartNV);
                 reflex.Mark(swapchain, presentCount + 1, VkLatencyMarkerNV.InputSampleNV);
+            }
+            else if (frameGeneration && hasSwapchain)
+            {
+                // Frame generation: the frame's token, Reflex's sleep through Streamline and the simulation's start.
+                Streamline.BeginFrame();
             }
 
             if (poll)
@@ -3053,6 +3167,14 @@ internal static unsafe class Stage
             {
                 var rebuilding = Stopwatch.StartNew();
                 lastPresented = 0;
+                if (frameGeneration)
+                {
+                    // DLSS-G off before the swapchain changes, and for a few frames after (as the Godot fork holds it).
+                    Streamline.Generate(false, images.Length, extent.Width, extent.Height, 0, 0);
+                    generationHeld = 10;
+                    Streamline.DeviceWaitIdle();
+                }
+
                 device.WaitIdle();
                 Teardown();
                 if (!Build())
@@ -3316,7 +3438,15 @@ internal static unsafe class Stage
             int imageIndex;
             try
             {
-                result = device.AcquireNextImageKHR(swapchain, -1, acquired[slot], default, out imageIndex);
+                if (frameGeneration)
+                {
+                    result = (VkResult)Streamline.AcquireNextImage(swapchain.VkHandle, acquired[slot].VkHandle, out var index);
+                    imageIndex = (int)index;
+                }
+                else
+                {
+                    result = device.AcquireNextImageKHR(swapchain, -1, acquired[slot], default, out imageIndex);
+                }
             }
             catch (VkResultError e) when (e.Result == VkResult.ErrorOutOfDateKHR)
             {
@@ -3324,7 +3454,7 @@ internal static unsafe class Stage
                 imageIndex = 0;
             }
 
-            if (result == VkResult.ErrorOutOfDateKHR)
+            if (result == VkResult.ErrorOutOfDateKHR || (int)result < 0)
             {
                 stale = true;
                 return true;
@@ -3344,6 +3474,24 @@ internal static unsafe class Stage
                 tracer.Resize(extent.Width, extent.Height);
                 tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? Haze : 0f, materials.Photographed,
                     hazy && quality == Quality.Low ? new SN.Vector4(0.075f, 0.09f, 0.115f, 0f) : new SN.Vector4(0.006f, 0.005f, 0.005f, 0f));
+            }
+
+            if (frameGeneration)
+            {
+                // Frames generated only between path-traced frames that Ray Reconstruction gave constants and tags,
+                // and not in the few frames after the swapchain is made again.
+                var generate = tracer is { Upscaling: true, UpscaleError: null } && pathTracing && !splashing && generationHeld <= 0;
+                generationHeld--;
+                if (Streamline.Generate(generate, images.Length, extent.Width, extent.Height, tracer?.Width ?? 0, tracer?.Height ?? 0) is { } refused)
+                {
+                    Console.WriteLine($"SCENE frame generation: {refused}");
+                }
+
+                if (Streamline.GenerationStatus != generationStatus)
+                {
+                    generationStatus = Streamline.GenerationStatus;
+                    Console.WriteLine($"SCENE frame generation status: {Streamline.GenerationStatusName(generationStatus)}");
+                }
             }
             if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
             cabinet.WallParsec = wall.Showing == WallSource.Kind.Parsec;
@@ -3681,6 +3829,23 @@ internal static unsafe class Stage
                     [Barrier(images[imageIndex], VkImageLayout.TransferSrcOptimal, VkImageLayout.PresentSrcKHR, default, default)]);
             }
 
+            if (frameGeneration)
+            {
+                // The canvas's sRGB bytes into Streamline's UNORM back buffer as they are, which it presents.
+                var canvas = images[imageIndex];
+                var back = streamlineImages[imageIndex];
+                cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit | VkPipelineStageFlags.TransferBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
+                [
+                    Barrier(canvas, VkImageLayout.PresentSrcKHR, VkImageLayout.TransferSrcOptimal, VkAccessFlags.ColorAttachmentWriteBit, VkAccessFlags.TransferReadBit),
+                    Barrier(back, VkImageLayout.Undefined, VkImageLayout.TransferDstOptimal, VkAccessFlags.None, VkAccessFlags.TransferWriteBit),
+                ]);
+                var layers = new VkImageSubresourceLayers { AspectMask = VkImageAspectFlags.ColorBit, LayerCount = 1 };
+                cb.CopyImage(canvas, VkImageLayout.TransferSrcOptimal, back, VkImageLayout.TransferDstOptimal,
+                    [new VkImageCopy { SrcSubresource = layers, DstSubresource = layers, Extent = new VkExtent3D { Width = extent.Width, Height = extent.Height, Depth = 1 } }]);
+                cb.PipelineBarrier(VkPipelineStageFlags.TransferBit, VkPipelineStageFlags.BottomOfPipeBit, VkDependencyFlags.None, [], [],
+                    [Barrier(back, VkImageLayout.TransferDstOptimal, VkImageLayout.PresentSrcKHR, VkAccessFlags.TransferWriteBit, VkAccessFlags.None)]);
+            }
+
             cb.WriteTimestamp(VkPipelineStageFlags.BottomOfPipeBit, frameStamps, (2 * slot) + 1);
             stamped[slot] = true;
             cb.End();
@@ -3695,6 +3860,11 @@ internal static unsafe class Stage
             {
                 reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.SimulationEndNV);
                 reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.RendersubmitStartNV);
+            }
+            else if (frameGeneration)
+            {
+                Streamline.Mark(Streamline.SimulationEnd);
+                Streamline.Mark(Streamline.RenderSubmitStart);
             }
 
             queue.Submit(
@@ -3722,6 +3892,11 @@ internal static unsafe class Stage
                 reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.RendersubmitEndNV);
                 reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.PresentStartNV);
             }
+            else if (frameGeneration)
+            {
+                Streamline.Mark(Streamline.RenderSubmitEnd);
+                Streamline.Mark(Streamline.PresentStart);
+            }
 
             var presentInfo = new VkPresentInfoKHR
             {
@@ -3746,6 +3921,10 @@ internal static unsafe class Stage
             {
                 reflex.Mark(presentSwapchain, frameId, VkLatencyMarkerNV.PresentEndNV);
                 reflex.Read(presentSwapchain);
+            }
+            else if (frameGeneration)
+            {
+                Streamline.Mark(Streamline.PresentEnd);
             }
 
             if (result is VkResult.ErrorOutOfDateKHR or VkResult.SuboptimalKHR)
@@ -3914,6 +4093,13 @@ internal static unsafe class Stage
         }
 
         // Clean shutdown, in reverse order of creation.
+        if (frameGeneration)
+        {
+            Streamline.Generate(false, images.Length, extent.Width, extent.Height, 0, 0);
+            Streamline.DeviceWaitIdle();
+            Console.WriteLine($"SCENE frame generation: {Streamline.FramesPerDrawnAverage:F2} frames presented for each drawn while on (last {Streamline.FramesPerDrawn}); status {Streamline.GenerationStatusName(Streamline.GenerationStatus)}, up to {Streamline.FramesToGenerateMax} generated between two");
+        }
+
         device.WaitIdle();
         for (var i = 0; i < FramesInFlight; i++)
         {
@@ -4029,7 +4215,15 @@ internal static unsafe class Stage
         device.DestroyShaderModule(fragmentModule, null);
         Teardown();
         device.DestroyRenderPass(renderPass, null);
-        device.DestroySwapchainKHR(swapchain, null);
+        if (frameGeneration)
+        {
+            Streamline.DestroySwapchain(swapchain.VkHandle);
+        }
+        else
+        {
+            device.DestroySwapchainKHR(swapchain, null);
+        }
+
         tray?.Dispose();
         Streamline.Shutdown();
         device.Dispose();

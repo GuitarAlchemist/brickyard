@@ -88,10 +88,13 @@ internal sealed unsafe class PathTracer : IDisposable
         VkFormat.R16G16B16A16SFloat, // 25: its light, one path's, unfiltered
         VkFormat.R16G16B16A16SFloat, // 26: Ray Reconstruction's picture
         VkFormat.R32SFloat, // 27: how far the first bounce went when it was a reflection (0 when diffuse)
+        // Frame generation's (DLSS-G, --dlss-g), with the motion above: the depth as a depth buffer holds it, 0 near to
+        // 1 far. Ray Reconstruction takes the depth along the view when both are given (sl.dlss_d's dlss_dEntry.cpp).
+        VkFormat.R32SFloat, // 28
     ];
 
     private const int Output = 12; // the picture's index in Images
-    private const int Motion = 13, Depth = 14, Diffuse = 15, Specular = 16, NormalRoughness = 17, Colour = 18, Upscaled = 19, SpecularHit = 20;
+    private const int Motion = 13, Depth = 14, Diffuse = 15, Specular = 16, NormalRoughness = 17, Colour = 18, Upscaled = 19, SpecularHit = 20, DepthBuffer = 21;
 
     // Ray Reconstruction (--dlss): DLSS's mode (1 performance ... 6 DLAA, Streamline.Modes), 0 when off. The trace
     // then runs at the size DLSS asks for that mode, one jittered path a pixel without the frames kept or the filter,
@@ -326,8 +329,8 @@ internal sealed unsafe class PathTracer : IDisposable
             Size = new(Width, Height, frame, MaxOut ? MaxOutSamples : 1),
             Options = new(photographed ? 1f : 0f, MaxOut ? MaxOutBounces : Bounces, MaxHistory, reset ? 1f : 0f),
             Background = background with { W = pixelAngle },
-            Upscale = new(Upscaling ? 1f : 0f, jx, jy, 0f),
-            Forward = new(forward, 0f),
+            Upscale = new(Upscaling ? 1f : 0f, jx, jy, -projection.M33),
+            Forward = new(forward, projection.M43),
         };
         var prior = previousViewProj;
         previousViewProj = viewProj;
@@ -396,10 +399,10 @@ internal sealed unsafe class PathTracer : IDisposable
                 WorldToCameraView = view,
                 CameraViewToWorld = toWorld,
             };
-            var resources = stackalloc Streamline.Resource[8];
-            int[] tagged = [Colour, Upscaled, Depth, Motion, Diffuse, Specular, NormalRoughness, SpecularHit];
+            var resources = stackalloc Streamline.Resource[9];
+            int[] tagged = [Colour, Upscaled, Depth, Motion, Diffuse, Specular, NormalRoughness, SpecularHit, DepthBuffer];
             uint[] types = [Streamline.BufferScalingInputColor, Streamline.BufferScalingOutputColor, Streamline.BufferLinearDepth, Streamline.BufferMotionVectors,
-                Streamline.BufferAlbedo, Streamline.BufferSpecularAlbedo, Streamline.BufferNormalRoughness, Streamline.BufferSpecularHitDistance];
+                Streamline.BufferAlbedo, Streamline.BufferSpecularAlbedo, Streamline.BufferNormalRoughness, Streamline.BufferSpecularHitDistance, Streamline.BufferDepth];
             var tags = new Streamline.ResourceTag[tagged.Length];
             for (var i = 0; i < tagged.Length; i++)
             {
@@ -733,6 +736,7 @@ internal sealed unsafe class PathTracer : IDisposable
         layout(set = 0, binding = 25, rgba16f) uniform image2D rrColour;
         layout(set = 0, binding = 26, rgba16f) uniform image2D rrUpscaled;
         layout(set = 0, binding = 27, r32f) uniform image2D rrSpecularHit;
+        layout(set = 0, binding = 28, r32f) uniform image2D fgDepth;
         layout(push_constant) uniform Pass { int parity; int pass; int final; int pad; } pc;
 
         // This frame's (now) or last frame's images, the two swapping each frame.
@@ -1162,6 +1166,8 @@ internal sealed unsafe class PathTracer : IDisposable
             imageStore(rrNormal, px, vec4(n, roughness));
             imageStore(rrColour, px, vec4(light, 1.0));
             imageStore(rrSpecularHit, px, vec4(hitDistance));
+            // The projection's depth, from the depth along the view: -M33 + M43 / depth (upscale.w, forward.w).
+            imageStore(fgDepth, px, vec4(clamp(t.upscale.w + t.forward.w / max(depth, 1e-4), 0.0, 1.0)));
         }
 
         void main()

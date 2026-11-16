@@ -155,7 +155,7 @@ internal static unsafe class Streamline
     private static void OnLog(uint type, byte* message)
     {
         var text = Marshal.PtrToStringUTF8((nint)message)?.Trim() ?? "";
-        if ((type >= 1 || verbose) && log.Count < 400)
+        if ((type >= 1 || verbose) && log.Count < (verbose ? 20_000 : 400))
         {
             log.Add(text);
             Console.WriteLine($"STREAMLINE {(type == 2 ? "error" : type == 1 ? "warning" : "info")}: {text}");
@@ -283,8 +283,14 @@ internal static unsafe class Streamline
     public static string? EvaluateRayReconstruction(nint commandBuffer, uint frameIndex, ref Constants constants, ref DLSSDOptions options, ResourceTag[] tags)
     {
         var viewport = new ViewportHandle { Base = new BaseStructure(ViewportHandleType, 1), Value = 0 };
-        nint token = 0;
-        var r = ((delegate* unmanaged<nint*, uint*, int>)Export("slGetNewFrameToken"))(&token, &frameIndex);
+        // With frame generation, the frame's own token (BeginFrame), which its markers and its present carry too.
+        var token = frameToken;
+        var r = 0;
+        if (token == 0)
+        {
+            r = ((delegate* unmanaged<nint*, uint*, int>)Export("slGetNewFrameToken"))(&token, &frameIndex);
+        }
+
         if (r != 0)
         {
             return $"slGetNewFrameToken: {ResultName(r)}";
@@ -328,6 +334,253 @@ internal static unsafe class Streamline
         return r == 0 ? null : $"slEvaluateFeature: {ResultName(r)}";
     }
 
+    // Frame generation (DLSS-G, --dlss-g). Streamline then owns the swapchain: the scene creates, destroys, acquires and
+    // presents through the interposer's proxies (sl_hooks.h's mandatory Vulkan hooks, its surface's among them) and draws
+    // into images Streamline hands back, off screen; it presents those and the frames generated between them from a
+    // queue of its own. DLSS-G runs only with Reflex through Streamline (its sleep and the PCL markers, all on the frame's
+    // token; without them it tints the picture pink, as the Godot fork found), and turns off before the window changes.
+    private static delegate* unmanaged<nint, void*, void*, nint*, int> createSwapchain;
+    private static delegate* unmanaged<nint, nint, void*, void> destroySwapchain;
+    private static delegate* unmanaged<nint, nint, uint*, nint*, int> getSwapchainImages;
+    private static delegate* unmanaged<nint, nint, ulong, nint, nint, uint*, int> acquireNextImage;
+    private static delegate* unmanaged<nint, int> deviceWaitIdle;
+    private static delegate* unmanaged<ViewportHandle*, DLSSGOptions*, int> fgSetOptions;
+    private static delegate* unmanaged<ViewportHandle*, DLSSGState*, DLSSGOptions*, int> fgGetState;
+    private static delegate* unmanaged<ReflexOptions*, int> reflexSetOptions;
+    private static delegate* unmanaged<nint, int> reflexSleep;
+    private static delegate* unmanaged<uint, nint, int> pclSetMarker;
+    private static nint device;
+    private static nint frameToken;
+    private static uint frameNumber;
+    private static bool generating;
+
+    public static bool FrameGenerationBound => fgSetOptions != null;
+
+    // Frame generation on (DLSS-G's options set to on, its status read back ok).
+    public static bool Generating => generating;
+
+    // DLSS-G's state as last read: its status (0 ok, else sl_dlss_g.h's DLSSGStatus bits), the frames it can generate
+    // between two drawn, and the frames it presents for each frame drawn (2 when it puts one between, 1 when none: the
+    // programming guide's section 14), as last read and on average over the reads while it was on.
+    public static uint GenerationStatus { get; private set; }
+
+    public static uint FramesToGenerateMax { get; private set; }
+
+    public static uint FramesPerDrawn { get; private set; }
+
+    public static double FramesPerDrawnAverage => generatingReads > 0 ? generatingPresented / (double)generatingReads : 0;
+
+    private static long generatingReads;
+    private static long generatingPresented;
+
+    // How many frames to generate between two drawn (1 for twice the frames, 3 for four times), --dlss-g-frames.
+    public static uint FramesToGenerate { get; set; } = 1;
+
+    // DLSS-G's, Reflex's and PCL's functions and the swapchain's proxies, once the device is told; Reflex then set to its
+    // low latency mode, which DLSS-G requires. Null when all are there, else why not.
+    public static string? BindFrameGeneration(nint vkDevice)
+    {
+        device = vkDevice;
+        var get = (delegate* unmanaged<uint, byte*, nint*, int>)Export("slGetFeatureFunction");
+        nint Feature(uint feature, ReadOnlySpan<byte> name)
+        {
+            nint f = 0;
+            fixed (byte* n = name)
+            {
+                return get(feature, n, &f) == 0 ? f : 0;
+            }
+        }
+
+        var getDeviceProcAddr = (delegate* unmanaged<nint, byte*, nint>)Export("vkGetDeviceProcAddr");
+        nint Proxy(ReadOnlySpan<byte> name)
+        {
+            fixed (byte* n = name)
+            {
+                return getDeviceProcAddr(vkDevice, n);
+            }
+        }
+
+        var functions = new (string Name, nint Address)[]
+        {
+            ("slDLSSGSetOptions", Feature(FeatureDlssG, "slDLSSGSetOptions\0"u8)),
+            ("slDLSSGGetState", Feature(FeatureDlssG, "slDLSSGGetState\0"u8)),
+            ("slReflexSetOptions", Feature(FeatureReflex, "slReflexSetOptions\0"u8)),
+            ("slReflexSleep", Feature(FeatureReflex, "slReflexSleep\0"u8)),
+            ("slPCLSetMarker", Feature(FeaturePcl, "slPCLSetMarker\0"u8)),
+            ("vkCreateSwapchainKHR", Proxy("vkCreateSwapchainKHR\0"u8)),
+            ("vkDestroySwapchainKHR", Proxy("vkDestroySwapchainKHR\0"u8)),
+            ("vkGetSwapchainImagesKHR", Proxy("vkGetSwapchainImagesKHR\0"u8)),
+            ("vkAcquireNextImageKHR", Proxy("vkAcquireNextImageKHR\0"u8)),
+            ("vkDeviceWaitIdle", Proxy("vkDeviceWaitIdle\0"u8)),
+        };
+        if (functions.FirstOrDefault(f => f.Address == 0) is { Name: { } missing })
+        {
+            return $"{missing} not found";
+        }
+
+        fgSetOptions = (delegate* unmanaged<ViewportHandle*, DLSSGOptions*, int>)functions[0].Address;
+        fgGetState = (delegate* unmanaged<ViewportHandle*, DLSSGState*, DLSSGOptions*, int>)functions[1].Address;
+        reflexSetOptions = (delegate* unmanaged<ReflexOptions*, int>)functions[2].Address;
+        reflexSleep = (delegate* unmanaged<nint, int>)functions[3].Address;
+        pclSetMarker = (delegate* unmanaged<uint, nint, int>)functions[4].Address;
+        createSwapchain = (delegate* unmanaged<nint, void*, void*, nint*, int>)functions[5].Address;
+        destroySwapchain = (delegate* unmanaged<nint, nint, void*, void>)functions[6].Address;
+        getSwapchainImages = (delegate* unmanaged<nint, nint, uint*, nint*, int>)functions[7].Address;
+        acquireNextImage = (delegate* unmanaged<nint, nint, ulong, nint, nint, uint*, int>)functions[8].Address;
+        deviceWaitIdle = (delegate* unmanaged<nint, int>)functions[9].Address;
+
+        var reflex = new ReflexOptions { Base = new BaseStructure(ReflexOptionsType, 1), Mode = 1 }; // eLowLatency
+        var r = reflexSetOptions(&reflex);
+        return r == 0 ? null : $"slReflexSetOptions: {ResultName(r)}";
+    }
+
+    // The window's surface made again through the interposer (its vkCreateWin32SurfaceKHR, which DLSS-G hooks), once
+    // the device is told. 0 and why not when it fails.
+    public static (nint Surface, string? Why) CreateSurface(nint instance, nint hwnd)
+    {
+        var create = (delegate* unmanaged<nint, Win32SurfaceCreateInfo*, void*, nint*, int>)Export("vkCreateWin32SurfaceKHR");
+        var info = new Win32SurfaceCreateInfo { SType = 1000009000, Hinstance = GetModuleHandleW(null), Hwnd = hwnd };
+        nint surface = 0;
+        var r = create(instance, &info, null, &surface);
+        return r == 0 ? (surface, null) : (0, $"vkCreateWin32SurfaceKHR: {r}");
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint GetModuleHandleW(string? name);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Win32SurfaceCreateInfo
+    {
+        public int SType;
+        public nint Next;
+        public uint Flags;
+        public nint Hinstance;
+        public nint Hwnd;
+    }
+
+    // The swapchain's calls through the proxies; Vulkan's results as they come (0 success).
+    public static int CreateSwapchain(void* info, out nint swapchain)
+    {
+        nint made = 0;
+        var r = createSwapchain(device, info, null, &made);
+        swapchain = made;
+        return r;
+    }
+
+    public static void DestroySwapchain(nint swapchain) => destroySwapchain(device, swapchain, null);
+
+    public static nint[] SwapchainImages(nint swapchain)
+    {
+        uint count = 0;
+        getSwapchainImages(device, swapchain, &count, null);
+        var images = new nint[count];
+        fixed (nint* p = images)
+        {
+            getSwapchainImages(device, swapchain, &count, p);
+        }
+
+        return images;
+    }
+
+    public static int AcquireNextImage(nint swapchain, nint semaphore, out uint index)
+    {
+        uint i = 0;
+        var r = acquireNextImage(device, swapchain, ulong.MaxValue, semaphore, 0, &i);
+        index = i;
+        return r;
+    }
+
+    public static int DeviceWaitIdle() => deviceWaitIdle(device);
+
+    // sl_pcl.h's markers, those the frame sets.
+    public const uint SimulationStart = 0, SimulationEnd = 1, RenderSubmitStart = 2, RenderSubmitEnd = 3, PresentStart = 4, PresentEnd = 5;
+
+    // A frame begins: its token, numbered from the frame before, Reflex's sleep, and the simulation's start. Ray
+    // Reconstruction's constants, DLSS-G's tags and the markers that follow all go on this token.
+    public static void BeginFrame()
+    {
+        var index = ++frameNumber;
+        nint token = 0;
+        if (((delegate* unmanaged<nint*, uint*, int>)Export("slGetNewFrameToken"))(&token, &index) != 0)
+        {
+            frameToken = 0;
+            return;
+        }
+
+        frameToken = token;
+        reflexSleep(token);
+        Mark(SimulationStart);
+    }
+
+    public static void Mark(uint marker)
+    {
+        if (frameToken != 0)
+        {
+            pclSetMarker(marker, frameToken);
+        }
+    }
+
+    // DLSS-G on or off for this frame (on only where Ray Reconstruction gave the frame's constants and tags), told only
+    // when that changes; its state read back about once a second, and on when it was turned on. The back buffers'
+    // count and size, and the traced size of the depth and the motion, go with the options.
+    public static string? Generate(bool on, int backBuffers, int width, int height, int tracedWidth, int tracedHeight)
+    {
+        if (fgSetOptions == null)
+        {
+            return null;
+        }
+
+        var viewport = new ViewportHandle { Base = new BaseStructure(ViewportHandleType, 1), Value = 0 };
+        string? why = null;
+        if (on != generating)
+        {
+            var options = new DLSSGOptions
+            {
+                Base = new BaseStructure(DLSSGOptionsType, 4),
+                Mode = on ? 1u : 0u,
+                NumFramesToGenerate = Math.Clamp(FramesToGenerate, 1u, FramesToGenerateMax > 0 ? FramesToGenerateMax : 3u),
+                NumBackBuffers = (uint)backBuffers,
+                MvecDepthWidth = (uint)tracedWidth,
+                MvecDepthHeight = (uint)tracedHeight,
+                ColorWidth = (uint)width,
+                ColorHeight = (uint)height,
+                Reserved15 = 2, // eInvalid, as the SDK's defaults
+                Reserved16 = 2,
+            };
+            var r = fgSetOptions(&viewport, &options);
+            generating = on && r == 0;
+            why = r == 0 ? null : $"slDLSSGSetOptions: {ResultName(r)}";
+            readAt = 0;
+        }
+
+        if (--readAt <= 0)
+        {
+            readAt = 60;
+            var state = new DLSSGState { Base = new BaseStructure(DLSSGStateType, 3) };
+            if (fgGetState(&viewport, &state, null) == 0)
+            {
+                GenerationStatus = state.Status;
+                FramesToGenerateMax = state.NumFramesToGenerateMax;
+                FramesPerDrawn = state.NumFramesActuallyPresented;
+                if (generating)
+                {
+                    generatingReads++;
+                    generatingPresented += state.NumFramesActuallyPresented;
+                }
+            }
+        }
+
+        return why;
+    }
+
+    private static int readAt;
+
+    // DLSS-G's status bits by name (sl_dlss_g.h's DLSSGStatus).
+    public static string GenerationStatusName(uint status) => status == 0
+        ? "ok"
+        : string.Join(", ", new[] { "resolution too low", "Reflex not detected", "HDR format not supported", "constants invalid", "back buffer index not asked" }
+            .Where((_, bit) => (status & (1u << bit)) != 0));
+
     // A Vulkan image as Streamline takes it, in the General layout, where the path tracer keeps its images.
     public static Resource Image(nint image, nint memory, nint view, int width, int height, uint format, uint usage) => new()
     {
@@ -354,7 +607,8 @@ internal static unsafe class Streamline
         Extent = new Extent { Width = (uint)width, Height = (uint)height },
     };
 
-    // sl_core_types.h's buffer types, those Ray Reconstruction is given.
+    // sl_core_types.h's buffer types, those Ray Reconstruction and frame generation are given.
+    public const uint BufferDepth = 0;
     public const uint BufferMotionVectors = 1;
     public const uint BufferScalingInputColor = 3;
     public const uint BufferScalingOutputColor = 4;
@@ -379,6 +633,63 @@ internal static unsafe class Streamline
     private static readonly Guid ResourceTagType = new(0x4c6a5aad, 0xb445, 0x496c, 0x87, 0xff, 0x1a, 0xf3, 0x84, 0x5b, 0xe6, 0x53);
     private static readonly Guid DLSSDOptionsType = new(0x0ad87504, 0x774e, 0x4bf3, 0x96, 0x33, 0xa4, 0x4d, 0x1f, 0x7f, 0x9c, 0xb8);
     private static readonly Guid DLSSDOptimalSettingsType = new(0xfbd0c637, 0xa28f, 0x41f2, 0xbc, 0x91, 0xb4, 0x21, 0xfa, 0xee, 0x8e, 0x1e);
+    private static readonly Guid DLSSGOptionsType = new(0xfac5f1cb, 0x2dfd, 0x4f36, 0xa1, 0xe6, 0x3a, 0x9e, 0x86, 0x52, 0x56, 0xc5);
+    private static readonly Guid DLSSGStateType = new(0xcc8ac8e1, 0xa179, 0x44f5, 0x97, 0xfa, 0xe7, 0x41, 0x12, 0xf9, 0xbc, 0x61);
+    private static readonly Guid ReflexOptionsType = new(0xf03af81a, 0x6d0b, 0x4902, 0xa6, 0x51, 0xc4, 0x96, 0x5e, 0x21, 0x54, 0x34);
+
+    // sl::DLSSGOptions (sl_dlss_g.h, version 4).
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DLSSGOptions
+    {
+        public BaseStructure Base;
+        public uint Mode;
+        public uint NumFramesToGenerate;
+        public uint Flags;
+        public uint DynamicResWidth;
+        public uint DynamicResHeight;
+        public uint NumBackBuffers;
+        public uint MvecDepthWidth;
+        public uint MvecDepthHeight;
+        public uint ColorWidth;
+        public uint ColorHeight;
+        public uint ColorBufferFormat;
+        public uint MvecBufferFormat;
+        public uint DepthBufferFormat;
+        public uint HudLessBufferFormat;
+        public uint UiBufferFormat;
+        public nint OnErrorCallback;
+        public byte Reserved15;
+        public uint QueueParallelismMode;
+        public byte Reserved16;
+    }
+
+    // sl::DLSSGState (sl_dlss_g.h, version 3).
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DLSSGState
+    {
+        public BaseStructure Base;
+        public ulong EstimatedVramUsageInBytes;
+        public uint Status;
+        public uint MinWidthOrHeight;
+        public uint NumFramesActuallyPresented;
+        public uint NumFramesToGenerateMax;
+        public byte Reserved4;
+        public byte IsVsyncSupportAvailable;
+        public nint InputsProcessingCompletionFence;
+        public ulong LastPresentInputsProcessingCompletionFenceValue;
+    }
+
+    // sl::ReflexOptions (sl_reflex.h).
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ReflexOptions
+    {
+        public BaseStructure Base;
+        public int Mode;
+        public uint FrameLimitUs;
+        public byte UseMarkersToOptimize;
+        public ushort VirtualKey;
+        public uint IdThread;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct ViewportHandle
@@ -701,6 +1012,19 @@ internal static unsafe class Streamline
             && At(ref o, ref Unsafe.As<System.Numerics.Matrix4x4, byte>(ref o.WorldToCameraView)) == 64
             && At(ref o, ref o.AlphaUpscalingEnabled) == 192 && At(ref o, ref Unsafe.As<uint, byte>(ref o.UltraQualityPreset)) == 216, "Streamline's Ray Reconstruction options are laid out as the SDK's");
         Check(sizeof(DLSSDOptimalSettings) == 64, "Streamline's Ray Reconstruction settings are laid out as the SDK's");
+        var g = default(DLSSGOptions);
+        Check(sizeof(DLSSGOptions) == 120 && At(ref g, ref Unsafe.As<uint, byte>(ref g.Mode)) == 32
+            && At(ref g, ref Unsafe.As<uint, byte>(ref g.NumBackBuffers)) == 52 && At(ref g, ref Unsafe.As<uint, byte>(ref g.MvecDepthWidth)) == 56
+            && At(ref g, ref Unsafe.As<uint, byte>(ref g.ColorWidth)) == 64 && At(ref g, ref Unsafe.As<uint, byte>(ref g.UiBufferFormat)) == 88
+            && At(ref g, ref Unsafe.As<nint, byte>(ref g.OnErrorCallback)) == 96 && At(ref g, ref g.Reserved15) == 104
+            && At(ref g, ref Unsafe.As<uint, byte>(ref g.QueueParallelismMode)) == 108 && At(ref g, ref g.Reserved16) == 112, "Streamline's frame generation options are laid out as the SDK's");
+        var gs = default(DLSSGState);
+        Check(sizeof(DLSSGState) == 80 && At(ref gs, ref Unsafe.As<uint, byte>(ref gs.Status)) == 40
+            && At(ref gs, ref Unsafe.As<uint, byte>(ref gs.NumFramesActuallyPresented)) == 48 && At(ref gs, ref Unsafe.As<uint, byte>(ref gs.NumFramesToGenerateMax)) == 52
+            && At(ref gs, ref gs.IsVsyncSupportAvailable) == 57 && At(ref gs, ref Unsafe.As<nint, byte>(ref gs.InputsProcessingCompletionFence)) == 64, "Streamline's frame generation state is laid out as the SDK's");
+        var ro = default(ReflexOptions);
+        Check(sizeof(ReflexOptions) == 48 && At(ref ro, ref Unsafe.As<uint, byte>(ref ro.FrameLimitUs)) == 36 && At(ref ro, ref ro.UseMarkersToOptimize) == 40
+            && At(ref ro, ref Unsafe.As<ushort, byte>(ref ro.VirtualKey)) == 42 && At(ref ro, ref Unsafe.As<uint, byte>(ref ro.IdThread)) == 44, "Streamline's Reflex options are laid out as the SDK's");
         var guid = PreferencesType.ToByteArray();
         Check(BitConverter.ToUInt32(guid, 0) == 0x1ca10965 && guid[8] == 0x8d && guid[15] == 0x14, "a System.Guid has sl::StructType's bytes");
     }

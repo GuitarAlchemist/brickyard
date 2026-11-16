@@ -1587,6 +1587,35 @@ through the interposer's `vkQueuePresentKHR` (its `vkGetDeviceProcAddr`, once th
 evaluated, logs `destroyKernel(ctx.mvecKernel) failed 6`: harmless so far. *To verify*: the live window (not yet
 installed), and Ray Reconstruction's look on the screens and the globe, whose albedo guides are plain.
 
+### Frame generation on the path tracer, --dlss-g (2026-11-15)
+
+The author, of DLSS-G as the next step: "Ok fait le". `--dlss-g` loads DLSS-G, Reflex and PCL with DLSS and Ray
+Reconstruction, and frames are generated only between path-traced frames that Ray Reconstruction gave their constants
+and tags, at most `--dlss-g-frames` (1 by default, twice the frames; up to 3 on this GPU). Measured or learnt:
+- Streamline owns the swapchain. The scene creates, destroys, acquires and presents through the interposer's proxies
+  (its `vkGetDeviceProcAddr`), waits for the device through its `vkDeviceWaitIdle` before a rebuild, and makes the
+  window's surface again through the interposer's exported `vkCreateWin32SurfaceKHR` once the device is told, since
+  sl_hooks.h lists the surface among the mandatory Vulkan hooks and DLSS-G's plugin hooks it.
+- DLSS-G refuses sRGB back buffers ("SRGB format cannot be used for swap-chain back buffers when using sl.dlss_g").
+  Streamline's are UNORM; the scene draws into sRGB canvases of its own and copies each into Streamline's back buffer
+  at the frame's end, bit for bit (`vkCmdCopyImage` between formats of the same texel size).
+- Reflex goes through Streamline: low latency mode at start, a frame token numbered by the scene each frame
+  (`slGetNewFrameToken`), `slReflexSleep` and the simulation, render submit and present markers on it, the same token
+  as Ray Reconstruction's constants and tags. The native `--reflex` and the present wait are left out with it, and the
+  shown window keeps FIFO (a mailbox at twice the refresh would throw away the frames it makes).
+- DLSS-G wants the depth as a depth buffer holds it (`kBufferTypeDepth`): the trace writes it beside the depth along
+  the view, from the projection (`-M33 + M43 / depth`). Ray Reconstruction keeps the depth along the view when both
+  are tagged (sl.dlss_d's dlss_dEntry.cpp prefers `kBufferTypeLinearDepth`).
+- `DLSSGState::numFramesActuallyPresented` is the frames presented for each frame drawn (the guide's section 14), not
+  a running count. In a hidden window it stayed 1: DLSS-G ran its network (2.6 GB of VRAM, its passes on the GPU) but
+  presented no generated frame. In a shown window (`--demo`, 1920x1080, Max out) it read 1.90–1.92, last 2, status
+  ok, with FIFO and with a mailbox alike. Measured with the live window also on the GPU, which by itself took the
+  native 4K trace from 7.2 to about 14 ms (the build before this change measured the same, twice).
+- Turned off before the swapchain is made again and for ten frames after, as the Godot fork holds it.
+- No HUD-less or UI tags yet: the cards and captions drawn over the picture are interpolated with the scene's motion.
+  *To verify*: Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show, and the
+  cards over generated frames.
+
 ## Known problems
 
 - (Fixed on delta-face) A phone page whose sound had not started sent a recording of 0.00 s, and Whisper wrote a
