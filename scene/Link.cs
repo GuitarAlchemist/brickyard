@@ -628,6 +628,7 @@ internal sealed class Link(Func<double> clock)
         SceneModulePicking.SelfTest(Check);
         FreeCamera.SelfTest(Check);
         KnotFloor.SelfTest(Check);
+        HallShell.SelfTest(Check, Stage.LowFragmentShader);
         Streamline.SelfTest(Check);
         Cinematic.SelfTest(Check);
         ToolWheel.SelfTest(Check);

@@ -161,7 +161,7 @@ internal static unsafe class Stage
     // The Low lighting: Flat's three lights, with rounded edges, each material's highlights and reflections of the hall
     // (Material in Mesh.cs), the robot's shadow and the dark where things meet the floor, and a shoulder for what grows
     // too bright.
-    private const string LowFragmentShader = """
+    internal const string LowFragmentShader = """
         #version 450
         layout(location = 0) in vec3 vNormal;
         layout(location = 1) in vec3 vColor;
@@ -500,6 +500,13 @@ internal static unsafe class Stage
             // A pool of light around the robot; the hall falls into the dark beyond it and above it. The knots' floor
             // has its own light over its tables (KnotFloor), its edge fading over 80 cm.
             float pool = 1.0 - smoothstep(0.8, 6.0, length(vWorld.xz - vec2(0.0, -0.3)));
+            // A smaller pool under each pendant lamp over the hall's floor (HallShell.FloorLamps), below the lamps.
+            vec2 lamps[4] = vec2[](vec2(-3.2, -0.6), vec2(0.0, 1.6), vec2(3.0, -0.6), vec2(-3.2, 3.4));
+            for (int i = 0; i < 4; i++)
+            {
+                pool = max(pool, 0.7 * (1.0 - smoothstep(0.4, 3.4, length(vWorld.xz - lamps[i]))) * (1.0 - smoothstep(3.6, 4.4, vWorld.y)));
+            }
+
             float knots = (1.0 - smoothstep(0.0, 0.8, box(vWorld.xz - vec2(5.075, -1.2), vec2(1.17, 2.1)))) * smoothstep(1.8, 2.0, vWorld.y);
             pool = max(pool, 0.9 * knots);
             float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
@@ -1572,6 +1579,9 @@ internal static unsafe class Stage
         var materialDir = quality == Quality.Low && !args.Contains("--no-textures") ? MaterialTextures.Find(Option(args, "--textures")) : null;
         var hallVertices = Brickwork.Build(photographed: materialDir is not null);
         var hall = new Mesh(device, physical, [.. hallVertices, .. KnotFloor.Build(photographed: materialDir is not null)]);
+        // The hall closed round (HallShell): walls, ceiling, windows and lamps, drawn but not traced.
+        var (shellVertices, glassVertices, bulbVertices) = HallShell.Build(photographed: materialDir is not null);
+        var (shell, shellGlass, shellBulbs) = (new Mesh(device, physical, shellVertices), new Mesh(device, physical, glassVertices), new Mesh(device, physical, bulbVertices));
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
         var knotsPath = KnotFloor.Path(Option(args, "--marins"));
         var marins = KnotFloor.Load(knotsPath);
@@ -3680,6 +3690,10 @@ internal static unsafe class Stage
                 // The hall last: what stands in front of the floor and the wall is already in the depth buffer, so
                 // their fragments hidden behind it are never shaded (nor their rays traced).
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                // The shell after it, out of the traced structure: the key light still reaches the hall through it.
+                DrawUntraced(cb, layout, shell, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                DrawUntraced(cb, layout, shellGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
+                DrawUntraced(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
 
                 // Path traced, the picture goes over what the meshes drew, whose depth stays for the screens after.
                 if (tracer is not null && pathTracing) tracer.Composite(cb, splashPipeline, splashLayout);
@@ -4293,6 +4307,9 @@ internal static unsafe class Stage
         }
         hall.Dispose();
         knotRopes.Dispose();
+        shell.Dispose();
+        shellGlass.Dispose();
+        shellBulbs.Dispose();
         foreach (var gallery in knots.Values)
         {
             gallery.Dispose();
@@ -4454,6 +4471,12 @@ internal static unsafe class Stage
     private static void Draw(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
     {
         Rays?.Remember(mesh, push);
+        DrawUntraced(cb, layout, mesh, push);
+    }
+
+    // Drawn, but left out of the next frame's traced structure: it casts no traced shadow nor occlusion (HallShell).
+    private static void DrawUntraced(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
+    {
         cb.PushConstants(layout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(Push)));
         cb.BindVertexBuffer(0, mesh.Buffer);
         cb.Draw(mesh.Count, 1, 0, 0);
