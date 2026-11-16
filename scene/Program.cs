@@ -1987,15 +1987,16 @@ internal static unsafe class Stage
         var origamiFilm = origamiPlay is null ? null : new OrigamiFilm(camera, origamiPlay, origamiSeconds);
         var filmAsked = false; // the film's game asked of the cabinet
         var hud = filmDir is null; // the window's buttons and cards; a film shows none
-        // While nobody moves the camera it tours the hall (IdleTour), and while nobody plays the small robot plays PARSEC
-        // at the cabinet, silent, the wall showing its game; --no-tour and --no-arcade-robot leave them out, as films and
-        // shots do. --tour-after S starts the tour after S seconds instead of 25, for captures.
+        // While nobody moves the camera it tours the hall (IdleTour); --no-tour leaves it out, as films and shots do.
+        // --tour-after S starts the tour after S seconds instead of 25, for captures. PARSEC is a third party's page, fetched
+        // from its site and run in the scene, so nothing fetches it until asked: a click on the cabinet, or --arcade-robot,
+        // with which the small robot plays it at the cabinet while nobody plays, silent, the wall showing its game.
         var tour = new IdleTour(camera, () => cabinet.Broadcasting)
         {
             After = double.TryParse(Option(args, "--tour-after"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var tourAfter) ? tourAfter : IdleTour.IdleSeconds,
         };
         var touring = filmDir is null && !demo && !args.Contains("--no-tour");
-        var robotPlays = filmDir is null && !demo && !args.Contains("--no-arcade-robot");
+        var robotPlays = filmDir is null && !demo && args.Contains("--arcade-robot");
         var robotAt = 0.0; // when the robot may next take the cabinet
         var arcadePlayer = new ArcadePlayer();
         var filmAtStart = args.Contains("--cinematic") || Option(args, "--cinematic-from") is not null;

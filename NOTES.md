@@ -1290,6 +1290,9 @@ brick wall whenever someone, a person or the robot, plays.
   gives the cabinet back to the robot 15 s later. A game that ends or cannot start is tried again a minute later.
 - The wall: a 1.04 by 0.78 m screen in a dark frame between the clocks of Ottawa and Paris, fed the cabinet's frames,
   shown only while a game runs, whole in the view in front of Delta.
+- (0.7.0) The robot plays only with `--arcade-robot`: brutal's review of the release found the window fetching and
+  running a third party's page at every start without a click, which neither the notes nor THIRD_PARTY.md said, and
+  the user chose that nothing fetch it until asked. A click on the cabinet still plays it.
 - `--no-tour` and `--no-arcade-robot` leave them out, as `--demo` and films do; `--tour-after S` starts the tour sooner;
   `--peek DIR` with `--seconds` saves a PNG every 4 s of a plain run. Hidden, 1280x720, `--tour-after 6`, 52 s: the
   robot's game ran from the splash, the tour went Delta, hall, cabinet, wall, Gaia; frame p95 17 ms, max 33 ms.

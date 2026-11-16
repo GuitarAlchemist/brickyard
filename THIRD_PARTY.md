@@ -45,9 +45,13 @@ Ollama and qwen3:8b are not used.
 
 ## Fetched, never shipped
 
-The arcade cabinet plays PARSEC, a third party's game at https://parsec.games.bu.app/. Its page is fetched from that
-site each time the game starts and its script runs in the scene; nothing of it is copied into this repository or the
-release, and the scene keeps only its high score (`%LOCALAPPDATA%\delta\arcade-storage.json`).
+The arcade cabinet plays PARSEC, a third party's game at https://parsec.games.bu.app/, only when you click the
+cabinet: the scene contacts that site at no other time. Each click fetches its page from the site, and its script runs
+in the scene with no network and nothing beyond the screen, the sound, the keys and its high score. This repository
+holds no licence for it: the game is played from its site, as in a browser. `--arcade-robot` lets the small robot
+play it while nobody does, which fetches the page when the window starts and again a minute after each game. Nothing
+of it is copied into this repository or the release, and the scene keeps only its high score
+(`%LOCALAPPDATA%\delta\arcade-storage.json`).
 
 The hall's photographed materials are Poly Haven's scans, CC0 1.0 (https://polyhaven.com/license):
 `brick_wall_001` (Rob Tuytel, Dimitrios Savva), `concrete_floor_worn_001` and `concrete_wall_003` (Dimitrios Savva, Rico
