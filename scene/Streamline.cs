@@ -361,6 +361,7 @@ internal static unsafe class Streamline
     public const uint BufferAlbedo = 7;
     public const uint BufferSpecularAlbedo = 8;
     public const uint BufferNormalRoughness = 14;
+    public const uint BufferSpecularHitDistance = 42;
     public const uint BufferLinearDepth = 49;
 
     // The flags of Preferences (sl_core_types.h's PreferenceFlags).

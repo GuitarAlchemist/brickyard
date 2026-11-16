@@ -1560,9 +1560,17 @@ Measured hidden on the RTX 5080, 3840x2054, traced at 1920x1027:
 - Max out, `--present-wait`: native 50 fps, frame p95 33.6 ms, a frame ahead for 1193 of 1339 frames; with Ray
   Reconstruction 59 fps, p95 17.8 ms, never a frame ahead. The path tracer's GPU time 13.6 → 6.5 ms.
 - 2560x1440 quality: traced at 1707x960, 3.8 ms.
-- The jitter's sign, at a fixed view (`--view 1`): as the sample's offset from the pixel's centre (+1) the bricks are
-  visibly sharper than with `--dlss-jitter-flip`, the mean absolute Laplacian 4.0 against 3.4 (and 3.3 against 2.9 on
-  another frame). A first comparison with the camera moving had suggested the opposite.
+- The jitter's sign: DLSS takes minus the sample's offset from the pixel's centre. NVIDIA's own Vulkan sample
+  (github.com/nvpro-samples/vk_denoise_dlssrr, given by the author) jitters its rays by `halton - 0.5` and passes
+  `InJitterOffset = -jitter`; Streamline's DLSS-RR plugin hands `jitterOffset` to NGX unchanged. Zoomed 4× at a fixed
+  view (`--view 1`), that sign keeps the drawers' thin highlights and the bricks' grain crisp; the other
+  (`--dlss-jitter-flip`) goes soft. The first commit had the other sign: a whole-image Laplacian (4.0 against 3.4) took
+  its noise for detail, and a comparison with the camera moving fooled the eye.
+
+Also from that sample: the surroundings (where no surface is) move as a point at infinity along the ray (`w = 0`),
+with their colour tone mapped as their albedo and a zero normal; and the first bounce's length when it is a reflection
+(0 when diffuse) is tagged as the specular hit distance (`kBufferTypeSpecularHitDistance`, with
+`DLSSDOptions::worldToCameraView`), which Ray Reconstruction uses for reflections in motion.
 
 In manual hooking the host must present through Streamline, or its common plugin's once-a-frame bookkeeping and
 collection never runs ("presentCommon() was not observed", logged at the first evaluation). The scene presents

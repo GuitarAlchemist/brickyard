@@ -87,17 +87,20 @@ internal sealed unsafe class PathTracer : IDisposable
         VkFormat.R16G16B16A16SFloat, // 24: its normal, and its roughness in w
         VkFormat.R16G16B16A16SFloat, // 25: its light, one path's, unfiltered
         VkFormat.R16G16B16A16SFloat, // 26: Ray Reconstruction's picture
+        VkFormat.R32SFloat, // 27: how far the first bounce went when it was a reflection (0 when diffuse)
     ];
 
     private const int Output = 12; // the picture's index in Images
-    private const int Motion = 13, Depth = 14, Diffuse = 15, Specular = 16, NormalRoughness = 17, Colour = 18, Upscaled = 19;
+    private const int Motion = 13, Depth = 14, Diffuse = 15, Specular = 16, NormalRoughness = 17, Colour = 18, Upscaled = 19, SpecularHit = 20;
 
     // Ray Reconstruction (--dlss): DLSS's mode (1 performance ... 6 DLAA, Streamline.Modes), 0 when off. The trace
     // then runs at the size DLSS asks for that mode, one jittered path a pixel without the frames kept or the filter,
     // and Ray Reconstruction denoises and upscales it to the window's size.
     public uint UpscaleMode { get; set; }
 
-    // +1, or -1 to try the jitter's other sign (--dlss-jitter-flip).
+    // DLSS takes the jitter as minus the sample's offset from the pixel's centre, as NVIDIA's own Vulkan sample passes
+    // it (vk_denoise_dlssrr: InJitterOffset = -jitter; Streamline hands jitterOffset to NGX as it is). -1 tries the
+    // other sign (--dlss-jitter-flip): thin edges and the bricks' grain then go soft.
     public float JitterSign { get; set; } = 1f;
 
     public bool Upscaling { get; private set; }
@@ -365,7 +368,7 @@ internal sealed unsafe class PathTracer : IDisposable
                 ClipToLensClip = SN.Matrix4x4.Identity,
                 ClipToPrevClip = inverse * prior,
                 PrevClipToClip = fromPrior * viewProj,
-                JitterOffset = new SN.Vector2(jx - 0.5f, jy - 0.5f) * JitterSign,
+                JitterOffset = new SN.Vector2(0.5f - jx, 0.5f - jy) * JitterSign,
                 MvecScale = new(1f / Width, 1f / Height),
                 CameraPos = eye,
                 CameraUp = new(toWorld.M21, toWorld.M22, toWorld.M23),
@@ -393,10 +396,10 @@ internal sealed unsafe class PathTracer : IDisposable
                 WorldToCameraView = view,
                 CameraViewToWorld = toWorld,
             };
-            var resources = stackalloc Streamline.Resource[7];
-            int[] tagged = [Colour, Upscaled, Depth, Motion, Diffuse, Specular, NormalRoughness];
+            var resources = stackalloc Streamline.Resource[8];
+            int[] tagged = [Colour, Upscaled, Depth, Motion, Diffuse, Specular, NormalRoughness, SpecularHit];
             uint[] types = [Streamline.BufferScalingInputColor, Streamline.BufferScalingOutputColor, Streamline.BufferLinearDepth, Streamline.BufferMotionVectors,
-                Streamline.BufferAlbedo, Streamline.BufferSpecularAlbedo, Streamline.BufferNormalRoughness];
+                Streamline.BufferAlbedo, Streamline.BufferSpecularAlbedo, Streamline.BufferNormalRoughness, Streamline.BufferSpecularHitDistance];
             var tags = new Streamline.ResourceTag[tagged.Length];
             for (var i = 0; i < tagged.Length; i++)
             {
@@ -729,6 +732,7 @@ internal sealed unsafe class PathTracer : IDisposable
         layout(set = 0, binding = 24, rgba16f) uniform image2D rrNormal;
         layout(set = 0, binding = 25, rgba16f) uniform image2D rrColour;
         layout(set = 0, binding = 26, rgba16f) uniform image2D rrUpscaled;
+        layout(set = 0, binding = 27, r32f) uniform image2D rrSpecularHit;
         layout(push_constant) uniform Pass { int parity; int pass; int final; int pad; } pc;
 
         // This frame's (now) or last frame's images, the two swapping each frame.
@@ -1005,14 +1009,16 @@ internal sealed unsafe class PathTracer : IDisposable
             return clamp(spec / max(spec + diff, 1e-4), 0.1, 0.9);
         }
 
-        // A direction to go on from s, seen from v, and the throughput's factor (reflection over the pdf); false to stop.
-        bool bounce(Surface s, vec3 v, out vec3 l, out vec3 weight)
+        // A direction to go on from s, seen from v, and the throughput's factor (reflection over the pdf), and whether
+        // it was the specular lobe that chose it; false to stop.
+        bool bounce(Surface s, vec3 v, out vec3 l, out vec3 weight, out bool specular)
         {
             float chance = specularChance(s, v);
             vec3 tt, bb;
             across(s.n, tt, bb);
             float u1 = rnd(), u2 = rnd();
-            if (rnd() < chance)
+            specular = rnd() < chance;
+            if (specular)
             {
                 float a2 = s.alpha * s.alpha;
                 float c = sqrt((1.0 - u2) / (1.0 + (a2 - 1.0) * u2));
@@ -1067,6 +1073,10 @@ internal sealed unsafe class PathTracer : IDisposable
             return light;
         }
 
+        // How far the first path's first bounce went from the eye's surface when it was a reflection, for Ray
+        // Reconstruction (0 when it was diffuse, 1000 when it left the hall); below 0 until a path sets it.
+        float specularHit = -1.0;
+
         // One path from s, met by the ray d from the eye: the light it carries back.
         vec3 path(Surface s, vec3 d, int bounces)
         {
@@ -1079,9 +1089,17 @@ internal sealed unsafe class PathTracer : IDisposable
             {
                 light += through * direct(at, v);
                 vec3 l, weight;
-                if (!bounce(at, v, l, weight))
+                bool specular;
+                if (!bounce(at, v, l, weight, specular))
                 {
+                    specularHit = specularHit < 0.0 && b == 0 ? 0.0 : specularHit;
                     break;
+                }
+
+                bool first = specularHit < 0.0 && b == 0;
+                if (first && !specular)
+                {
+                    specularHit = 0.0;
                 }
 
                 through *= weight;
@@ -1100,10 +1118,12 @@ internal sealed unsafe class PathTracer : IDisposable
                 spread += 0.02 + at.alpha * 0.2;
                 if (!hit(at.p + at.face * 0.002, l, 60.0, spread, true, next))
                 {
+                    specularHit = first && specular ? 1000.0 : specularHit;
                     light += through * hall(l);
                     break;
                 }
 
+                specularHit = first && specular ? next.dist : specularHit;
                 light += through * next.glow;
                 spread += next.dist * at.alpha;
                 at = next;
@@ -1128,12 +1148,12 @@ internal sealed unsafe class PathTracer : IDisposable
             return f0 * max(0.0, scale) + max(0.0, bias);
         }
 
-        // Ray Reconstruction's guides for a pixel: its light, where its surface (before, last frame's place) was a
-        // frame ago, in pixels from where the jittered ray met it now, its depth along the view, its colours, its
-        // normal and roughness.
-        void guides(ivec2 px, vec2 jitter, vec3 light, vec3 before, float depth, vec3 diffuse, vec3 specular, vec3 n, float roughness)
+        // Ray Reconstruction's guides for a pixel: its light, where its surface (before, last frame's place; w 0 for a
+        // direction, the surroundings at infinity) was a frame ago, in pixels from where the jittered ray met it now,
+        // its depth along the view, its colours, its normal and roughness, and its first reflection's length.
+        void guides(ivec2 px, vec2 jitter, vec3 light, vec4 before, float depth, vec3 diffuse, vec3 specular, vec3 n, float roughness, float hitDistance)
         {
-            vec4 clip = t.prevViewProj * vec4(before, 1.0);
+            vec4 clip = t.prevViewProj * before;
             vec2 motion = clip.w > 0.0 ? (clip.xy / clip.w * 0.5 + 0.5) * t.size.xy - (vec2(px) + jitter) : vec2(0.0);
             imageStore(rrMotion, px, vec4(motion, 0.0, 0.0));
             imageStore(rrDepth, px, vec4(depth));
@@ -1141,6 +1161,7 @@ internal sealed unsafe class PathTracer : IDisposable
             imageStore(rrSpecular, px, vec4(specular, 1.0));
             imageStore(rrNormal, px, vec4(n, roughness));
             imageStore(rrColour, px, vec4(light, 1.0));
+            imageStore(rrSpecularHit, px, vec4(hitDistance));
         }
 
         void main()
@@ -1175,7 +1196,10 @@ internal sealed unsafe class PathTracer : IDisposable
             {
                 if (upscaled)
                 {
-                    guides(px, jitter, t.background.rgb, eye + d * 1000.0, 1000.0, vec3(0.0), vec3(0.0), -d, 1.0);
+                    // As NVIDIA's sample: the surroundings move as a point at infinity along the ray, and their colour,
+                    // tone mapped, stands as their albedo, so that Ray Reconstruction keeps them as they are.
+                    vec3 sky = t.background.rgb;
+                    guides(px, jitter, sky, vec4(d, 0.0), 1000.0, sky / (1.0 + max(sky.r, max(sky.g, sky.b))), vec3(0.0), vec3(0.0), 0.0, 0.0);
                     return;
                 }
 
@@ -1203,8 +1227,8 @@ internal sealed unsafe class PathTracer : IDisposable
                 float l = luma(seen);
                 seen *= l > 24.0 ? 24.0 / l : 1.0;
                 vec3 f0 = mix(vec3(s.f0), s.base, s.metal);
-                guides(px, jitter, haze(seen, s.p), s.before, s.dist * dot(d, t.forward.xyz),
-                    s.base * (1.0 - s.metal), specularAlbedo(f0, s.alpha, max(dot(s.n, -d), 1e-4)), s.n, sqrt(s.alpha));
+                guides(px, jitter, haze(seen, s.p), vec4(s.before, 1.0), s.dist * dot(d, t.forward.xyz),
+                    s.base * (1.0 - s.metal), specularAlbedo(f0, s.alpha, max(dot(s.n, -d), 1e-4)), s.n, sqrt(s.alpha), max(specularHit, 0.0));
                 return;
             }
 
