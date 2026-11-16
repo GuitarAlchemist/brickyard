@@ -607,9 +607,34 @@ internal static unsafe class Streamline
         Extent = new Extent { Width = (uint)width, Height = (uint)height },
     };
 
+    // Frame generation's picture without the window's cards and buttons (HUD-less colour), so that it moves the hall
+    // between two frames and leaves the cards where they stand. The image is the canvas between the hall's pass and
+    // the cards': tagged eOnlyValidNow, Streamline copies it in commandBuffer at once, before the cards are drawn over
+    // it. layout is the image's Vulkan layout there. Nothing while frame generation is off.
+    public static string? TagHudless(nint commandBuffer, nint image, nint memory, nint view, int width, int height, uint format, uint layout)
+    {
+        if (!generating || frameToken == 0)
+        {
+            return null;
+        }
+
+        var viewport = new ViewportHandle { Base = new BaseStructure(ViewportHandleType, 1), Value = 0 };
+        var resource = Image(image, memory, view, width, height, format, UsageColorAttachment | UsageTransferSrc);
+        resource.State = layout;
+        var tag = Tag(&resource, BufferHudlessColor, width, height);
+        tag.Lifecycle = 0; // eOnlyValidNow
+        var r = ((delegate* unmanaged<nint, ViewportHandle*, ResourceTag*, uint, nint, int>)Export("slSetTagForFrame"))(frameToken, &viewport, &tag, 1, commandBuffer);
+        return r == 0 ? null : $"slSetTagForFrame (HUD-less colour): {ResultName(r)}";
+    }
+
+    // VkImageUsageFlagBits, as sl::Resource's usage takes them.
+    public const uint UsageTransferSrc = 0x1;
+    public const uint UsageColorAttachment = 0x10;
+
     // sl_core_types.h's buffer types, those Ray Reconstruction and frame generation are given.
     public const uint BufferDepth = 0;
     public const uint BufferMotionVectors = 1;
+    public const uint BufferHudlessColor = 2;
     public const uint BufferScalingInputColor = 3;
     public const uint BufferScalingOutputColor = 4;
     public const uint BufferAlbedo = 7;

@@ -1974,9 +1974,15 @@ and tags, at most `--dlss-g-frames` (1 by default, twice the frames; up to 3 on 
   would restart the brain. Instead, a shown window takes `--dlss-g` by itself when the Streamline folder also holds a
   file named `frame-generation`. `--no-dlss-g` leaves it out, and so does removing the file. With it, the live window
   loses the present wait and the native Reflex even while path tracing is off.
-- No HUD-less or UI tags yet: the cards and captions drawn over the picture are interpolated with the scene's motion.
-  *To verify*: Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show, and the
-  cards over generated frames.
+- HUD-less colour (2026-11-15, from the author's list of what waits): with frame generation on, the frame is drawn in
+  two render passes compatible with the one pass it had. The hall's pass ends with the canvas as a colour attachment;
+  the canvas is tagged `kBufferTypeHUDLessColor` there, `eOnlyValidNow`, so that Streamline copies it in the command
+  buffer before the cards and captions are drawn over it by the second pass. With 4x MSAA, the default quality on the
+  RTX 5080, the samples are stored between the two passes (the MSAA image is no longer transient then) and each pass
+  resolves them. Hidden, `--demo --path-tracing --dlss-g`, 1920x1080: the tag is accepted, status ok, 57 fps against
+  56 before. No UI colour and alpha (`kBufferTypeUIColorAndAlpha`) yet.
+  *To verify*: in a shown window, the cards and captions held still over generated frames (a hidden window presents
+  none), and Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show.
 
 ## Known problems
 

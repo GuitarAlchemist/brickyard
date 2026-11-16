@@ -1210,6 +1210,60 @@ internal static unsafe class Stage
             Dependencies = &dependency,
         }, null);
 
+        // Frame generation draws a frame in two passes, compatible with renderPass and its framebuffers: the hall
+        // (hallPass), which leaves the canvas as a colour attachment so that Streamline can copy it as the HUD-less colour,
+        // then the cards and buttons over it (cardsPass), which ends as renderPass does. With MSAA the samples are kept
+        // between the two, the hall's pass resolves them into the canvas, and the cards' pass loads them and resolves
+        // them again, cards and all.
+        var hudless = frameGeneration;
+        var hallPass = default(VkRenderPass);
+        var cardsPass = default(VkRenderPass);
+        if (hudless)
+        {
+            Span<VkAttachmentDescription> split = [attachments[0], attachments[1], attachments[2]];
+            if (msaa)
+            {
+                split[0].StoreOp = VkAttachmentStoreOp.Store;
+                split[2].FinalLayout = VkImageLayout.ColorAttachmentOptimal;
+            }
+            else
+            {
+                split[0].FinalLayout = VkImageLayout.ColorAttachmentOptimal;
+            }
+
+            hallPass = device.CreateRenderPass(new VkRenderPassCreateInfo
+            {
+                AttachmentCount = msaa ? 3 : 2,
+                Attachments = (VkAttachmentDescription*)Unsafe.AsPointer(ref split[0]),
+                SubpassCount = 1,
+                Subpasses = &subpass,
+                DependencyCount = 1,
+                Dependencies = &dependency,
+            }, null);
+            split[0].LoadOp = VkAttachmentLoadOp.Load;
+            split[0].InitialLayout = VkImageLayout.ColorAttachmentOptimal;
+            if (msaa)
+            {
+                split[0].StoreOp = VkAttachmentStoreOp.DontCare;
+                split[2].FinalLayout = VkImageLayout.PresentSrcKHR;
+            }
+            else
+            {
+                split[0].FinalLayout = VkImageLayout.PresentSrcKHR;
+            }
+
+            split[1].LoadOp = VkAttachmentLoadOp.DontCare; // the cards test no depth
+            cardsPass = device.CreateRenderPass(new VkRenderPassCreateInfo
+            {
+                AttachmentCount = msaa ? 3 : 2,
+                Attachments = (VkAttachmentDescription*)Unsafe.AsPointer(ref split[0]),
+                SubpassCount = 1,
+                Subpasses = &subpass,
+                DependencyCount = 1,
+                Dependencies = &dependency,
+            }, null);
+        }
+
         // Builds the swapchain at the window's size, with its depth buffer, image views, framebuffers and semaphores. It
         // is false while the window has no size, when it is minimised.
         bool Build()
@@ -1336,7 +1390,8 @@ internal static unsafe class Stage
                     ArrayLayers = 1,
                     Samples = samples,
                     Tiling = VkImageTiling.Optimal,
-                    Usage = VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.TransientAttachmentBit,
+                    // Frame generation keeps the samples from the hall's pass to the cards': not transient then.
+                    Usage = VkImageUsageFlags.ColorAttachmentBit | (hudless ? default : VkImageUsageFlags.TransientAttachmentBit),
                     SharingMode = VkSharingMode.Exclusive,
                     InitialLayout = VkImageLayout.Undefined,
                 }, null);
@@ -2835,6 +2890,8 @@ internal static unsafe class Stage
         var frame = 0;
         var generationHeld = 0; // frames left before frame generation may turn on again
         var generationStatus = uint.MaxValue; // DLSS-G's status as last printed
+        var hudlessFailed = false; // the HUD-less colour's tag failed once, and said so
+        var hudlessTagged = false; // it was tagged once, and said so
         var shot = 0;
         var last = filmDir is null ? clock.Elapsed.TotalSeconds : 0.0;
         var firstFrame = -1.0;
@@ -3514,9 +3571,10 @@ internal static unsafe class Stage
             cabinet.UploadAfterFence(cb, slot);
             clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
+            var splitCards = hudless && Streamline.Generating && !splashing; // the hall, then the cards, in two passes
             cb.BeginRenderPass(new VkRenderPassBeginInfo
             {
-                RenderPass = renderPass,
+                RenderPass = splitCards ? hallPass : renderPass,
                 Framebuffer = framebuffers[imageIndex],
                 RenderArea = new VkRect2D { Extent = extent },
                 ClearValueCount = 2,
@@ -3580,6 +3638,39 @@ internal static unsafe class Stage
                 cabinet.DrawScreens(cb, slot, viewProj);
                 if (wall.Showing == WallSource.Kind.Pong) pongWall?.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
                 else if (wall.Showing == WallSource.Kind.Session) sessionWall.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
+
+                if (splitCards)
+                {
+                    // The hall without its cards, copied by Streamline as frame generation's HUD-less colour, then the
+                    // cards' pass over the same canvas.
+                    cb.EndRenderPass();
+                    var canvas = images[imageIndex];
+                    cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
+                        [Barrier(canvas, VkImageLayout.ColorAttachmentOptimal, VkImageLayout.TransferSrcOptimal, VkAccessFlags.ColorAttachmentWriteBit, VkAccessFlags.TransferReadBit)]);
+                    var untagged = Streamline.TagHudless(cb.VkHandle, canvas.VkHandle, canvasMemory[imageIndex].VkHandle, views[imageIndex].VkHandle, (int)extent.Width, (int)extent.Height,
+                        (uint)surfaceFormat.Format, (uint)VkImageLayout.TransferSrcOptimal);
+                    if (untagged is not null && !hudlessFailed)
+                    {
+                        hudlessFailed = true;
+                        Console.WriteLine($"SCENE frame generation without its HUD-less colour: {untagged}");
+                    }
+                    else if (untagged is null && !hudlessTagged)
+                    {
+                        hudlessTagged = true;
+                        Console.WriteLine("SCENE frame generation: the cards drawn apart, the hall tagged as HUD-less colour");
+                    }
+
+                    cb.PipelineBarrier(VkPipelineStageFlags.TransferBit, VkPipelineStageFlags.ColorAttachmentOutputBit, VkDependencyFlags.None, [], [],
+                        [Barrier(canvas, VkImageLayout.TransferSrcOptimal, VkImageLayout.ColorAttachmentOptimal, VkAccessFlags.TransferReadBit, VkAccessFlags.ColorAttachmentReadBit | VkAccessFlags.ColorAttachmentWriteBit)]);
+                    cb.BeginRenderPass(new VkRenderPassBeginInfo
+                    {
+                        RenderPass = cardsPass,
+                        Framebuffer = framebuffers[imageIndex],
+                        RenderArea = new VkRect2D { Extent = extent },
+                    }, VkSubpassContents.Inline);
+                    cb.SetViewport(firstViewport: 0, [new VkViewport { Width = extent.Width, Height = extent.Height, MinDepth = 0f, MaxDepth = 1f }]);
+                    cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = extent }]);
+                }
 
                 if (shelf.Open && card is not null && cardTexture is not null)
                 {
@@ -4225,6 +4316,12 @@ internal static unsafe class Stage
         device.DestroyShaderModule(fragmentModule, null);
         Teardown();
         device.DestroyRenderPass(renderPass, null);
+        if (hudless)
+        {
+            device.DestroyRenderPass(hallPass, null);
+            device.DestroyRenderPass(cardsPass, null);
+        }
+
         if (frameGeneration)
         {
             Streamline.DestroySwapchain(swapchain.VkHandle);
