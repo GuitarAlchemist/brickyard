@@ -3,4 +3,3 @@ obj/
 *.exe
 dist/
 CLAUDE.local.md
-__pycache__/

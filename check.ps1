@@ -1,7 +1,7 @@
-# Runs every check CI runs, in its order: the plugin and the scripts, the brain, the remote, the hands, the scene, the
-# widgets and the agents' office (check-widgets.ps1), check-ears-flag.ps1's self-test and dev-deploy.ps1's guard. CI
-# runs this script, so a green run here is a green run there. Needs Go, Node, the .NET 10 SDK and Python on PATH; it
-# names the one missing.
+# Runs every check CI runs, in its order: the plugin and the scripts, the brain, the remote, the scene, the widgets and
+# the agents' office (check-widgets.ps1), check-ears-flag.ps1's self-test and dev-deploy.ps1's guard. CI runs this
+# script, so a green run here is a green run there. Needs Go, Node and the .NET 10 SDK on PATH; it names the one
+# missing.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 
@@ -15,7 +15,7 @@ function Step([string]$name, [scriptblock]$body) {
     }
 }
 
-foreach ($tool in 'go', 'gofmt', 'node', 'dotnet', 'python') {
+foreach ($tool in 'go', 'gofmt', 'node', 'dotnet') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         "CHECK FAIL $tool is not on PATH"
         exit 1
@@ -48,9 +48,6 @@ Push-Location (Join-Path $root 'remote')
 try { Step 'remote page logic' { node --test } }
 finally { Pop-Location }
 
-# The camera process's rules, without a camera: its tests need neither MediaPipe nor OpenCV.
-Step 'hands' { python (Join-Path $root 'hands/test_delta_hands.py') }
-
 Push-Location (Join-Path $root 'scene')
 try {
     Step 'scene restore' { dotnet restore --locked-mode -r win-x64 }
@@ -68,4 +65,4 @@ Step 'ears flag check' { powershell -NoProfile -ExecutionPolicy Bypass -File (Jo
 # dev-deploy.ps1 keeps the live window where it runs unless asked to move it, on made-up configs, building nothing.
 Step 'deploy guard' { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'check-deploy-guard.ps1') }
 
-'CHECK ok: plugin, brain, remote, hands, scene, widgets, the ears flag check and the deploy guard'
+'CHECK ok: plugin, brain, remote, scene, widgets, the ears flag check and the deploy guard'

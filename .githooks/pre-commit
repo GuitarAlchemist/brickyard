@@ -1,8 +1,8 @@
 #!/bin/sh
 # CI's checks on the parts a commit touches, run before it leaves the machine: gofmt, vet and the tests for the brain
 # and the remote (and the page's node tests), the build and selftest for the scene, the widget and office tests
-# (check-widgets.ps1), check-ears-flag.ps1's self-test, dev-deploy.ps1's guard (check-deploy-guard.ps1), the camera
-# process's tests, check-plugin.ps1 for the plugin and the marketplace. Enable once per clone:
+# (check-widgets.ps1), check-ears-flag.ps1's self-test, dev-deploy.ps1's guard (check-deploy-guard.ps1),
+# check-plugin.ps1 for the plugin and the marketplace. Enable once per clone:
 #   git config core.hooksPath .githooks
 set -e
 root=$(git rev-parse --show-toplevel)
@@ -51,10 +51,6 @@ fi
 if touches '^(dev-deploy\.ps1|check-deploy-guard\.ps1)'; then
 	cd "$root"
 	powershell -NoProfile -ExecutionPolicy Bypass -File check-deploy-guard.ps1 >/dev/null 2>&1 || { echo "pre-commit: dev-deploy.ps1's guard failed; run check-deploy-guard.ps1 to see why" >&2; exit 1; }
-fi
-if touches '^(hands/|brain/gesture\.go)'; then # the hands' tests read the brain's gestures
-	cd "$root"
-	python hands/test_delta_hands.py >/dev/null || { echo "pre-commit: the hands' tests failed" >&2; exit 1; }
 fi
 if touches '^(plugins/|\.claude-plugin/|check-plugin\.ps1)'; then
 	cd "$root"
