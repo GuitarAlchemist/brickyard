@@ -675,12 +675,22 @@ internal static unsafe class Stage
         }
 
         // NVIDIA Streamline (Streamline.cs) with --dlss: initialised before the instance and the device, whose extensions,
-        // features and queues it adds to. --dlss-g alone implies --dlss.
+        // features and queues it adds to. --dlss-g alone implies --dlss. A window shown (not --hidden) takes it by
+        // itself when NVIDIA's DLLs are in %LOCALAPPDATA%\delta\streamline, still each checked for NVIDIA's signature
+        // before anything loads (the author's choice, 2026-11-15: "oui fais l'option 1 et mets en live"); --no-dlss
+        // leaves it out.
         Streamline.Needs[] streamlineNeeds = [];
         var rayReconstruction = false; // DLSS-RR's functions bound once the device is told
-        if (args.Contains("--dlss") || args.Contains("--dlss-g"))
+        var streamlineHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "streamline");
+        var dlssByItself = !hidden && !args.Contains("--no-dlss") && File.Exists(Path.Combine(streamlineHome, "sl.interposer.dll"));
+        if (args.Contains("--dlss") || args.Contains("--dlss-g") || dlssByItself)
         {
-            var dir = Option(args, "--streamline") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "streamline");
+            var dir = Option(args, "--streamline") ?? streamlineHome;
+            if (dlssByItself && !args.Contains("--dlss") && !args.Contains("--dlss-g"))
+            {
+                Console.WriteLine($"SCENE streamline: by itself, NVIDIA's DLLs found in {dir} (--no-dlss leaves it out)");
+            }
+
             if (Streamline.Init(dir, args.Contains("--dlss-g") ? Streamline.FrameGeneration : Streamline.Upscaling, args.Contains("--streamline-log")) is { } why)
             {
                 Console.WriteLine($"SCENE streamline: not used ({why}) from {dir}");

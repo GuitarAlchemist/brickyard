@@ -1572,6 +1572,14 @@ with their colour tone mapped as their albedo and a zero normal; and the first b
 (0 when diffuse) is tagged as the specular hit distance (`kBufferTypeSpecularHitDistance`, with
 `DLSSDOptions::worldToCameraView`), which Ray Reconstruction uses for reflections in motion.
 
+The author then chose ("oui fais l'option 1 et mets en live") that the shown window takes Streamline by itself when
+NVIDIA's DLLs are in `%LOCALAPPDATA%\delta\streamline`, so that the live launch line stays as it is. That folder holds
+the SDK's `bin\x64` DLLs the scene loads (interposer, common, DLSS, Ray Reconstruction, frame generation, Reflex, PCL,
+the three NGX snippets, NvLowLatencyVk) and the two licences, copied byte for byte from
+`C:\tmp\godot-nvidia-dlss\streamline\sdk\bin\x64`, each signed by NVIDIA Corporation. Hidden runs (`--hidden`) take it
+only with `--dlss`; `--no-dlss` leaves it out of a shown window. Each start of the shown window then runs the NGX
+updater, as accepted.
+
 In manual hooking the host must present through Streamline, or its common plugin's once-a-frame bookkeeping and
 collection never runs ("presentCommon() was not observed", logged at the first evaluation). The scene presents
 through the interposer's `vkQueuePresentKHR` (its `vkGetDeviceProcAddr`, once the device is told), which runs
