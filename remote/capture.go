@@ -99,6 +99,9 @@ func startFFmpeg(ffmpeg string, args []string, exited func(error)) (func(), erro
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	if err := endWithMe(cmd.Process); err != nil {
+		fmt.Fprintln(os.Stderr, "delta-remote: ffmpeg may outlive the gateway:", err)
+	}
 	go func() { exited(cmd.Wait()) }()
 	return func() { cmd.Process.Kill() }, nil
 }

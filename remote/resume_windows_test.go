@@ -174,18 +174,11 @@ func fakeLauncher(folder string) {
 }
 
 var (
-	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
-	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
-	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
-	procIsProcessInJob           = kernel32.NewProc("IsProcessInJob")
-	procQueryInformationJob      = kernel32.NewProc("QueryInformationJobObject")
+	procIsProcessInJob      = kernel32.NewProc("IsProcessInJob")
+	procQueryInformationJob = kernel32.NewProc("QueryInformationJobObject")
 )
 
-const (
-	jobExtendedLimits = 9
-	jobKillOnClose    = 0x2000
-	jobBreakawayOK    = 0x800
-)
+const jobBreakawayOK = 0x800
 
 // newJob is a job object with these limit flags; JOBOBJECT_EXTENDED_LIMIT_INFORMATION is 144 bytes on amd64, its
 // LimitFlags after two 8-byte times.

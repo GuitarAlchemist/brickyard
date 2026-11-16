@@ -953,13 +953,37 @@ Still to verify:
 - a real Windows restart through the shortcut;
 - the tablet.
 
+## The gateway's ffmpeg ends with it (2026-11-16)
+
+The problem: stopping the gateway with `Stop-Process` left its ffmpeg running.
+- It was seen on 2026-10-23 and ended by hand.
+- That ffmpeg kept `err.log` open and went on capturing Delta's window for nobody.
+- A deploy also stops the gateway this way, with `-Force`. It does so only when no device is connected, and ffmpeg runs
+  only while one is, so a deploy rarely meets one.
+- What the job covers is a gateway stopped by hand or ending by a crash during a capture.
+
+The fix: the gateway now puts each ffmpeg it starts into a job object of its own, set to end its processes when its
+last handle closes.
+- The gateway holds the only handle and never closes it.
+- So Windows closes it when the gateway ends, however it ends, and the ffmpeg ends too.
+- If the job cannot be made, the error log says that ffmpeg may outlive the gateway, and the capture runs as before.
+
+A test checks the fix. It runs the test binary again as a stand-in gateway, which starts `ping` through
+`startFFmpeg`, then kills that gateway the way `Stop-Process -Force` does.
+- **Before the change:** the `ping` ran on, and the test failed.
+- **Now:** it ends within 5 s.
+- **Under a mutation:** with the job's kill-on-close flag removed, the test fails again.
+
+One gap remains. Between ffmpeg's start and its entry into the job, there is a moment in which the gateway could end
+without it.
+
+Still to verify live: a device connected, so that ffmpeg captures, then the gateway stopped with `Stop-Process -Force`,
+and no ffmpeg left behind.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
   (Cloudflare refuses to relay to them), so that guest gets no video.
-- Stopping the gateway with `Stop-Process` leaves its ffmpeg running, which keeps `err.log` open and goes on
-  capturing Delta's window for nobody, seen on 2026-10-23 and ended by hand. A job object would end it with the
-  gateway.
 - With the headset and the phone both open, each microphone sends its own copy of a sentence, 0.1 to 0.5 s apart. Whisper
   writes the two recordings differently (« Aïta, on ne sait quoi ensuite ? » and « Delta, on fait quoi ensuite ? »), or
   one cuts it where the other does not, so the 4-in-5 rule drops none of them, seen live on 2026-10-23: two
