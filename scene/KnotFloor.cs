@@ -279,7 +279,8 @@ internal static class KnotFloor
 
     // Where a knot lies: its table, the world directions its drawing's x and y take, already scaled, its centre in the
     // drawing and in the world, and the length of table it takes.
-    internal readonly record struct Lay(int Table, SN.Vector3 X, SN.Vector3 Y, float Scale, SN.Vector3 Centre, SN.Vector3 Origin, float Along, float Across)
+    // Slot: the length of table the knot has to itself, its own and half the gap to each neighbour (its card's room).
+    internal readonly record struct Lay(int Table, SN.Vector3 X, SN.Vector3 Y, float Scale, SN.Vector3 Centre, SN.Vector3 Origin, float Along, float Across, float Slot)
     {
         public SN.Vector3 World(SN.Vector3 p) => Origin + (X * (p.X - Centre.X)) + (Y * (p.Y - Centre.Y)) + (SN.Vector3.UnitY * Scale * p.Z);
     }
@@ -485,18 +486,36 @@ internal static class KnotFloor
             return (Knot: k, Scale: scale, Turned: turned, Along: along, Across: across, Centre: (lo + hi) / 2, Low: lo.Z);
         }).ToArray();
 
+        // Where the deck's order passes to the second table: where the fuller of the two tables is least full, so that
+        // neither is crowded while the other has room.
+        float Used(int from, int to) => Enumerable.Range(from, to - from).Sum(i => sized[i].Along + MinGap);
+        var split = -1;
+        var best = float.MaxValue;
+        for (var s = 0; s <= sized.Length; s++)
+        {
+            var fill = Tables.Length < 2
+                ? s == sized.Length ? Used(0, s) / Tables[0].Length : float.MaxValue
+                : MathF.Max(Used(0, s) / Tables[0].Length, Used(s, sized.Length) / Tables[1].Length);
+            if (fill <= 1f && fill < best)
+            {
+                (split, best) = (s, fill);
+            }
+        }
+
+        if (split < 0)
+        {
+            throw new InvalidOperationException($"the {sized.Length} knots do not fit on the tables");
+        }
+
+        Fill = best;
         var lays = new Lay[sized.Length];
         var next = 0;
         for (var t = 0; t < Tables.Length && next < sized.Length; t++)
         {
             var table = Tables[t];
             var first = next;
-            var used = 0f;
-            while (next < sized.Length && used + sized[next].Along + MinGap <= table.Length)
-            {
-                used += sized[next].Along + MinGap;
-                next++;
-            }
+            next = t == 0 ? split : sized.Length;
+            var used = Used(first, next);
 
             var gap = (table.Length - (used - ((next - first) * MinGap))) / Math.Max(1, next - first);
             var at = 0f;
@@ -516,13 +535,16 @@ internal static class KnotFloor
 
                 var depth = LedgeDepth + 0.02f + ((table.Depth - LedgeDepth - BackMargin - 0.02f) / 2);
                 var origin = table.Start + (table.Right * at) + (table.Away * depth) + (SN.Vector3.UnitY * ((0.0005f - (low * s.Scale)) + 0f));
-                lays[i] = new(t, x, y, s.Scale, s.Centre with { Z = 0f }, origin, s.Along, s.Across);
+                lays[i] = new(t, x, y, s.Scale, s.Centre with { Z = 0f }, origin, s.Along, s.Across, s.Along + gap);
                 at += (gap / 2) + (s.Along / 2);
             }
         }
 
-        return next == sized.Length ? lays : throw new InvalidOperationException($"{sized.Length - next} knots do not fit on the tables");
+        return lays;
     }
+
+    // How full the fuller table is, of its length, after the last Layout: knots and the least gap between them.
+    internal static float Fill { get; private set; }
 
     // The knots as rope on the tables: each rope laid, each post or ring turned in wood. Language-free.
     public static Vertex[] BuildKnots(Marins m)
@@ -580,7 +602,7 @@ internal static class KnotFloor
         }
 
         var lays = Layout(m);
-        const float tilt = 0.85f; // radians the card leans back from upright, towards the eye above it
+        const float tilt = 1.05f; // radians the card leans back from upright, towards the eye above it, low enough to show the knot behind
         for (var i = 0; i < m.Knots.Length; i++)
         {
             var (k, lay) = (m.Knots[i], lays[i]);
@@ -591,23 +613,27 @@ internal static class KnotFloor
                 "bends" => fr ? "Ajut" : "Bend",
                 _ => fr ? "Amarrage" : "Hitch",
             };
-            var numbers = !k.Verified
-                ? fr ? "IX ne trouve pas les chiffres du diaporama" : "IX does not find the deck's numbers"
-                : fr ? $"{k.Crossings} croisements · vrille {k.Writhe} · jeu {Decimal(k.Clearance)} diam."
-                : $"{k.Crossings} crossings · writhe {k.Writhe} · clearance {Decimal(k.Clearance)} diam.";
+            var (numbers, clearance) = !k.Verified
+                ? (fr ? "IX ne trouve pas" : "IX does not find", fr ? "les chiffres du diaporama" : "the deck's numbers")
+                : fr ? ($"{k.Crossings} croisements · vrille {k.Writhe}", $"jeu {Decimal(k.Clearance)} diamètre")
+                : ($"{k.Crossings} crossings · writhe {k.Writhe}", $"clearance {Decimal(k.Clearance)} diameter");
             var closure = (fr ? "refermé : " : "closed: ") + SubscriptsAll(fr ? k.ClosureFr : k.ClosureEn);
-            var width = MathF.Min(lay.Along + 0.03f, 0.4f);
+            // As wide as the knot's slot allows, and tall enough to be read from the stair's top: five lines, the name
+            // the largest, lettered finely (Letter's raster at 3 times its usual size).
+            var width = MathF.Min(lay.Slot - 0.03f, 0.42f);
+            var text = width - 0.024f;
             var local = new List<Vertex>();
-            Boxes.Add(local, new(0f, 0.045f, -0.004f), new(width, 0.09f, 0.008f), card);
-            Label(local, family, new(0f, 0.077f, 0.001f), 0.012f, width - 0.02f, dim);
-            Label(local, fr ? k.Fr : k.En, new(0f, 0.057f, 0.001f), 0.022f, width - 0.02f, ink);
-            Label(local, numbers, new(0f, 0.033f, 0.001f), 0.012f, width - 0.02f, k.Verified ? dim : warn);
-            Label(local, closure, new(0f, 0.015f, 0.001f), 0.012f, width - 0.02f, dim);
+            Boxes.Add(local, new(0f, 0.06f, -0.004f), new(width, 0.12f, 0.008f), card);
+            Label(local, family, new(0f, 0.106f, 0.001f), 0.013f, text, dim);
+            Label(local, fr ? k.Fr : k.En, new(0f, 0.083f, 0.001f), 0.026f, text, ink);
+            Label(local, numbers, new(0f, 0.056f, 0.001f), 0.0155f, text, k.Verified ? dim : warn);
+            Label(local, clearance, new(0f, 0.036f, 0.001f), 0.0155f, text, k.Verified ? dim : warn);
+            Label(local, closure, new(0f, 0.016f, 0.001f), 0.0155f, text, dim);
 
             // Leaning back on the ledge, facing the walkway and up: its x along the table, its up into the table and up.
             var normal = SN.Vector3.Normalize((-table.Away * MathF.Cos(tilt)) + (SN.Vector3.UnitY * MathF.Sin(tilt)));
             var up = SN.Vector3.Cross(normal, table.Right);
-            var foot = new SN.Vector3(lay.Origin.X, TableTop + 0.012f, lay.Origin.Z) - (table.Away * SN.Vector3.Dot(lay.Origin - table.Start, table.Away)) + (table.Away * 0.03f);
+            var foot = new SN.Vector3(lay.Origin.X, TableTop + 0.012f, lay.Origin.Z) - (table.Away * SN.Vector3.Dot(lay.Origin - table.Start, table.Away)) + (table.Away * 0.015f);
             var place = new SN.Matrix4x4(
                 table.Right.X, table.Right.Y, table.Right.Z, 0f,
                 up.X, up.Y, up.Z, 0f,
@@ -629,8 +655,9 @@ internal static class KnotFloor
     // A line of text lettered height high, narrowed to fit within width when longer.
     private static void Label(List<Vertex> o, string text, SN.Vector3 centre, float height, float width, Finish finish)
     {
-        _ = Splash.Text(text, 22, out var w, out var h, true);
-        GaiaPresence.Letter(o, text, centre, h > 0 ? Math.Min(width, height * w / h) : width, finish);
+        const int size = 64;
+        _ = Splash.Text(text, size, out var w, out var h, true);
+        GaiaPresence.Letter(o, text, centre, h > 0 ? Math.Min(width, height * w / h) : width, finish, size);
     }
 
     // 6_3 as 6₃, wherever a knot's number is in the text.
