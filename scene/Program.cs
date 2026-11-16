@@ -692,7 +692,16 @@ internal static unsafe class Stage
                 Console.WriteLine($"SCENE streamline: by itself, NVIDIA's DLLs found in {dir} (--no-dlss leaves it out)");
             }
 
-            if (Streamline.Init(dir, args.Contains("--dlss-g") ? Streamline.FrameGeneration : Streamline.Upscaling, args.Contains("--streamline-log")) is { } why)
+            // Frame generation by itself too in a shown window when the folder also holds a file named frame-generation
+            // (the author's word, 2026-11-15: "ajoute --dlss-g au lancement live", without restarting the brain that
+            // launches the live window); --no-dlss-g leaves it out.
+            var generationByItself = dlssByItself && !args.Contains("--no-dlss-g") && File.Exists(Path.Combine(dir, "frame-generation"));
+            if (generationByItself && !args.Contains("--dlss-g"))
+            {
+                Console.WriteLine($"SCENE streamline: frame generation by itself, {Path.Combine(dir, "frame-generation")} found (--no-dlss-g leaves it out)");
+            }
+
+            if (Streamline.Init(dir, args.Contains("--dlss-g") || generationByItself ? Streamline.FrameGeneration : Streamline.Upscaling, args.Contains("--streamline-log")) is { } why)
             {
                 Console.WriteLine($"SCENE streamline: not used ({why}) from {dir}");
             }

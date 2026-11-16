@@ -1612,6 +1612,10 @@ and tags, at most `--dlss-g-frames` (1 by default, twice the frames; up to 3 on 
   ok, with FIFO and with a mailbox alike. Measured with the live window also on the GPU, which by itself took the
   native 4K trace from 7.2 to about 14 ms (the build before this change measured the same, twice).
 - Turned off before the swapchain is made again and for ten frames after, as the Godot fork holds it.
+- Live: the author asked "ajoute --dlss-g au lancement live". The brain launches the live window, so changing its line
+  would restart the brain. Instead, a shown window takes `--dlss-g` by itself when the Streamline folder also holds a
+  file named `frame-generation`. `--no-dlss-g` leaves it out, and so does removing the file. With it, the live window
+  loses the present wait and the native Reflex even while path tracing is off.
 - No HUD-less or UI tags yet: the cards and captions drawn over the picture are interpolated with the scene's motion.
   *To verify*: Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show, and the
   cards over generated frames.
