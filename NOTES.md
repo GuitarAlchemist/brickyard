@@ -1778,6 +1778,33 @@ Seen hidden (port 8899, view 7, and from the hall's front at the stair's foot): 
 eight knots with traced shadows, the sign; 52 to 55 fps at 1280 × 720 (474 312 vertices for the gallery, most of them
 the plaques' letters). Not live: the live window and %LOCALAPPDATA%\delta\ix-knots.json are untouched.
 
+## A board of knots tied in rope (2026-11-15)
+
+The user's list of what waited: « la galerie des nœuds marins ». Knots a sailor ties, shown as a board shows them.
+
+- `brain -ix-cordage` (ixcordage.go) writes %LOCALAPPDATA%\delta\ix-cordage.json, the floor's format with open ropes
+  (`"closed": false`): the overhand, figure-eight, double overhand, stevedore, granny and reef knots, each one rope with
+  two free ends. A rope is a closed curve of the floor's (trefoil, figure-eight, three-twist, stevedore) cut open at its
+  highest point and its ends led up and away, above everything; the granny and reef are two such overhands in a row,
+  joined by a bridge below the ends, the reef's second one mirrored. IX's ix_knot closes an open rope by an arc over
+  everything, so it reads the knot the rope ties: an exhibit is verified when that closure is the tables' 3₁, 4₁, 5₂,
+  6₁, 3₁ # 3₁ or 3₁ # 3₁* (Jones of a sum is the product, of a mirror q → q⁻¹). All six verified at IX's first
+  reading (testdata/ix-cordage, recorded by TestRecordIXCordage with DELTA_IX_MCP: 6 calls); the double overhand and
+  stevedore as mirrors. The shapes are loose drawings of what the knot is, not rope pulled tight: no physics.
+- Tests: every rope one, open, its largest extent 1, its ends above the rest, never within 0.01 of itself; the granny's
+  polynomial the trefoil's squared, the reef's its own mirror's; every recorded closure the tables' knot.
+  TestWriteCordageFromRecordings with DELTA_CORDAGE_OUT writes the document from the recordings, without calling IX.
+- The scene (KnotFloor.BuildBoard) hangs a board on the floor's end wall, above the rail: dark felt in a wooden frame,
+  3.7 × 0.92 m, « Nœuds de cordage », the six knots in a row as rope-coloured tubes with capped ends (Tube, open), the
+  diagram IX read facing the floor, its heights halved out of the board; under each its name and « fermé : 5₂, son
+  miroir ». `--cordage FILE` reads another document; Load takes only open ropes for the board and only closed ones for
+  the floor. Self-tests: a board document taken, a closed rope refused for it, the board built on the end wall above
+  the rail, in each language.
+
+Seen hidden (port 8899, the recorded document via `--cordage`): from view 7 the board on the right wall beyond the
+plinths; from a throwaway build looking straight at it, the six knots, their names and verdicts legible. Not live:
+%LOCALAPPDATA%\delta\ix-cordage.json does not exist yet, so the live window would show the board saying why.
+
 ## Path tracing, F9 (2026-11-14)
 
 The user asked for path tracing in Delta and NVIDIA's other features. This first part is the path tracing, with what

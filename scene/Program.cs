@@ -18,7 +18,8 @@
 // haze that thickens with distance and thins with height, which B or --no-fog turns off. --view N starts
 // the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks, 6 the arcade
 // cabinet, 7 the knots' floor). H hides or shows the wall clocks of Ottawa and Paris (WallClocks), shown by default.
-// --knots FILE reads the knots' floor's gallery (KnotFloor), else %LOCALAPPDATA%\delta\ix-knots.json.
+// --knots FILE reads the knots' floor's gallery (KnotFloor), else %LOCALAPPDATA%\delta\ix-knots.json; --cordage FILE its
+// knot board, else %LOCALAPPDATA%\delta\ix-cordage.json.
 //
 // The camera has the Observatory's controls (FreeCamera): it walks, sprints, jumps, crouches, slides and leans, flies with
 // F, turns with the right button held or, after Ctrl and a click, with the mouse until the next Ctrl and click (a click
@@ -1534,14 +1535,20 @@ internal static unsafe class Stage
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
         var knotsPath = KnotFloor.Path(Option(args, "--knots"));
         var knotGallery = KnotFloor.Load(knotsPath);
+        // Its knot board, on the end wall: knots tied in one rope, as brain -ix-cordage wrote them (--cordage FILE).
+        var cordagePath = KnotFloor.Path(Option(args, "--cordage"), "ix-cordage.json");
+        var knotBoard = KnotFloor.Load(cordagePath, open: true);
         var knots = new Dictionary<bool, Mesh>
         {
-            [false] = new Mesh(device, physical, KnotFloor.BuildGallery(knotGallery, fr: false)),
-            [true] = new Mesh(device, physical, KnotFloor.BuildGallery(knotGallery, fr: true)),
+            [false] = new Mesh(device, physical, [.. KnotFloor.BuildGallery(knotGallery, fr: false), .. KnotFloor.BuildBoard(knotBoard, fr: false)]),
+            [true] = new Mesh(device, physical, [.. KnotFloor.BuildGallery(knotGallery, fr: true), .. KnotFloor.BuildBoard(knotBoard, fr: true)]),
         };
         Console.WriteLine(knotGallery.Exhibits.Length > 0
             ? $"SCENE knots: {knotGallery.Exhibits.Length} from {knotsPath}, {knotGallery.Exhibits.Count(e => e.Verified)} verified by IX, {knots[false].Count} vertices"
             : $"SCENE knots: none ({knotGallery.Why}, {knotsPath})");
+        Console.WriteLine(knotBoard.Exhibits.Length > 0
+            ? $"SCENE knot board: {knotBoard.Exhibits.Length} from {cordagePath}, {knotBoard.Exhibits.Count(e => e.Verified)} verified by IX"
+            : $"SCENE knot board: none ({knotBoard.Why}, {cordagePath})");
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
         var crate = new Mesh(device, physical, ArcadePlayer.CrateMesh()); // the small robot at the cabinet stands on it

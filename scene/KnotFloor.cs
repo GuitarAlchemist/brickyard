@@ -147,8 +147,9 @@ internal static class KnotFloor
 
     internal sealed record Gallery(Exhibit[] Exhibits, string Why);
 
-    // The document brain -ix-knots wrote, checked within the bounds ixknots.go names; a refusal says why.
-    public static Gallery Load(string path)
+    // The document brain -ix-knots wrote, checked within the bounds ixknots.go names; a refusal says why. open: the knot
+    // board's (brain -ix-cordage, ixcordage.go), whose ropes have free ends, where the floor's are closed.
+    public static Gallery Load(string path, bool open = false)
     {
         try
         {
@@ -193,7 +194,7 @@ internal static class KnotFloor
                             ? v : throw new InvalidDataException("a point outside the unit cube");
                     }).ToArray();
                     points += rope.Length;
-                    if (rope.Length < 4 || ropes.Count == 8 || points > 256 || !r.GetProperty("closed").GetBoolean())
+                    if (rope.Length < 4 || ropes.Count == 8 || points > 256 || r.GetProperty("closed").GetBoolean() == open)
                     {
                         throw new InvalidDataException("ropes beyond the gallery's bounds");
                     }
@@ -236,11 +237,11 @@ internal static class KnotFloor
             const string ring = """{"closed":true,"points":[[0.5,0,0],[0,0.5,0],[-0.5,0,0],[0,-0.5,0.1]]}""";
             string Exhibit(string ropes = ring, string radius = "0.03", string id = "trefoil") =>
                 $$"""{"id":"{{id}}","rolfsen":"3_1","en":"Trefoil","fr":"Trèfle","verified":true,"mirror":false,"crossings":3,"jones":"-t^-4 + t^-3 + t^-1","radius":{{radius}},"ropes":[{{ropes}}]}""";
-            Gallery Read(string text)
+            Gallery Read(string text, bool open = false)
             {
                 var path = System.IO.Path.Combine(dir, "ix-knots.json");
                 File.WriteAllText(path, text);
-                return Load(path);
+                return Load(path, open);
             }
 
             var good = Read(Doc(Exhibit()));
@@ -266,6 +267,18 @@ internal static class KnotFloor
             Check(en.Length > empty.Length + 1000 && en.All(v => float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z) && v.Pos.X > X0 && v.Pos.X < X1 && v.Pos.Z > Z0 - 0.01f && v.Pos.Z < Z1)
                 && BuildGallery(good, fr: true).Length != en.Length,
                 "a gallery becomes its knot on a plinth, its plaque and the sign, on the knots' floor, in each language");
+
+            // The board takes only ropes with free ends, and hangs them on the end wall above the rail.
+            var loose = Doc(Exhibit(ring.Replace("true", "false"), id: "overhand")).Replace("\"3_1\"", "\"3_1#3_1*\"");
+            var board = Read(loose, open: true);
+            Check(board.Exhibits is [{ Id: "overhand", Rolfsen: "3_1#3_1*", Ropes: [{ Length: 4 }] }] && Read(Doc(Exhibit()), open: true).Exhibits.Length == 0,
+                "the knot board takes ropes with free ends and refuses closed ones");
+            var hung = BuildBoard(board, fr: false);
+            var bare = BuildBoard(new([], "absent"), fr: false);
+            Check(hung.Length > bare.Length + 500 && hung.All(v => float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z) && v.Pos.X > X1 - 0.4f && v.Pos.X < X1
+                    && v.Pos.Y > Level + RailHeight && v.Pos.Z > Z0 && v.Pos.Z < Z1)
+                && BuildBoard(board, fr: true).Length != hung.Length,
+                "the knot board becomes its ropes, their plaques and its title, on the end wall above the rail, in each language");
         }
         finally
         {
@@ -276,9 +289,83 @@ internal static class KnotFloor
     private static string Text(string? s) =>
         s is { Length: > 0 and <= 96 } && !s.Any(char.IsControl) ? s : throw new InvalidDataException("a text out of bounds");
 
-    // --knots FILE, else %LOCALAPPDATA%\delta\ix-knots.json.
-    public static string Path(string? option) =>
-        option ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "ix-knots.json");
+    // --knots FILE, else %LOCALAPPDATA%\delta\ix-knots.json; for the board, --cordage FILE, else ix-cordage.json.
+    public static string Path(string? option, string name = "ix-knots.json") =>
+        option ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", name);
+
+    // The knot board, on the end wall above the floor's rail: its frame and felt, between the wall and the knots.
+    private const float BoardFront = X1 - 0.035f; // the felt's face, the wall being at X1
+    private const float BoardZ0 = -2.95f, BoardZ1 = 0.75f, BoardY0 = 3.0f, BoardY1 = 3.92f;
+    private const float BoardKnot = 0.42f; // a knot's largest extent on the board
+
+    // The knot board: knots tied in one rope, each with its plaque, on felt in a wooden frame, in the language asked;
+    // or a card saying why there are none. Laid out facing the floor (-x), the drawing's x along the wall towards the
+    // stair, its y up and its heights out of the board, halved, so that no knot is seen in a mirror.
+    public static Vertex[] BuildBoard(Gallery board, bool fr)
+    {
+        var local = new List<Vertex>();
+        var felt = new Finish(new(0.05f, 0.08f, 0.17f), Material.Matte);
+        var wood = new Finish(new(0.42f, 0.27f, 0.14f), Material.Matte);
+        var ink = new Finish(new(0.9f, 0.88f, 0.82f), Material.Matte);
+        var dim = new Finish(new(0.62f, 0.66f, 0.7f), Material.Matte);
+        var warn = new Finish(new(1f, 0.55f, 0.35f), Material.Matte);
+        var rope = new Finish(new(0.86f, 0.78f, 0.6f), Material.Matte);
+        var (width, height) = (BoardZ1 - BoardZ0, BoardY1 - BoardY0);
+        var middle = BoardY0 + (height / 2);
+        Boxes.Add(local, new(0f, middle, -0.012f), new(width, height, 0.02f), felt);
+        foreach (var (at, size) in new[]
+        {
+            (new SN.Vector3(0f, BoardY1 + 0.02f, 0f), new SN.Vector3(width + 0.08f, 0.04f, 0.04f)),
+            (new SN.Vector3(0f, BoardY0 - 0.02f, 0f), new SN.Vector3(width + 0.08f, 0.04f, 0.04f)),
+            (new SN.Vector3(-(width / 2) - 0.02f, middle, 0f), new SN.Vector3(0.04f, height, 0.04f)),
+            (new SN.Vector3((width / 2) + 0.02f, middle, 0f), new SN.Vector3(0.04f, height, 0.04f)),
+        })
+        {
+            Boxes.Add(local, at, size, wood);
+        }
+
+        var title = fr ? "Nœuds de cordage" : "Knots in rope";
+        var under = board.Exhibits.Length > 0
+            ? fr ? "Chaque corde refermée par IX : le nœud qu'elle devient, comparé aux tables"
+                : "Each rope closed by IX: the knot it becomes, checked against the tables"
+            : fr ? $"IX n'a pas lu la planche ({board.Why}) : brain -ix-cordage" : $"IX has not read the board ({board.Why}): brain -ix-cordage";
+        Label(local, title, new(0f, BoardY1 - 0.08f, 0.004f), 0.08f, 1.6f, ink);
+        Label(local, under, new(0f, BoardY1 - 0.16f, 0.004f), 0.04f, 2.6f, board.Exhibits.Length > 0 ? dim : warn);
+
+        var count = Math.Min(board.Exhibits.Length, 8);
+        for (var i = 0; i < count; i++)
+        {
+            var e = board.Exhibits[i];
+            var x = -(width / 2) + ((i + 0.5f) * width / count);
+            var centre = new SN.Vector3(x, BoardY0 + 0.4f, 0.03f + (BoardKnot / 4));
+            foreach (var r in e.Ropes)
+            {
+                Tube(local, [.. r.Select(p => centre + new SN.Vector3(p.X, p.Y, p.Z / 2) * BoardKnot)], e.Radius * BoardKnot,
+                    e.Verified ? rope : new Finish(new(0.4f), Material.Matte), closed: false);
+            }
+
+            var name = fr ? e.Fr : e.En;
+            var closure = string.Join(" # ", e.Rolfsen.Split('#').Select(Subscripts));
+            var verdict = !e.Verified ? fr ? "IX : pas le nœud des tables" : "IX: not the tables' knot"
+                : e.Mirror ? fr ? $"fermé : {closure}, son miroir" : $"closed: {closure}, its mirror"
+                : fr ? $"fermé : {closure}" : $"closed: {closure}";
+            Label(local, name, new(x, BoardY0 + 0.12f, 0.004f), 0.04f, (width / count) - 0.06f, ink);
+            Label(local, verdict, new(x, BoardY0 + 0.065f, 0.004f), 0.03f, (width / count) - 0.06f, e.Verified ? dim : warn);
+        }
+
+        var place = SN.Matrix4x4.CreateRotationY(-MathF.PI / 2) * SN.Matrix4x4.CreateTranslation(BoardFront, 0f, (BoardZ0 + BoardZ1) / 2);
+        var o = new List<Vertex>(local.Count);
+        foreach (var v in local)
+        {
+            var w = v;
+            w.Pos = SN.Vector3.Transform(v.Pos, place);
+            w.Normal = SN.Vector3.TransformNormal(v.Normal, place);
+            w.Tangent = SN.Vector3.TransformNormal(v.Tangent, place);
+            o.Add(w);
+        }
+
+        return [.. o];
+    }
 
     private static readonly SN.Vector3[] Colours =
     [
@@ -356,16 +443,18 @@ internal static class KnotFloor
         return at < 0 ? rolfsen : rolfsen[..at] + string.Concat(rolfsen[(at + 1)..].Select(c => c is >= '0' and <= '9' ? (char)('₀' + (c - '0')) : c));
     }
 
-    // A tube of radius r round the closed curve through points: each span a Catmull-Rom curve cut in two, a ring of
-    // ten sides at each cut, its frame carried along so that the tube does not twist.
-    internal static void Tube(List<Vertex> o, SN.Vector3[] points, float r, Finish finish)
+    // A tube of radius r along the curve through points, round it when closed, else from its first point to its last,
+    // each end capped: each span a Catmull-Rom curve cut in two, a ring of ten sides at each cut, its frame carried
+    // along so that the tube does not twist.
+    internal static void Tube(List<Vertex> o, SN.Vector3[] points, float r, Finish finish, bool closed = true)
     {
         const int cuts = 2, sides = 10;
         var n = points.Length;
+        SN.Vector3 At(int i) => closed ? points[((i % n) + n) % n] : points[Math.Clamp(i, 0, n - 1)];
         var path = new List<SN.Vector3>(n * cuts);
-        for (var i = 0; i < n; i++)
+        for (var i = 0; i < (closed ? n : n - 1); i++)
         {
-            var (p0, p1, p2, p3) = (points[(i + n - 1) % n], points[i], points[(i + 1) % n], points[(i + 2) % n]);
+            var (p0, p1, p2, p3) = (At(i - 1), At(i), At(i + 1), At(i + 2));
             for (var c = 0; c < cuts; c++)
             {
                 var t = (float)c / cuts;
@@ -373,11 +462,17 @@ internal static class KnotFloor
             }
         }
 
+        if (!closed)
+        {
+            path.Add(points[n - 1]);
+        }
+
         var m = path.Count;
         var tangents = new SN.Vector3[m];
         for (var i = 0; i < m; i++)
         {
-            tangents[i] = SN.Vector3.Normalize(path[(i + 1) % m] - path[(i + m - 1) % m]);
+            tangents[i] = closed ? SN.Vector3.Normalize(path[(i + 1) % m] - path[(i + m - 1) % m])
+                : SN.Vector3.Normalize(path[Math.Min(i + 1, m - 1)] - path[Math.Max(i - 1, 0)]);
         }
 
         var normal = SN.Vector3.Normalize(SN.Vector3.Cross(tangents[0], MathF.Abs(tangents[0].Y) < 0.9f ? SN.Vector3.UnitY : SN.Vector3.UnitX));
@@ -389,10 +484,10 @@ internal static class KnotFloor
             frames[i] = (normal, SN.Vector3.Cross(t, normal));
         }
 
-        // The frame comes back round turned by some angle: spread that turn along the tube so that its rings meet.
+        // Closed, the frame comes back round turned by some angle: spread that turn along the tube so that its rings meet.
         var (n0, b0) = frames[0];
         var (nm, _) = frames[m];
-        var twist = MathF.Atan2(SN.Vector3.Dot(nm, b0), SN.Vector3.Dot(nm, n0));
+        var twist = closed ? MathF.Atan2(SN.Vector3.Dot(nm, b0), SN.Vector3.Dot(nm, n0)) : 0f;
         SN.Vector3 Ring(int i, int s)
         {
             var (fn, fb) = frames[i];
@@ -401,7 +496,23 @@ internal static class KnotFloor
         }
 
         var flat = new SN.Vector4(0f, 0f, 1f, 1f);
-        for (var i = 0; i < m; i++)
+        if (!closed)
+        {
+            // The two ends, each a disc facing out along the rope.
+            foreach (var (end, outward) in new[] { (0, -tangents[0]), (m - 1, tangents[m - 1]) })
+            {
+                for (var s = 0; s < sides; s++)
+                {
+                    var (pa, pb) = (path[end] + (Ring(end, s) * r), path[end] + (Ring(end, s + 1) * r));
+                    var (qa, qb) = SN.Vector3.Dot(SN.Vector3.Cross(pa - path[end], pb - path[end]), outward) > 0 ? (pa, pb) : (pb, pa);
+                    o.Add(new(path[end], outward, finish.Color, finish.Material, tangents[end], flat));
+                    o.Add(new(qa, outward, finish.Color, finish.Material, tangents[end], flat));
+                    o.Add(new(qb, outward, finish.Color, finish.Material, tangents[end], flat));
+                }
+            }
+        }
+
+        for (var i = 0; i < (closed ? m : m - 1); i++)
         {
             for (var s = 0; s < sides; s++)
             {
