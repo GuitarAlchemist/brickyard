@@ -18,8 +18,8 @@
 // haze that thickens with distance and thins with height, which B or --no-fog turns off. --view N starts
 // the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks, 6 the arcade
 // cabinet, 7 the knots' floor). H hides or shows the wall clocks of Ottawa and Paris (WallClocks), shown by default.
-// --knots FILE reads the knots' floor's gallery (KnotFloor), else %LOCALAPPDATA%\delta\ix-knots.json; --cordage FILE its
-// knot board, else %LOCALAPPDATA%\delta\ix-cordage.json.
+// --marins FILE reads the knots' floor's 21 sailors' knots (KnotFloor, brain -ix-marins), else
+// %LOCALAPPDATA%\delta\ix-marins.json.
 //
 // The camera has the Observatory's controls (FreeCamera): it walks, sprints, jumps, crouches, slides and leans, flies with
 // F, turns with the right button held or, after Ctrl and a click, with the mouse until the next Ctrl and click (a click
@@ -313,13 +313,15 @@ internal static unsafe class Stage
 
         // Per material: its reflectance head-on (a metal's is its colour), its gloss (Blinn-Phong's exponent), whether
         // it is a metal, and how much a grazing view adds to its reflection, little on rough surfaces.
-        const vec4 materials[6] = vec4[](
+        const vec4 materials[8] = vec4[](
             vec4(0.02, 6.0, 0.0, 0.12),   // matte: brick, concrete, wood
             vec4(0.05, 90.0, 0.0, 0.8),   // enamel and paint
             vec4(0.0, 40.0, 1.0, 1.0),    // brushed aluminium
             vec4(0.0, 24.0, 1.0, 0.8),    // steel
             vec4(0.02, 4.0, 0.0, 0.1),    // rubber
-            vec4(0.04, 260.0, 0.0, 1.0)); // glass, screens and lamps
+            vec4(0.04, 260.0, 0.0, 1.0),  // glass, screens and lamps
+            vec4(0.03, 5.0, 0.0, 0.35),   // hemp rope: rough, a little sheen at grazing
+            vec4(0.04, 36.0, 0.0, 0.55)); // turned oak, oiled
 
         // The distance from p to a rectangle of half-size h about the origin, negative inside.
         float box(vec2 p, vec2 h)
@@ -395,6 +397,41 @@ internal static unsafe class Stage
                 float r = clamp(arm.y, 0.05, 1.0);
                 m = vec4(0.04, clamp(2.0 / (r * r * r * r) - 2.0, 2.0, 600.0), arm.z, mix(1.0, 0.1, r));
             }
+            else if (vMaterial == 6u)
+            {
+                // A laid rope's strand (Material.Rope; Edge: along it in metres, round it, its radius, a seed): four
+                // yarns twisted against the strand's lay, each a ridge that the light catches, the grooves between them
+                // darker, each yarn its own tone, and the fibres along it. Where a yarn is under two pixels the relief
+                // fades to the strand's own round, so that nothing shimmers.
+                vec3 t = normalize(vTangent - face * dot(vTangent, face));
+                vec3 circum = cross(t, face);
+                float rs = max(vEdge.z, 1e-4);
+                float pitch = rs * 9.0;
+                float phase = 4.0 * vEdge.y + 6.2831853 * vEdge.x / pitch;
+                float detail = 1.0 - smoothstep(0.6, 1.6, fwidth(phase));
+                vec3 slope = circum * (4.0 / rs) + t * (6.2831853 / pitch);
+                n = normalize(face + 0.15 * rs * sin(phase) * slope * detail);
+                float crest = 0.5 + 0.5 * cos(phase);
+                float yarn = floor(phase / 6.2831853);
+                float tone = 0.9 + 0.12 * fract(sin(yarn * 12.9898 + vEdge.w * 78.233) * 43758.5453);
+                float fibre = phase * 6.0 + 1.7 * sin(vEdge.x / rs * 3.1 + vEdge.w);
+                float fibres = 1.0 + 0.09 * sin(fibre) * (1.0 - smoothstep(0.8, 2.0, fwidth(fibre)));
+                base = vColor * mix(1.0, tone * fibres, detail) * mix(0.8, mix(0.6, 1.06, crest), detail);
+                occlusion = mix(1.0, mix(0.72, 1.0, crest), detail);
+                m = materials[6];
+            }
+            else if (vMaterial == 7u)
+            {
+                // Turned oak (Material.Wood): its grain along the post, the lines wandering a little, darker late wood.
+                float rs = max(vEdge.z, 1e-4);
+                float across = vEdge.y * rs / 0.0016 + 2.5 * sin(vEdge.x * 9.0 + vEdge.w) + 0.8 * sin(vEdge.x * 37.0 + vEdge.y * 3.0);
+                float lines = 1.0 - smoothstep(0.6, 1.4, fwidth(across));
+                float late = smoothstep(0.55, 0.95, 0.5 + 0.5 * sin(across * 6.2831853));
+                float streak = 0.94 + 0.06 * sin(vEdge.x * 61.0 + vEdge.w * 5.0);
+                base = vColor * streak * mix(1.0, mix(1.05, 0.72, late), lines);
+                n = face;
+                m = materials[7];
+            }
             else
             {
                 // Rounded edges: within 8 mm of a face's edge, less on thin parts and never under a pixel, the normal
@@ -404,7 +441,7 @@ internal static unsafe class Stage
                 vec2 width = max(min(vec2(0.008), 0.35 * vEdge.zw), fwidth(toEdge));
                 vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(vEdge.xy);
                 n = normalize(face + lean.x * across + lean.y * cross(face, across));
-                m = materials[vMaterial >= 8u ? 0u : min(vMaterial, 5u)];
+                m = materials[vMaterial >= 8u ? 0u : min(vMaterial, 7u)];
             }
 
             vec3 keyDir = normalize(vec3(-0.45, 0.8, 0.55));
@@ -460,9 +497,12 @@ internal static unsafe class Stage
                 + fillColor * pow(max(dot(n, normalize(fillDir + v)), 0.0), m.y) * fill;
             vec3 lit = base * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
 
-            // A pool of light around the robot; the hall falls into the dark beyond it and above it.
+            // A pool of light around the robot; the hall falls into the dark beyond it and above it. The knots' floor
+            // has its own light over its tables (KnotFloor), its edge fading over 80 cm.
             float pool = 1.0 - smoothstep(0.8, 6.0, length(vWorld.xz - vec2(0.0, -0.3)));
-            float high = 1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y);
+            float knots = (1.0 - smoothstep(0.0, 0.8, box(vWorld.xz - vec2(5.075, -1.2), vec2(1.17, 2.1)))) * smoothstep(1.8, 2.0, vWorld.y);
+            pool = max(pool, 0.9 * knots);
+            float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
             outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
         }
         """;
@@ -1533,22 +1573,18 @@ internal static unsafe class Stage
         var hallVertices = Brickwork.Build(photographed: materialDir is not null);
         var hall = new Mesh(device, physical, [.. hallVertices, .. KnotFloor.Build(photographed: materialDir is not null)]);
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
-        var knotsPath = KnotFloor.Path(Option(args, "--knots"));
-        var knotGallery = KnotFloor.Load(knotsPath);
-        // Its knot board, on the end wall: knots tied in one rope, as brain -ix-cordage wrote them (--cordage FILE).
-        var cordagePath = KnotFloor.Path(Option(args, "--cordage"), "ix-cordage.json");
-        var knotBoard = KnotFloor.Load(cordagePath, open: true);
+        var knotsPath = KnotFloor.Path(Option(args, "--marins"));
+        var marins = KnotFloor.Load(knotsPath);
+        var knotRopes = new Mesh(device, physical, KnotFloor.BuildKnots(marins), resident: true);
         var knots = new Dictionary<bool, Mesh>
         {
-            [false] = new Mesh(device, physical, [.. KnotFloor.BuildGallery(knotGallery, fr: false), .. KnotFloor.BuildBoard(knotBoard, fr: false)]),
-            [true] = new Mesh(device, physical, [.. KnotFloor.BuildGallery(knotGallery, fr: true), .. KnotFloor.BuildBoard(knotBoard, fr: true)]),
+            [false] = new Mesh(device, physical, KnotFloor.BuildCards(marins, fr: false)),
+            [true] = new Mesh(device, physical, KnotFloor.BuildCards(marins, fr: true)),
         };
-        Console.WriteLine(knotGallery.Exhibits.Length > 0
-            ? $"SCENE knots: {knotGallery.Exhibits.Length} from {knotsPath}, {knotGallery.Exhibits.Count(e => e.Verified)} verified by IX, {knots[false].Count} vertices"
-            : $"SCENE knots: none ({knotGallery.Why}, {knotsPath})");
-        Console.WriteLine(knotBoard.Exhibits.Length > 0
-            ? $"SCENE knot board: {knotBoard.Exhibits.Length} from {cordagePath}, {knotBoard.Exhibits.Count(e => e.Verified)} verified by IX"
-            : $"SCENE knot board: none ({knotBoard.Why}, {cordagePath})");
+        Console.WriteLine(marins.Knots.Length > 0
+            ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {knotRopes.Count} vertices of rope{(knotRopes.Resident ? " in the GPU's memory" : " in the host's memory")}; "
+              + $"rope moved onto the wood, at most, and clearance as shown: {string.Join(", ", marins.Knots.Where(k => k.Posts.Length > 0).Select(k => (k, m: KnotFloor.Measure(k))).Select(x => $"{x.k.Id} {x.m.Moved:F1} r faded over {x.m.Fade:F0} r, {x.m.Before:F2} then {x.m.After:F2} d"))}"
+            : $"SCENE knots: none ({marins.Why}, {knotsPath})");
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
         var crate = new Mesh(device, physical, ArcadePlayer.CrateMesh()); // the small robot at the cabinet stands on it
@@ -3630,6 +3666,7 @@ internal static unsafe class Stage
                     }
                 }
 
+                Draw(cb, layout, knotRopes, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
 
                 // The hall last: what stands in front of the floor and the wall is already in the depth buffer, so
@@ -4247,6 +4284,7 @@ internal static unsafe class Stage
             presence.Dispose();
         }
         hall.Dispose();
+        knotRopes.Dispose();
         foreach (var gallery in knots.Values)
         {
             gallery.Dispose();

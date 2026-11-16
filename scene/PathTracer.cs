@@ -788,9 +788,10 @@ internal sealed unsafe class PathTracer : IDisposable
         const vec4 scans[6] = vec4[](
             vec4(0.0, 2.7, 0.023, 0.0), vec4(1.0, 3.0, 0.003, 0.0), vec4(2.0, 3.0, 0.004, 0.0),
             vec4(3.0, 0.5, 0.003, 0.0), vec4(4.0, 1.0, 0.0008, 0.0), vec4(2.0, 0.6, 0.002, 1.0));
-        const vec4 materials[6] = vec4[](
+        const vec4 materials[8] = vec4[](
             vec4(0.02, 6.0, 0.0, 0.12), vec4(0.05, 90.0, 0.0, 0.8), vec4(0.0, 40.0, 1.0, 1.0),
-            vec4(0.0, 24.0, 1.0, 0.8), vec4(0.02, 4.0, 0.0, 0.1), vec4(0.04, 260.0, 0.0, 1.0));
+            vec4(0.0, 24.0, 1.0, 0.8), vec4(0.02, 4.0, 0.0, 0.1), vec4(0.04, 260.0, 0.0, 1.0),
+            vec4(0.03, 5.0, 0.0, 0.35), vec4(0.04, 36.0, 0.0, 0.55)); // rope and turned oak (Material.Rope, Material.Wood)
 
         void project(vec3 p, vec3 face, float metres, out vec2 uv, out vec3 tt, out vec3 bb)
         {
@@ -952,9 +953,9 @@ internal sealed unsafe class PathTracer : IDisposable
                 vec3 side = normalize(tangent - shading * dot(tangent, shading));
                 vec2 toEdge = (1.0 - abs(edge.xy)) * edge.zw;
                 vec2 width = max(min(vec2(0.008), 0.35 * edge.zw), vec2(1e-4));
-                vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(edge.xy);
+                vec2 lean = material == 6u || material == 7u ? vec2(0.0) : (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(edge.xy); // a rope or post: its Edge is no box's
                 s.n = normalize(shading + lean.x * side + lean.y * cross(shading, side));
-                vec4 m = materials[material >= 8u ? 0u : min(material, 5u)];
+                vec4 m = materials[material >= 8u ? 0u : min(material, 7u)];
                 s.alpha = sqrt(2.0 / (m.y + 2.0));
                 s.metal = m.z;
                 s.f0 = m.x;

@@ -73,8 +73,7 @@ type knotSpec struct {
 	Jones               map[float64]int
 	Curve               func(t float64) [3]float64 // one rope, t in [0, 2π)
 	Ropes               []func(t float64) [3]float64
-	Points              int                 // a rope's
-	Open                func() [][3]float64 // one rope with two free ends (ixcordage.go), instead of Curve or Ropes
+	Points              int // a rope's
 }
 
 func torusKnot(p, q float64) func(t float64) [3]float64 {
@@ -150,16 +149,6 @@ func (k knotSpec) ropes() []knotRope {
 	}
 	var out []knotRope
 	lo, hi := [3]float64{math.Inf(1), math.Inf(1), math.Inf(1)}, [3]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
-	if k.Open != nil {
-		r := knotRope{Points: k.Open()}
-		for _, p := range r.Points {
-			for a := 0; a < 3; a++ {
-				lo[a], hi[a] = math.Min(lo[a], p[a]), math.Max(hi[a], p[a])
-			}
-		}
-		out = append(out, r)
-		curves = nil
-	}
 	for _, f := range curves {
 		r := knotRope{Closed: true}
 		for i := 0; i < k.Points; i++ {
@@ -193,11 +182,7 @@ func clearance(ropes []knotRope) float64 {
 	var segs []seg
 	for ri, r := range ropes {
 		n := len(r.Points)
-		last := n
-		if !r.Closed {
-			last = n - 1 // an open rope has no segment from its end back to its start
-		}
-		for i := 0; i < last; i++ {
+		for i := 0; i < n; i++ {
 			segs = append(segs, seg{r.Points[i], r.Points[(i+1)%n], ri, i, r.Closed})
 		}
 	}
@@ -207,11 +192,8 @@ func clearance(ropes []knotRope) float64 {
 			s, u := segs[x], segs[y]
 			if s.r == u.r {
 				n := len(ropes[s.r].Points)
-				d := u.i - s.i
-				if s.closed {
-					d = (u.i - s.i + n) % n
-				}
-				if d <= 3 || (s.closed && d >= n-3) { // neighbours along the rope: their nearness is the rope bending, not touching
+				d := (u.i - s.i + n) % n
+				if d <= 3 || d >= n-3 { // neighbours along the rope: their nearness is the rope bending, not touching
 					continue
 				}
 			}
@@ -356,13 +338,8 @@ func exhibitFromIX(k knotSpec, ropes []knotRope, answer []byte) (knotExhibit, er
 
 // knotsGallery: every exhibit as IX reads it, ask being one call to IX for one exhibit's ropes.
 func knotsGallery(ask func(k knotSpec, ropes []knotRope) ([]byte, error), now time.Time) (knotsDoc, error) {
-	return galleryOf(knotGallery, ask, now)
-}
-
-// galleryOf: specs as IX reads them, the knots' floor's gallery or the knot board's (ixcordage.go).
-func galleryOf(specs []knotSpec, ask func(k knotSpec, ropes []knotRope) ([]byte, error), now time.Time) (knotsDoc, error) {
 	doc := knotsDoc{Format: knotsFormat, V: knotsVersion, Source: "ix_knot", At: now.UTC().Format(time.RFC3339)}
-	for _, k := range specs {
+	for _, k := range knotGallery {
 		ropes := k.ropes()
 		total := 0
 		for _, r := range ropes {
@@ -395,15 +372,10 @@ func defaultKnotsPath() string {
 
 // runIXKnots is brain -ix-knots: the gallery as IX reads it, or why there is none. 0 when every exhibit is verified.
 func runIXKnots(exe, out string, stdout, stderr io.Writer) int {
+	now := time.Now()
 	if out == "" {
 		out = defaultKnotsPath()
 	}
-	return runGallery("ix-knots", knotGallery, exe, out, stdout, stderr)
-}
-
-// runGallery: specs as IX reads them, written to out, each exhibit's verdict on stdout, label naming the run.
-func runGallery(label string, specs []knotSpec, exe, out string, stdout, stderr io.Writer) int {
-	now := time.Now()
 	write := func(doc knotsDoc) error {
 		body, err := json.Marshal(doc)
 		if err != nil {
@@ -413,17 +385,17 @@ func runGallery(label string, specs []knotSpec, exe, out string, stdout, stderr 
 	}
 	fail := func(why string) int {
 		if err := write(knotsDoc{Format: knotsFormat, V: knotsVersion, Source: "ix_knot", At: now.UTC().Format(time.RFC3339), Error: why}); err != nil {
-			fmt.Fprintf(stderr, "%s: %s; and the document could not be written: %v\n", label, why, err)
+			fmt.Fprintf(stderr, "ix-knots: %s; and the floor's document could not be written: %v\n", why, err)
 			return 1
 		}
-		fmt.Fprintf(stderr, "%s: %s; the document says so (%s)\n", label, why, out)
+		fmt.Fprintf(stderr, "ix-knots: %s; the floor says so (%s)\n", why, out)
 		return 1
 	}
 	exe, err := ixExecutable(exe)
 	if err != nil {
 		return fail(err.Error())
 	}
-	doc, err := galleryOf(specs, func(_ knotSpec, ropes []knotRope) ([]byte, error) {
+	doc, err := knotsGallery(func(_ knotSpec, ropes []knotRope) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), ixCallSeconds*time.Second)
 		defer cancel()
 		return ixKnotDrawing(ctx, exe, ropes)
@@ -432,7 +404,7 @@ func runGallery(label string, specs []knotSpec, exe, out string, stdout, stderr 
 		return fail(err.Error())
 	}
 	if err := write(doc); err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", label, err)
+		fmt.Fprintf(stderr, "ix-knots: %v\n", err)
 		return 1
 	}
 	code := 0
@@ -443,9 +415,9 @@ func runGallery(label string, specs []knotSpec, exe, out string, stdout, stderr 
 		} else if e.Mirror {
 			verdict = "verified (its mirror)"
 		}
-		fmt.Fprintf(stdout, "%s: %-18s %-8s %d crossing(s) drawn, writhe %3d, Jones %s: %s; tube %.4f\n",
-			label, e.ID, e.Rolfsen, e.Crossings, e.Writhe, e.Jones, verdict, e.Radius)
+		fmt.Fprintf(stdout, "ix-knots: %-12s %-5s %d crossing(s) drawn, writhe %3d, Jones %s: %s; tube %.4f\n",
+			e.ID, e.Rolfsen, e.Crossings, e.Writhe, e.Jones, verdict, e.Radius)
 	}
-	fmt.Fprintf(stdout, "%s: %d exhibits written to %s\n", label, len(doc.Exhibits), out)
+	fmt.Fprintf(stdout, "ix-knots: %d exhibits written to %s\n", len(doc.Exhibits), out)
 	return code
 }

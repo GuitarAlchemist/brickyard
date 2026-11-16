@@ -13,7 +13,10 @@ internal sealed unsafe class Mesh : IDisposable
     private static int liveCount;
     public static int LiveCount => Volatile.Read(ref liveCount);
 
-    public Mesh(Device device, PhysicalDevice physical, Vertex[] vertices)
+    // resident: in the GPU's own memory where the driver lets the host write it (resizable BAR), else as any mesh. For a
+    // mesh so large that reading it from the host's memory, at every pass, is what the frame waits on: the knots' rope
+    // (1.2 million vertices, 15 ms a frame from host memory, at any size of window).
+    public Mesh(Device device, PhysicalDevice physical, Vertex[] vertices, bool resident = false)
     {
         this.device = device;
         Count = vertices.Length;
@@ -29,9 +32,27 @@ internal sealed unsafe class Mesh : IDisposable
         var allocated = false;
         try
         {
-            memory = RayTraced
-                ? Gpu.Allocate(device, physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit)
-                : device.AllocateMemory(physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
+            const VkMemoryPropertyFlags host = VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit;
+            VkDeviceMemory With(VkMemoryPropertyFlags wanted) => RayTraced
+                ? Gpu.Allocate(device, physical, Buffer, wanted)
+                : device.AllocateMemory(physical, Buffer, wanted, null);
+            if (resident)
+            {
+                try
+                {
+                    memory = With(host | VkMemoryPropertyFlags.DeviceLocalBit);
+                    Resident = true;
+                }
+                catch (Exception)
+                {
+                    memory = With(host);
+                }
+            }
+            else
+            {
+                memory = With(host);
+            }
+
             allocated = true;
             device.BindBufferMemory(Buffer, memory, memoryOffset: ByteSize.Zero);
             var mapped = device.MapMemory<Vertex>(new MapInfo(memory) { Region = new MapRegion { Size = size } });
@@ -54,6 +75,9 @@ internal sealed unsafe class Mesh : IDisposable
     public VkBuffer Buffer { get; }
 
     public int Count { get; }
+
+    // In the GPU's own memory (resident, where the driver allowed it).
+    public bool Resident { get; }
 
     public bool Disposed => disposed;
 
@@ -86,6 +110,12 @@ internal enum Material : uint
     Steel,
     Rubber,
     Glass,
+
+    // Drawn by the Low shader from Edge: x the place along a strand or a post, in metres, y the angle round it (0 to
+    // 2π), z its radius. Rope: a laid rope's strand, its four yarns twisted against it and their fibres; Wood: turned
+    // oak, its grain along it. Flat draws them in their colour.
+    Rope,
+    Wood,
 
     // Photographed (MaterialTextures, in its Names' order from BrickWall): the Low shader maps the scan onto the surface
     // by its place in the world and draws its relief; the colour is then a tint on the scan's own, about 1. ClayBrick
