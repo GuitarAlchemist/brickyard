@@ -62,6 +62,20 @@
           "Ahwoo.BRUTAL.Vulkan": "2026.10.2"
         }
       },
+      "Jint": {
+        "type": "Direct",
+        "requested": "[4.17.0, 4.17.0]",
+        "resolved": "4.17.0",
+        "contentHash": "9jdpLQQYsWTjOn2THpiR8zRJ34ksV6ofW0gJvZxJW/fIGK+A+TkpWonhuuLDRwqLDjP+9WsxYt2MEge6lWjk2A==",
+        "dependencies": {
+          "Acornima": "1.7.0"
+        }
+      },
+      "Acornima": {
+        "type": "Transitive",
+        "resolved": "1.7.0",
+        "contentHash": "a2I4O4qkuAdB0oSaGz6/k0n/bXxMbGcLBra5dNTTVSLmTwM7uORA8ebpOrNMmDfFWOMwvuaRL6gPprRV4HTV0w=="
+      },
       "Ahwoo.BRUTAL.Collections": {
         "type": "Transitive",
         "resolved": "2026.10.1",
@@ -245,6 +259,9 @@
         "type": "Transitive",
         "resolved": "10.0.0",
         "contentHash": "inRnbpCS0nwO/RuoZIAqxQUuyjaknOOnCEZB55KSMMjRhl0RQDttSmLSGsUJN3RQ3ocf5NDLFd2mOQViHqMK5w=="
+      },
+      "Delta.SceneModules.Contracts": {
+        "type": "Project"
       }
     },
     "net10.0/win-x64": {

@@ -1,7 +1,8 @@
 #!/bin/sh
 # CI's checks on the parts a commit touches, run before it leaves the machine: gofmt, vet and the tests for the brain
-# and the remote (and the page's node tests), the build and selftest for the scene, check-plugin.ps1 for the plugin and
-# the marketplace. Enable once per clone:
+# and the remote (and the page's node tests), the build and selftest for the scene, the widget and office tests
+# (check-widgets.ps1), check-ears-flag.ps1's self-test, dev-deploy.ps1's guard (check-deploy-guard.ps1), the camera
+# process's tests, check-plugin.ps1 for the plugin and the marketplace. Enable once per clone:
 #   git config core.hooksPath .githooks
 set -e
 root=$(git rev-parse --show-toplevel)
@@ -38,6 +39,22 @@ if touches '^scene/'; then
 	dotnet restore --locked-mode -r win-x64 >/dev/null || { echo "pre-commit: the scene's packages differ from packages.lock.json" >&2; exit 1; }
 	dotnet build -c Release --no-restore -nologo >/dev/null || { echo "pre-commit: the scene does not build" >&2; exit 1; }
 	dotnet run -c Release --no-build -- --selftest
+fi
+if touches '^(scene/|modules/|module-contracts/|widget-tests/|check-widgets\.ps1)'; then # widget-tests compiles some of scene/'s files
+	cd "$root"
+	powershell -NoProfile -ExecutionPolicy Bypass -File check-widgets.ps1 >/dev/null 2>&1 || { echo "pre-commit: the widget tests failed; run check-widgets.ps1 to see why" >&2; exit 1; }
+fi
+if touches '^check-ears-flag\.ps1'; then
+	cd "$root"
+	powershell -NoProfile -ExecutionPolicy Bypass -File check-ears-flag.ps1 -SelfTest >/dev/null 2>&1 || { echo "pre-commit: check-ears-flag.ps1's self-test failed; run it with -SelfTest to see why" >&2; exit 1; }
+fi
+if touches '^(dev-deploy\.ps1|check-deploy-guard\.ps1)'; then
+	cd "$root"
+	powershell -NoProfile -ExecutionPolicy Bypass -File check-deploy-guard.ps1 >/dev/null 2>&1 || { echo "pre-commit: dev-deploy.ps1's guard failed; run check-deploy-guard.ps1 to see why" >&2; exit 1; }
+fi
+if touches '^(hands/|brain/gesture\.go)'; then # the hands' tests read the brain's gestures
+	cd "$root"
+	python hands/test_delta_hands.py >/dev/null || { echo "pre-commit: the hands' tests failed" >&2; exit 1; }
 fi
 if touches '^(plugins/|\.claude-plugin/|check-plugin\.ps1)'; then
 	cd "$root"

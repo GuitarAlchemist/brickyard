@@ -1,6 +1,11 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+)
 
 // language is what Delta hears and speaks. English is the default and French the other language it knows. It sets
 // Whisper's -l, the Piper voice setup.ps1 installs, the language Claude is asked to answer in, and the standalone
@@ -29,12 +34,60 @@ var languages = map[string]language{
 			"Si on te le demande, dis-le simplement et propose d'en parler."},
 }
 
-// language is the language the server hears and speaks, English when none was set.
+// language is Delta's own language now: the window's words, and what it says unprompted. English when none was set.
 func (m *mcpServer) language() language {
-	if m.lang.code == "" {
-		return languages["en"]
+	return m.languages()[0]
+}
+
+// languages is what Delta hears and speaks now: its own language, then the other one in a bilingual mode, in which
+// it answers each sentence in the language it was spoken in.
+func (m *mcpServer) languages() []language {
+	m.langMu.Lock()
+	defer m.langMu.Unlock()
+	if len(m.langs) > 0 {
+		return m.langs
 	}
-	return m.lang
+	if m.lang.code == "" {
+		return []language{languages["en"]}
+	}
+	return []language{m.lang}
+}
+
+// speakIn changes the languages Delta hears and speaks, as the window asks.
+func (m *mcpServer) speakIn(ls []language) {
+	m.langMu.Lock()
+	m.langs = ls
+	m.langMu.Unlock()
+}
+
+// languagesOf reads a language setting: a code, such as "fr", or two joined by "+", such as "fr+en", for a bilingual
+// Delta whose own language comes first. An unknown code gives English and an error that says so.
+func languagesOf(setting string) ([]language, error) {
+	var ls []language
+	for _, code := range strings.Split(setting, "+") {
+		l, err := languageOf(strings.TrimSpace(code))
+		if err != nil {
+			return []language{l}, err
+		}
+		if !slices.ContainsFunc(ls, func(o language) bool { return o.code == l.code }) {
+			ls = append(ls, l)
+		}
+	}
+	return ls, nil
+}
+
+// settingOf writes languages as languagesOf reads them.
+func settingOf(ls []language) string {
+	codes := make([]string, len(ls))
+	for i, l := range ls {
+		codes[i] = l.code
+	}
+	return strings.Join(codes, "+")
+}
+
+// codesOf is the codes of languages, for Whisper.
+func codesOf(ls []language) []string {
+	return strings.Split(settingOf(ls), "+")
 }
 
 // languageOf returns the language with this code, English when there is none. An unknown code gives English and an
@@ -47,4 +100,88 @@ func languageOf(code string) (language, error) {
 		return l, nil
 	}
 	return languages["en"], fmt.Errorf("Delta speaks en or fr, not %q: it speaks English", code)
+}
+
+// Delta changes the languages it hears and speaks when asked aloud, as the window's button does, since a phone cannot
+// click the window: « parle seulement français », « continue en français », « passe en mode bilingue », "speak
+// English". Asking for a language puts it first and keeps the other one heard; asking for the one it already speaks
+// first, or for one only, keeps that one alone. A sentence that says no, such as « ne parle plus anglais », is left to
+// Claude, which has the language tool.
+
+// languageSettings are the settings languagesOf reads that the window's button and the language tool offer
+// (Words.Settings).
+var languageSettings = []string{"en", "en+fr", "fr", "fr+en"}
+
+// languageAnswers are what Delta says as it changes its languages, by setting, in the language it then speaks first.
+var languageAnswers = map[string]string{
+	"en":    "All right, English only.",
+	"en+fr": "All right: English first, and French when you speak French.",
+	"fr":    "D'accord, je parle seulement français.",
+	"fr+en": "D'accord : français d'abord, et anglais quand tu me parles anglais.",
+}
+
+// languageNames are the words that name each language, as plainWords writes them.
+var languageNames = map[string]string{"francais": "fr", "french": "fr", "anglais": "en", "english": "en"}
+
+// languageAsks make a sentence that names a language ask for it rather than speak about it, French then English.
+var languageAsks = []string{"parle", "parles", "parlez", "parler", "parlons", "reponds", "repondre", "continue", "continuons",
+	"reste", "restons", "passe", "passons", "repasse", "reviens", "revenons", "retourne", "retournons", "sois", "mode",
+	"s il te plait", "stp",
+	"speak", "talk", "answer", "reply", "switch", "stay", "keep", "be", "go back", "back to", "please"}
+
+// languageOnly ask for one language alone; languageBoth for two; languageNot leave the sentence to Claude.
+var (
+	languageOnly = []string{"seulement", "juste", "uniquement", "qu", "only", "just"}
+	languageBoth = []string{"bilingue", "les deux", "deux langues", "bilingual", "both", "two languages"}
+	languageNot  = []string{"pas", "plus", "jamais", "arrete", "arretes", "arreter", "sans", "not", "don t", "dont", "no",
+		"stop", "never", "without"}
+)
+
+// languageCommand is the language setting a short spoken sentence asks of Delta, such as "fr" or "fr+en", given the
+// languages it speaks now, or "" when the sentence asks none.
+func languageCommand(text string, now []language) string {
+	words := plainWords(text)
+	if len(words) > 10 || len(now) == 0 {
+		return ""
+	}
+	line := " " + strings.Join(words, " ") + " "
+	has := func(phrases []string) bool {
+		return slices.ContainsFunc(phrases, func(p string) bool { return strings.Contains(line, " "+p+" ") })
+	}
+	var named []string // the languages the sentence names, in its order
+	for _, w := range words {
+		if code, ok := languageNames[w]; ok && !slices.Contains(named, code) {
+			named = append(named, code)
+		}
+	}
+	both := has(languageBoth) || len(named) == 2
+	if !has(languageAsks) || has(languageNot) || len(named) == 0 && !both {
+		return ""
+	}
+	own := now[0].code
+	if len(named) == 0 {
+		named = []string{own}
+	}
+	first := named[0]
+	switch {
+	case both:
+		second := ""
+		if len(named) > 1 {
+			second = named[1]
+		} else if own != first {
+			second = own
+		} else {
+			for _, code := range slices.Sorted(maps.Keys(languages)) {
+				if code != first {
+					second = code
+					break
+				}
+			}
+		}
+		return first + "+" + second
+	case has(languageOnly), first == own:
+		return first
+	default:
+		return first + "+" + own
+	}
 }

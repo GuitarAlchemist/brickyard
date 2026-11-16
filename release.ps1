@@ -42,6 +42,9 @@ $index = @()
 foreach ($source in $sources) {
     $dir = Join-Path $packages ('{0}\{1}' -f $source.Id.ToLowerInvariant(), $source.Version)
     $texts = @(Get-ChildItem $dir -Recurse -File | Where-Object { $_.Name -match 'licen|notice|copying' -and $_.Extension -match '^(\.txt|\.md|)$' })
+    # A package that names its licence only by expression (Jint, Acornima): its text from its repository, kept here.
+    $kept = Join-Path $root "LICENSES\$($source.Id)"
+    if ($texts.Count -eq 0 -and (Test-Path $kept)) { $texts = @(Get-ChildItem $kept -File) }
     if ($texts.Count -eq 0) { throw "$($source.Id) $($source.Version) has no licence file in $dir" }
     foreach ($text in $texts) {
         $hash = (Get-FileHash $text.FullName).Hash

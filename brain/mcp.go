@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,9 +19,10 @@ import (
 func instructions(l language) string {
 	return `Delta is a small robot in a window on the user's screen: it hears the user's microphone and speaks aloud. ` +
 		`When this session loads Delta as a channel, what the user says to Delta arrives as a <channel> event from delta, with an utterance_id. ` +
-		`It is a Whisper transcript of spoken ` + l.name + `, so expect misheard words ("Cloud Code" is Claude Code). Treat it as the user speaking to you, ` +
-		`and confirm anything destructive or surprising before doing it. ` +
-		`Answer aloud with Delta's say tool, in ` + l.name + `, the only language its voice speaks: one to three short spoken sentences, ` +
+		`It is a Whisper transcript of spoken ` + l.name + ` by default, so expect misheard words ("Cloud Code" is Claude Code); its meta lang ` +
+		`names the language it was heard in, en for English or fr for French, since the user can switch Delta to the other language or to both. ` +
+		`Treat it as the user speaking to you, and confirm anything destructive or surprising before doing it. ` +
+		`Answer aloud with Delta's say tool, in the language the event's lang names: one to three short spoken sentences, ` +
 		`without markdown, lists, code or URLs. ` +
 		mcpGuidance
 }
@@ -34,6 +36,7 @@ const mcpGuidance = `Pass say the utterance_id you are answering. ` +
 	`Give say a mood when your words carry one, such as joy, proud or sorry: Delta's face shows it as it speaks. ` +
 	`The window tool moves, sizes or hides Delta's window, and the shelf tool opens its menu of Claude Code sessions, plugins and ` +
 	`marketplaces; Delta also does both by itself when the user asks it aloud, and you read those requests as handled_locally. ` +
+	`The language tool changes the languages Delta hears and speaks, as Delta does itself for a plain request. ` +
 	`An event whose meta has source "remote" was spoken on another device through Delta's remote gateway, not at this computer: ` +
 	`before anything destructive or irreversible it asks for, have the user confirm it at the computer. ` +
 	`Delta's code is github.com/GuitarAlchemist/brickyard.`
@@ -43,12 +46,15 @@ func toolsFor(l language) []map[string]any {
 	return []map[string]any{
 		{
 			"name": "say",
-			"description": "Say this aloud in Delta's voice, in " + l.name + ", with Delta speaking on screen. Returns at once: the sentences are " +
-				"spoken in order while you go on. Write it to be heard: short sentences, no markdown, lists, code or URLs.",
+			"description": "Say this aloud in Delta's voice, in the language of the utterance it answers (" + l.name + " by default), with Delta " +
+				"speaking on screen. Returns at once: the sentences are spoken in order while you go on. Write it to be heard: short sentences, " +
+				"no markdown, lists, code or URLs.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"text":         map[string]any{"type": "string", "description": "What Delta says, in " + l.name},
+					"text": map[string]any{"type": "string", "description": "What Delta says, in the language of the utterance it answers"},
+					"language": map[string]any{"type": "string", "enum": []string{"en", "fr"},
+						"description": "The language and voice to say it in, when it answers no utterance; by default the utterance's"},
 					"utterance_id": map[string]any{"type": "string", "description": "The utterance_id this answers, if it answers one"},
 					"mood": map[string]any{"type": "string", "enum": moods,
 						"description": "The expression Delta's face takes as it starts saying it, for a few seconds"},
@@ -58,7 +64,7 @@ func toolsFor(l language) []map[string]any {
 		},
 		{
 			"name": "listen",
-			"description": "Wait until the user says something to Delta, and return what Whisper heard: spoken " + l.name + ", some words " +
+			"description": "Wait until the user says something to Delta, and return what Whisper heard: spoken " + l.name + " by default, some words " +
 				"possibly misheard. For sessions that do not receive Delta's channel events.",
 			"inputSchema": map[string]any{
 				"type": "object",
@@ -81,13 +87,26 @@ func toolsFor(l language) []map[string]any {
 			"name": "shelf",
 			"description": "Walk the shelf in Delta's window: a small menu of this computer's Claude Code sessions, grouped by " +
 				"wmux workspace with those waiting for the user first, of the past conversations by project, of the installed " +
-				"plugins, and of the marketplaces. open shows its root; sessions, conversations, plugins and marketplaces open a " +
+				"plugins, of the marketplaces, and of Guitar Alchemist Learn's courses. open shows its root; sessions, conversations, " +
+				"plugins, marketplaces and courses open a " +
 				"section; up, down, enter and back move through it; " +
 				"close hides it. A session that runs in wmux has a first row that focuses its pane.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"move": map[string]any{"type": "string", "enum": slices.Sorted(maps.Keys(shelfAnswers))}},
 				"required":   []string{"move"},
+			},
+		},
+		{
+			"name": "language",
+			"description": "Change the languages Delta hears and speaks, as the button in its window does: en or fr alone, or " +
+				"en+fr and fr+en for a bilingual Delta, which answers each sentence in the language it was spoken in, its own " +
+				"language first. Delta does it by itself for a plain request, such as « parle seulement français »; use it for " +
+				"one Delta left to you.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"setting": map[string]any{"type": "string", "enum": languageSettings}},
+				"required":   []string{"setting"},
 			},
 		},
 	}
@@ -107,6 +126,7 @@ type mcpServer struct {
 	show       func(line map[string]any)                                       // sends Delta's window a line, if it has one (window.go)
 	tell       func(line map[string]any)                                       // the same, without bringing back a window the user closed
 	attribute  func(say map[string]any)                                        // learns whom each sentence answers, from its say note, if set (remote.go)
+	followSay  func(event string, fields map[string]any)                       // follows the mouth's speaking and spoken notes, if set (ask.go)
 	listenMin  time.Duration
 	listenMax  time.Duration
 	gate       wakeGate
@@ -128,12 +148,53 @@ type mcpServer struct {
 	cancels map[string]chan struct{} // by request id
 	heard   int
 	said    int
-	acked   int       // acknowledgements said, which picks the next one
-	recent  []string  // the conversation's last lines, for the triage
-	local   []string  // the lines the triage handled since the last channel event, for Claude to know
-	lately  []routed  // the sentences routed in the last seconds, to know one that two devices heard (twice.go)
-	asked   bool      // Claude's last words asked the user something: the answer goes to Claude untriaged
-	shelfAt time.Time // when the shelf last moved, by voice or by Claude; zero once closed
+	acked   int            // acknowledgements said, which picks the next one
+	recent  []string       // the conversation's last lines, for the triage
+	local   []string       // the lines the triage handled since the last channel event, for Claude to know
+	lately  []routed       // the sentences routed in the last seconds, to know one that two devices heard (twice.go)
+	asked   bool           // Claude's last words asked the user something: the answer goes to Claude untriaged
+	shelfAt time.Time      // when the shelf last moved, by voice or by Claude; zero once closed
+	inEars  map[string]int // the sentences each source's ears are transcribing, by source (twice.go)
+	copies  []*heardCopy   // the sentences waiting a moment for the other device's copy (twice.go)
+	holdMax time.Duration  // how long they wait at most; not at all when zero
+	heardIn map[int]string // the language of each sentence heard, by utterance id, the last 64
+	saidIn  map[int]string // the language of each say call, by say_id, the last 64
+
+	langMu     sync.Mutex
+	langs      []language                     // what Delta hears and speaks, its own language first, once changed (lang.go)
+	relanguage func(ls []language, by string) // changes them, tells the window and saves them, or nil
+}
+
+// heardLanguage is the code of the language a heard line's sentence was spoken in, Delta's own when Whisper did not
+// say.
+func (m *mcpServer) heardLanguage(fields map[string]any) string {
+	if code, _ := fields["lang"].(string); code != "" {
+		return code
+	}
+	return m.language().code
+}
+
+// spokenIn is the language a say call speaks, its own language when none was given.
+func (m *mcpServer) spokenIn(sayID int) string {
+	m.mu.Lock()
+	code := m.saidIn[sayID]
+	m.mu.Unlock()
+	if code == "" {
+		return m.language().code
+	}
+	return code
+}
+
+// sayIn records the language of a say call; the caller holds m.mu.
+func (m *mcpServer) sayIn(sayID int, code string) {
+	if code == "" {
+		return
+	}
+	if m.saidIn == nil {
+		m.saidIn = map[int]string{}
+	}
+	m.saidIn[sayID] = code
+	delete(m.saidIn, sayID-64)
 }
 
 // What Delta's words cost, which its window shows: "free" from the model on this computer, "paid" from Claude.
@@ -241,6 +302,7 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 			Text        string          `json:"text"`
 			UtteranceID json.RawMessage `json:"utterance_id"` // a string, as in the channel's meta, or a number
 			Mood        string          `json:"mood"`
+			Language    string          `json:"language"`
 		}
 		json.Unmarshal(p.Arguments, &a)
 		if strings.TrimSpace(a.Text) == "" {
@@ -252,14 +314,7 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 			return
 		}
 		answers := strings.Trim(string(a.UtteranceID), `"`)
-		m.mu.Lock()
-		m.said++
-		sayID := m.said
-		m.remember("Delta: " + a.Text)
-		m.asked = strings.HasSuffix(strings.TrimSpace(a.Text), "?")
-		m.mu.Unlock()
-		m.note("say", map[string]any{"say_id": sayID, "utterance_id": answers, "request": string(id), "text": a.Text, "by": "claude"})
-		status, err := m.speak(a.Text, sayID, paid, a.Mood)
+		sayID, status, err := m.sayAs(a.Text, answers, a.Mood, a.Language, "claude", map[string]any{"request": string(id)})
 		if err != nil {
 			m.toolResult(id, err.Error(), true)
 			return
@@ -295,6 +350,22 @@ func (m *mcpServer) call(id, params json.RawMessage, cancel <-chan struct{}) {
 		}
 		m.note(p.Name, map[string]any{"move": what, "by": "claude"})
 		m.toolResult(id, "Delta's "+p.Name+": "+what+".", false)
+	case "language":
+		var a struct {
+			Setting string `json:"setting"`
+		}
+		json.Unmarshal(p.Arguments, &a)
+		ls, err := languagesOf(a.Setting)
+		if err != nil || !slices.Contains(languageSettings, a.Setting) {
+			m.toolResult(id, "Delta cannot speak "+strconv.Quote(a.Setting)+": give one of "+strings.Join(languageSettings, ", ")+".", true)
+			return
+		}
+		if m.relanguage == nil {
+			m.toolResult(id, "This brain keeps the languages it started with.", true)
+			return
+		}
+		m.relanguage(ls, "claude")
+		m.toolResult(id, "Delta now hears and speaks "+a.Setting+".", false)
 	case "listen":
 		var a struct {
 			Timeout float64 `json:"timeout_seconds"`
@@ -338,6 +409,23 @@ func heardResult(h heardText) string {
 	return "The user said (utterance " + strconv.Itoa(h.id) + "): " + h.text
 }
 
+// heardBy is for whom the window says a sentence was: "claude"; "delta", for the triage's answer or a command Delta ran
+// itself; "wake", when Delta let it pass for want of its name; "dropped", when the triage judged it was for someone
+// else; or the name of the one it called first.
+func heardBy(route, reason string) string {
+	switch {
+	case route == "channel" || route == "listen":
+		return "claude"
+	case route == "ignored" && reason == "not addressed to Delta":
+		return "wake"
+	case route == "ignored" && strings.HasPrefix(reason, "spoken to "):
+		return strings.TrimPrefix(reason, "spoken to ")
+	case route == "ignored" || route == "dropped":
+		return "dropped"
+	}
+	return "delta"
+}
+
 // stopWaiting removes a pending listen call, and reports whether it was still pending.
 func (m *mcpServer) stopWaiting(key string) bool {
 	m.mu.Lock()
@@ -365,31 +453,64 @@ func (m *mcpServer) hear(u utterance, now time.Time) string {
 func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	text, repeats := collapseRepeats(u.text)
 	u.text = text
+	twin, won := m.awaitCopy(u, now) // the other device's copy of it, which came at once, if any
 	m.mu.Lock()
 	m.heard++
 	h := heardText{id: m.heard, text: u.text}
 	id = h.id
 	route = "channel"
 	fields := map[string]any{"utterance_id": strconv.Itoa(h.id), "text": u.text, "asr_ms": u.asr.Milliseconds()}
+	if u.lang != "" {
+		fields["lang"] = u.lang
+		if m.heardIn == nil {
+			m.heardIn = map[int]string{}
+		}
+		m.heardIn[h.id] = u.lang
+		delete(m.heardIn, h.id-64)
+	}
 	if u.source != "" {
 		fields["source"] = u.source
 	}
 	if repeats > 0 { // Whisper wrote a sentence over and over
 		fields["repeats_collapsed"] = repeats
 	}
+	if u.level > 0 {
+		fields["level"] = math.Round(u.level*1e4) / 1e4
+	}
+	if twin != nil {
+		key := "copy_of"
+		if won {
+			key = "beat"
+		}
+		fields[key] = map[string]any{"source": sourceName(twin.source), "level": math.Round(twin.level*1e4) / 1e4, "text": shorten(twin.text, 120)}
+	}
 	defer func() {
 		fields["route"] = route
 		m.note("heard", fields)
-		if route != "ignored" && route != "duplicate" {
-			m.routedNow(u, now)
+		if route == "ignored" { // a copy the wake gate ignored here must not hide the phone's, which needs no wake word
+			m.forgetRouted(u, now)
+		}
+		if m.tell != nil && route != "duplicate" && !carriesNothing(u.text) { // what Delta heard, and where it went
+			reason, _ := fields["reason"].(string)
+			m.tell(map[string]any{"heard": map[string]any{"text": shorten(u.text, 400), "to": heardBy(route, reason)}})
 		}
 	}()
+	if twin != nil && !won {
+		m.mu.Unlock()
+		route = "duplicate"
+		fields["reason"] = "heard louder by the other device"
+		return id, route
+	}
+	if twin != nil && twin.source == "remote" { // the phone's button addressed Delta, whichever copy goes
+		m.gate.open(now)
+	}
 	if m.heardTwice(u, now) { // the computer's microphone and a phone both heard it
 		m.mu.Unlock()
 		route = "duplicate"
 		fields["reason"] = "heard by the other device too"
 		return id, route
 	}
+	m.routing(u, now) // at once, since the other device's copy may come while this one is still routed
 	if len(m.waiting) > 0 {
 		l := m.waiting[0]
 		m.waiting = m.waiting[1:]
@@ -410,9 +531,6 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	fields["reason"] = why
 	if !admitted {
 		route = "ignored"
-		if why == "not addressed to Delta" && m.tell != nil && !carriesNothing(u.text) { // heard, and how to call Delta
-			m.tell(map[string]any{"ignored": shorten(u.text, 200)})
-		}
 		return id, route
 	}
 	if loving(u.text) && m.show != nil { // hearts rise from Delta's chest, and it smiles; the sentence goes on as any other
@@ -432,6 +550,9 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 	meta := map[string]string{"utterance_id": strconv.Itoa(h.id), "asr_ms": strconv.FormatInt(u.asr.Milliseconds(), 10)}
 	if u.source != "" {
 		meta["source"] = u.source
+	}
+	if u.lang != "" {
+		meta["lang"] = u.lang
 	}
 	m.mu.Lock()
 	if len(m.local) > 0 {
@@ -471,13 +592,18 @@ func (m *mcpServer) heardAs(u utterance, now time.Time) (id int, route string) {
 // Claude's answer comes first. The heard line's ack is the say_id of its say line, whose speaking line times the
 // first sound.
 func (m *mcpServer) acknowledge(fields map[string]any) {
-	if m.ack == nil || m.quiet == nil || !m.quiet() || len(m.lang.acks) == 0 {
+	l := m.language()
+	if code, _ := fields["lang"].(string); code != "" {
+		l, _ = languageOf(code)
+	}
+	if m.ack == nil || m.quiet == nil || !m.quiet() || len(l.acks) == 0 {
 		return
 	}
 	m.mu.Lock()
 	m.said++
 	sayID := m.said
-	word := m.lang.acks[m.acked%len(m.lang.acks)]
+	m.sayIn(sayID, l.code)
+	word := l.acks[m.acked%len(l.acks)]
 	m.acked++
 	m.mu.Unlock()
 	m.note("say", map[string]any{"say_id": sayID, "utterance_id": fields["utterance_id"], "text": word, "by": "ack"})
@@ -562,7 +688,7 @@ func (m *mcpServer) sort(text string, remote bool, fields map[string]any) string
 			fields["parrot"] = v.Answer
 			v.Answer = ""
 		}
-		m.answerLocally(text, v.Answer, smile(text), fields)
+		m.answerLocally(text, v.Answer, smile(text), "", fields)
 		return "local"
 	}
 	return m.fact(text, fields) // the triage kept it for Claude, unless the sheet answers it
@@ -570,7 +696,7 @@ func (m *mcpServer) sort(text string, remote bool, fields map[string]any) string
 
 // answerLocally is what Delta does without Claude: it keeps the exchange, which Claude reads with the next channel
 // event, and says the answer, if any, at no cost and with the given expression.
-func (m *mcpServer) answerLocally(text, answer, mood string, fields map[string]any) {
+func (m *mcpServer) answerLocally(text, answer, mood, lang string, fields map[string]any) {
 	m.mu.Lock()
 	m.remember("User: " + text)
 	m.local = append(m.local, "User: "+text)
@@ -578,6 +704,7 @@ func (m *mcpServer) answerLocally(text, answer, mood string, fields map[string]a
 	if answer != "" {
 		m.said++
 		sayID = m.said
+		m.sayIn(sayID, lang)
 		m.remember("Delta: " + answer)
 		m.local = append(m.local, "Delta: "+answer)
 	}
@@ -591,9 +718,16 @@ func (m *mcpServer) answerLocally(text, answer, mood string, fields map[string]a
 	}
 }
 
-// command does what the user asked aloud of Delta's own window, without Claude: a move through the shelf, or opening
-// it, then a move of the window. It returns "shelf" or "window", or "" when the sentence asks neither.
+// command does what the user asked aloud of Delta itself, without Claude: its languages, a move through the shelf, or
+// opening it, then a move of the window. It returns "language", "shelf" or "window", or "" when the sentence asks none.
 func (m *mcpServer) command(text string, fields map[string]any, now time.Time) string {
+	if setting := languageCommand(text, m.languages()); setting != "" && m.relanguage != nil {
+		ls, _ := languagesOf(setting)
+		fields["language"] = setting
+		m.relanguage(ls, "voice")
+		m.answerLocally(text, languageAnswers[setting], "", ls[0].code, fields)
+		return "language"
+	}
 	if m.show == nil {
 		return ""
 	}
@@ -601,13 +735,15 @@ func (m *mcpServer) command(text string, fields map[string]any, now time.Time) s
 		fields["shelf"] = move
 		m.walkShelf(move, now)
 		m.gate.open(now) // the user walks the shelf without saying Delta at each step
-		m.answerLocally(text, inLanguage(shelfAnswers[move], m.language().code), "", fields)
+		code := m.heardLanguage(fields)
+		m.answerLocally(text, inLanguage(shelfAnswers[move], code), "", code, fields)
 		return "shelf"
 	}
 	if action := windowCommand(text); action != "" {
 		fields["window"] = action
 		m.show(map[string]any{"window": action})
-		m.answerLocally(text, inLanguage(windowActions[action], m.language().code), "", fields)
+		code := m.heardLanguage(fields)
+		m.answerLocally(text, inLanguage(windowActions[action], code), "", code, fields)
 		return "window"
 	}
 	return ""
@@ -637,12 +773,37 @@ func (m *mcpServer) remember(line string) {
 	m.recent = m.recent[max(0, len(m.recent)-6):]
 }
 
+// sayAs says text as the say tool does, for by: claude, or an assistant that answers Delta's request through /answer
+// (ask.go). answers is the utterance_id it answers, or ""; language, if known, the voice to say it in; extra goes into
+// its say note, such as the request it answers.
+func (m *mcpServer) sayAs(text, answers, mood, language, by string, extra map[string]any) (sayID int, status string, err error) {
+	m.mu.Lock()
+	m.said++
+	sayID = m.said
+	if _, known := languages[language]; known {
+		m.sayIn(sayID, language)
+	} else if n, err := strconv.Atoi(answers); err == nil {
+		m.sayIn(sayID, m.heardIn[n])
+	}
+	m.remember("Delta: " + text)
+	m.asked = strings.HasSuffix(strings.TrimSpace(text), "?")
+	m.mu.Unlock()
+	fields := map[string]any{"say_id": sayID, "utterance_id": answers, "text": text, "by": by}
+	maps.Copy(fields, extra)
+	m.note("say", fields)
+	status, err = m.speak(text, sayID, paid, mood)
+	return sayID, status, err
+}
+
 func (m *mcpServer) note(event string, fields map[string]any) {
 	if m.record != nil {
 		m.record(event, fields)
 	}
 	if event == "say" && m.attribute != nil {
 		m.attribute(fields)
+	}
+	if (event == "speaking" || event == "spoken") && m.followSay != nil {
+		m.followSay(event, fields)
 	}
 }
 

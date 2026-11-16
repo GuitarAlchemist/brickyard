@@ -1,0 +1,222 @@
+{
+ "converse_conflicts": [],
+ "counts": {
+  "assignment": {
+   "B": 6,
+   "V": 1
+  },
+  "edges": 7,
+  "faceOrders": 1,
+  "faces": 2,
+  "vertices": 6
+ },
+ "crease_orientation": {
+  "checked": 1,
+  "violations": []
+ },
+ "isometry": {
+  "max_length_change": 0.0,
+  "max_length_change_at_scale_1": 0.0,
+  "ok": true,
+  "scale": 1.0
+ },
+ "layers": {
+  "adjacency": {
+   "checked": 1,
+   "unstated": [],
+   "violations": []
+  },
+  "cells": {
+   "cyclic": [],
+   "max_layers": 2,
+   "multi_layer": 1
+  },
+  "taco_taco": {
+   "checked": 0,
+   "undetermined": 0,
+   "violations": []
+  },
+  "taco_tortilla": {
+   "checked": 0,
+   "undetermined": 0,
+   "violations": []
+  },
+  "tortilla_tortilla": {
+   "checked": 0,
+   "undetermined": 0,
+   "violations": []
+  }
+ },
+ "local_theorems": {
+  "applicable": 0,
+  "kawasaki_failing": [],
+  "kawasaki_max_abs_alt_sum": 0.0,
+  "maekawa_failing": [],
+  "maekawa_m_minus_v": {},
+  "skipped_border": 6,
+  "skipped_isolated": 0,
+  "skipped_other_creases": 0
+ },
+ "ok": true,
+ "orientation": {
+  "down": 1,
+  "up": 1
+ },
+ "overlap": {
+  "cells": 1,
+  "overlapping_pairs": 1,
+  "overlapping_unstated": 0,
+  "stated_and_overlapping": 1,
+  "stated_not_overlapping": 0
+ },
+ "rejected_by": [],
+ "sequence": {
+  "expectations": [
+   {
+    "expect": "ply 3",
+    "got": "2",
+    "holds": false,
+    "line": 4
+   },
+   {
+    "expect": "faces 2",
+    "got": "2",
+    "holds": true,
+    "line": 5
+   }
+  ],
+  "fold": {
+   "edges_assignment": [
+    "B",
+    "B",
+    "B",
+    "V",
+    "B",
+    "B",
+    "B"
+   ],
+   "edges_vertices": [
+    [
+     0,
+     1
+    ],
+    [
+     0,
+     3
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ],
+    [
+     2,
+     4
+    ],
+    [
+     3,
+     5
+    ],
+    [
+     4,
+     5
+    ]
+   ],
+   "faces_vertices": [
+    [
+     0,
+     1,
+     2,
+     3
+    ],
+    [
+     2,
+     4,
+     5,
+     3
+    ]
+   ],
+   "file_creator": "ix-origami sequence replay",
+   "file_frames": [
+    {
+     "faceOrders": [
+      [
+       0,
+       1,
+       1
+      ]
+     ],
+     "frame_classes": [
+      "foldedForm"
+     ],
+     "frame_inherit": true,
+     "frame_parent": 0,
+     "vertices_coords": [
+      [
+       0.0,
+       0.0
+      ],
+      [
+       1.0,
+       0.0
+      ],
+      [
+       1.0,
+       0.5
+      ],
+      [
+       0.0,
+       0.5
+      ],
+      [
+       1.0,
+       0.0
+      ],
+      [
+       0.0,
+       0.0
+      ]
+     ]
+    }
+   ],
+   "file_spec": 1.2,
+   "file_title": "wrong-expectation",
+   "frame_classes": [
+    "creasePattern"
+   ],
+   "vertices_coords": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     1.0,
+     0.0
+    ],
+    [
+     1.0,
+     0.5
+    ],
+    [
+     0.0,
+     0.5
+    ],
+    [
+     1.0,
+     1.0
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  "holds": false,
+  "name": "wrong-expectation"
+ },
+ "structure": [],
+ "tacos_on_opposite_sides": 0
+}

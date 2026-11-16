@@ -1,0 +1,7 @@
+origami half-then-quarter
+# the square folded in half, then in half again: four layers
+sheet square
+valley mCD to mAB
+valley mDA to mBC
+expect ok
+expect ply 4

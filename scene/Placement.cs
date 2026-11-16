@@ -116,7 +116,7 @@ internal sealed class Placement
     }
 
     // The screen that holds the window's centre, or the primary one.
-    private static GlfwMonitor MonitorOf(GlfwWindow window)
+    internal static GlfwMonitor MonitorOf(GlfwWindow window)
     {
         var centre = window.Position + (window.Size / 2);
         foreach (var monitor in Glfw.GetMonitors())

@@ -32,7 +32,15 @@ You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a m
    what is already there, tells you what it would download, and asks first.
    - The first time, that is about 700 MB: Delta, Piper and a voice for that language, whisper.cpp, and a Whisper
      model.
-   - To change the language later, run `/delta:setup` again and ask for the other one.
+   - To change the language later, run `/delta:setup` again and ask for the other one, or click the language button
+     left of the phone icon in Delta's window, or press L. It goes through FR, FR·EN and EN: with two, Delta
+     hears both and answers each sentence in the language it was spoken in, with that language's Piper voice, which
+     it looks for beside the first one; without it, Delta says it in its first voice. `delta.json` keeps the choice.
+     You can also ask it aloud, which a phone needs: "speak English only", « parle seulement français », « passe en
+     mode bilingue ». Asking for a language puts it first and Delta still hears the other one; asking again keeps it
+     alone.
+   - The microphone button left of it turns the computer's microphone off, struck through in red, and on again. A
+     phone paired through the gateway still reaches Delta. Each new brain starts with the microphone on.
    - If you already have Piper, whisper.cpp or the model, give Claude their paths instead.
    - Each download is checked against its SHA-256.
 3. Talk to Delta, in either of two ways:
@@ -73,7 +81,7 @@ and in French whatever its language, and answers in its own:
   project, the most recent first, each opening onto its last requests. "Show the plugins" and "show the marketplaces"
   list what is installed. While the shelf is open, "go down", "go up", "open" and "back" move through it, without
   "Delta" within 20 seconds of the last step, and "close the menu" closes it. In French: « montre-moi les sessions »,
-  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». Tab or M opens it
+  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». M opens it
   with the keyboard too, then the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session
   that runs in wmux, "Go to this session" shows its pane. The shelf's labels follow Delta's language.
 
@@ -185,7 +193,14 @@ With Claude Code, `brain.exe -mcp` is an MCP server on stdio, which the plugin's
   `{"gesture":"thumbs_up","hand":"right","confidence":0.92,"t_ms":...}`. A thumb up makes Delta smile and a thumb
   down look sorry; a wave opens the conversation, so that the next sentence needs no « Delta »; pointing up or down
   and swiping left or right walk the shelf while it is open. `open_palm` and `fist` are only recorded. Each gesture
-  is a `gesture` line in the journal. No camera process ships yet.
+  is a `gesture` line in the journal. The « je t'aime » sign, thumb, index and little finger up, sends hearts as the
+  words do.
+- `hands\delta_hands.py` is that camera process, and only you start it: `uv run hands\delta_hands.py` turns the camera
+  on until Ctrl+C. MediaPipe's gesture recognizer finds a pose held still for a third of a second, a swipe or a wave,
+  and the process posts it. Frames stay in memory: only the gesture's name, the hand, how sure it is and when are
+  posted. `--preview` shows what the camera sees, `--camera N` picks another camera. uv fetches its two pinned
+  packages, MediaPipe and OpenCV, at the first start, and the 8 MB model is downloaded once to
+  `%LOCALAPPDATA%\delta\models`, checked by SHA-256.
 - Another device can talk to Delta through a gateway on this computer, such as IX's over WebRTC. The gateway posts
   each sentence the device heard, a 16 kHz mono WAV of at most 30 s, to `POST /hear` on the same address, and plays
   what Delta says from `GET /said`, one server-sent event per sentence with its WAV and the `utterance_id` it answers. Both need the hooks' header and

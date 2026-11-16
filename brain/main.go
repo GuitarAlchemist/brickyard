@@ -59,6 +59,8 @@ func main() {
 	mcpMode := flag.Bool("mcp", false, "be an MCP server for Claude Code on stdin and stdout, Claude being the brain")
 	home := flag.String("home", "", "with -mcp, where setup.ps1 installed Piper, a voice and whisper.cpp")
 	noScene := flag.Bool("no-scene", false, "with -mcp, do not open Delta's window")
+	sceneSource := flag.String("scene-source", "", "with -mcp, run Delta's window from its project folder under dotnet watch, which applies "+
+		"edits to the open window (hot reload), for development; the window does not restart when it closes")
 	noWake := flag.Bool("no-wake", false, "with -mcp, send everything heard to Claude, not only what follows \"Delta\"")
 	journalFile := flag.String("journal", "", "with -mcp, append what Delta hears and says to this file, one JSON line each")
 	triageModel := flag.String("triage", "", "with -mcp, an Ollama model that sorts what Delta hears before Claude: it answers small talk itself, "+
@@ -67,10 +69,28 @@ func main() {
 	fx := flag.String("fx", "warm", "with -mcp, the effect on Delta's voice: warm, IX's closer and warmer voice (fx.go), or none")
 	lang := flag.String("lang", "", "the language Delta hears and speaks: en, the default, or fr (with -mcp, \"language\" in delta.json)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	ixKnotName := flag.String("ix-knot", "", "ask IX for this catalogue knot (figure-eight, overhand…) with its 3D path, write it for the hall's IX workshop, then exit (ixatelier.go)")
+	ixOrigami := flag.String("ix-origami", "", "ask IX to check this fold, a .origami sequence or a FOLD object, write its verdict for the hall's origami table, then exit (ixorigami.go)")
+	ixKnots := flag.Bool("ix-knots", false, "ask IX to read each knot of the hall's knots' floor, write the gallery with IX's verdicts, then exit (ixknots.go)")
+	ixMCP := flag.String("ix-mcp", "", "with -ix-knot, -ix-knots or -ix-origami, IX's MCP server executable (default: ix-mcp on the PATH)")
+	ixOut := flag.String("ix-out", "", "with -ix-knot, -ix-knots, -ix-origami or -origami-play, where to write the document (default: %LOCALAPPDATA%\\delta\\ix-atelier.json, ix-knots.json, ix-origami.json or ix-origami-play.json)")
+	origamiPlayCommand := flag.String("origami-play", "", "steer the origami table's fold shown step by step: next, prev, auto or a step's number, then exit (origamiplay.go)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
 		return
+	}
+	if *ixKnotName != "" {
+		os.Exit(runIXKnot(*ixKnotName, *ixMCP, *ixOut, os.Stdout, os.Stderr))
+	}
+	if *ixOrigami != "" {
+		os.Exit(runIXOrigami(*ixOrigami, *ixMCP, *ixOut, os.Stdout, os.Stderr))
+	}
+	if *ixKnots {
+		os.Exit(runIXKnots(*ixMCP, *ixOut, os.Stdout, os.Stderr))
+	}
+	if *origamiPlayCommand != "" {
+		os.Exit(runOrigamiPlay(*origamiPlayCommand, *ixOut, os.Stdout, os.Stderr))
 	}
 	if *whisperModel == "" && *whisper != "" {
 		*whisperModel = filepath.Join(filepath.Dir(*whisper), "ggml-large-v3-turbo-q5_0.bin")
@@ -81,7 +101,7 @@ func main() {
 			addr = "127.0.0.1:8805"
 		}
 		runMCP(mcpConfig{home: *home, lang: *lang, piper: *piper, voice: *voiceModel, whisper: *whisper, whisperModel: *whisperModel,
-			scene: addr, journal: *journalFile, ollama: *ollama, triage: *triageModel, hooks: *hooksAddr, fx: *fx, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
+			scene: addr, sceneSource: *sceneSource, journal: *journalFile, ollama: *ollama, triage: *triageModel, hooks: *hooksAddr, fx: *fx, noScene: *noScene, mute: *mute, wakeOff: *noWake, threads: *threads, audioCtx: *audioCtx})
 		return
 	}
 	l, err := languageOf(*lang)
@@ -151,7 +171,7 @@ func main() {
 			fail(err)
 		}
 		defer e.close()
-		fmt.Printf("ears ready on %s in %d ms\n", e.url, time.Since(start).Milliseconds())
+		fmt.Printf("ears ready on %s in %d ms\n", e.addr, time.Since(start).Milliseconds())
 	}
 
 	s := dialScene(*sceneAddr)
@@ -211,7 +231,7 @@ func main() {
 		}
 	}()
 	if *useMic {
-		go listen(e, s, &busy, heard, *micLevels)
+		go listen(e, s, &busy, nil, nil, heard, *micLevels)
 	}
 	for u := range heard {
 		busy.Store(true)

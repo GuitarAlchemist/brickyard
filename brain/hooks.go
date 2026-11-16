@@ -186,9 +186,21 @@ func (h *hooks) watch(every time.Duration) {
 	}
 }
 
+// router is what the brain registers its paths on: an http.ServeMux, or a test's list of them (openapi_test.go).
+type router interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
+
 // handler answers the hooks' posts.
 func (h *hooks) handler() http.Handler {
 	mux := http.NewServeMux()
+	h.routes(mux)
+	return localOnly(mux)
+}
+
+// routes registers every path of the hooks' address on mux, the remote gateway's among them when there is one. The
+// contract it keeps is docs/brain-api.json.
+func (h *hooks) routes(mux router) {
 	mux.HandleFunc("/hook", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get(hookHeader) == "" {
 			http.Error(w, "a hook posts its JSON with the "+hookHeader+" header", http.StatusForbidden)
@@ -224,7 +236,6 @@ func (h *hooks) handler() http.Handler {
 	if h.remote != nil {
 		h.remote.handle(mux)
 	}
-	return localOnly(mux)
 }
 
 // localOnly keeps web pages off the whole port. A page's script reaches 127.0.0.1 too, but its browser sends an Origin

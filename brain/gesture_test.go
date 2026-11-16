@@ -62,6 +62,7 @@ func TestDeltaAnswersGestures(t *testing.T) {
 		{gesture{Gesture: "thumbs_up", Confidence: 0.3}, ""},  // unsure: recorded, not acted on
 		{gesture{Gesture: "point_down", Confidence: 0.9}, ""}, // the shelf is closed
 		{gesture{Gesture: "fist", Confidence: 0.9}, ""},       // known, without an action yet
+		{gesture{Gesture: "i_love_you", Confidence: 0.9}, "hearts, mood joy"},
 	} {
 		if does := m.gesture(c.g, now); does != c.does {
 			t.Fatalf("%+v did %q, want %q", c.g, does, c.does)
@@ -73,7 +74,7 @@ func TestDeltaAnswersGestures(t *testing.T) {
 			t.Fatalf("%s with the shelf open did %q, want %q", g, does, want)
 		}
 	}
-	if got := shown.all(); !strings.HasPrefix(got, `{"mood":"joy"} {"mood":"sorry"} {"shelf":"sessions"}`) {
+	if got := shown.all(); !strings.HasPrefix(got, `{"mood":"joy"} {"mood":"sorry"} {"hearts":true,"mood":"joy"} {"shelf":"sessions"}`) {
 		t.Fatalf("showed %s", got)
 	}
 	first := records[0]

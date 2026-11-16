@@ -11,11 +11,16 @@ internal sealed unsafe class Texture : IDisposable
     private readonly VkDeviceMemory memory;
     private readonly VkBuffer staging;
     private readonly VkDeviceMemory stagingMemory;
+    private readonly int byteCount;
     private bool staged = true;
+    private bool disposed;
+    private static int liveCount;
+    public static int LiveCount => Volatile.Read(ref liveCount);
 
     public Texture(Device device, PhysicalDevice physical, CommandBuffer upload, byte[] rgba, int width, int height)
     {
         this.device = device;
+        byteCount = rgba.Length;
         var size = new ByteSize((nuint)rgba.Length);
         staging = device.CreateBuffer(new VkBufferCreateInfo { Size = size, Usage = VkBufferUsageFlags.TransferSrcBit, SharingMode = VkSharingMode.Exclusive }, null);
         stagingMemory = device.AllocateMemory(physical, staging, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
@@ -53,9 +58,28 @@ internal sealed unsafe class Texture : IDisposable
             [new VkBufferImageCopy { ImageSubresource = new VkImageSubresourceLayers { AspectMask = VkImageAspectFlags.ColorBit, LayerCount = 1 }, ImageExtent = new VkExtent3D { Width = width, Height = height, Depth = 1 } }]);
         upload.PipelineBarrier(VkPipelineStageFlags.TransferBit, VkPipelineStageFlags.FragmentShaderBit, VkDependencyFlags.None, [], [],
             [Stage.Barrier(image, VkImageLayout.TransferDstOptimal, VkImageLayout.ShaderReadOnlyOptimal, VkAccessFlags.TransferWriteBit, VkAccessFlags.ShaderReadBit)]);
+        Interlocked.Increment(ref liveCount);
     }
 
     public VkImageView View { get; }
+
+    // Only after the fence for this texture's frame-in-flight slot has completed. No other slot samples it.
+    // Keep staging for animated screens; static overlays continue to call FreeStaging after their first upload.
+    public void UpdateAfterFence(CommandBuffer upload, ReadOnlySpan<byte> rgba, int width, int height)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!staged || rgba.Length != byteCount || byteCount != width * height * 4)
+            throw new InvalidDataException("Animated screen upload exceeds its fixed buffer.");
+        var mapped = device.MapMemory<byte>(new MapInfo(stagingMemory) { Region = new MapRegion { Size = new ByteSize((nuint)byteCount) } });
+        try { rgba.CopyTo(new Span<byte>((byte*)mapped, byteCount)); }
+        finally { device.UnmapMemory(stagingMemory); }
+        upload.PipelineBarrier(VkPipelineStageFlags.FragmentShaderBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
+            [Stage.Barrier(image, VkImageLayout.ShaderReadOnlyOptimal, VkImageLayout.TransferDstOptimal, VkAccessFlags.ShaderReadBit, VkAccessFlags.TransferWriteBit)]);
+        upload.CopyBufferToImage(staging, image, VkImageLayout.TransferDstOptimal,
+            [new VkBufferImageCopy { ImageSubresource = new VkImageSubresourceLayers { AspectMask = VkImageAspectFlags.ColorBit, LayerCount = 1 }, ImageExtent = new VkExtent3D { Width = width, Height = height, Depth = 1 } }]);
+        upload.PipelineBarrier(VkPipelineStageFlags.TransferBit, VkPipelineStageFlags.FragmentShaderBit, VkDependencyFlags.None, [], [],
+            [Stage.Barrier(image, VkImageLayout.TransferDstOptimal, VkImageLayout.ShaderReadOnlyOptimal, VkAccessFlags.TransferWriteBit, VkAccessFlags.ShaderReadBit)]);
+    }
 
     public void FreeStaging()
     {
@@ -69,9 +93,12 @@ internal sealed unsafe class Texture : IDisposable
 
     public void Dispose()
     {
+        if (disposed) return;
         FreeStaging();
         device.DestroyImageView(View, null);
         device.DestroyImage(image, null);
         device.FreeMemory(memory, null);
+        disposed = true;
+        Interlocked.Decrement(ref liveCount);
     }
 }

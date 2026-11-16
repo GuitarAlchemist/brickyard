@@ -38,6 +38,28 @@ func TestSentencesComeOutAsTheyEnd(t *testing.T) {
 	}
 }
 
+// The first sound waits for the whole first part to be synthesised: a long first sentence is cut at its first comma
+// past a few words, so that Delta starts speaking sooner. Short sentences, the parts after the first, and commas too
+// near either end stay as they are.
+func TestALongFirstSentenceBreathesAtAComma(t *testing.T) {
+	long := "D'accord, je regarde les journaux de la scène depuis ce matin, puis je te dis ce qui a pris autant de mémoire."
+	got := breathFirst([]string{long, "Ensuite, je corrige si c'est simple."})
+	want := []string{"D'accord, je regarde les journaux de la scène depuis ce matin,", "puis je te dis ce qui a pris autant de mémoire.", "Ensuite, je corrige si c'est simple."}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q", got)
+	}
+	for _, kept := range [][]string{
+		{"Oui, c'est fait."},
+		{"Je lance les tests sur la branche de correctif maintenant et je te préviens dès que c'est vert ou rouge."},
+		{"Je regarde les journaux de la scène depuis ce matin et tout ce qui touche à la mémoire, oui."},
+		{},
+	} {
+		if got := breathFirst(kept); strings.Join(got, "|") != strings.Join(kept, "|") {
+			t.Fatalf("%q became %q", kept, got)
+		}
+	}
+}
+
 func TestChatStreamsTokens(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -84,6 +106,9 @@ func TestWavEnvelope(t *testing.T) {
 func TestMain(m *testing.M) {
 	if os.Getenv("BRAIN_FAKE_WHISPER") != "" {
 		fakeWhisper()
+	}
+	if os.Getenv("BRAIN_FAKE_IX") != "" {
+		fakeIX() // ixatelier_test.go
 	}
 	if os.Getenv("BRAIN_FAKE_PIPER") == "" {
 		os.Exit(m.Run())

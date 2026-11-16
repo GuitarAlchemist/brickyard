@@ -2,9 +2,10 @@ using System.Diagnostics;
 using System.Text.Json;
 
 // Delta's shelf: a menu of what runs in Claude Code on this computer, one level at a time — the sessions, by wmux
-// workspace when wmux runs, the past conversations by project (Conversations), the installed plugins and the
-// marketplaces, each opening onto what it holds. It is read from
-// Claude Code's own files and from wmux, never written; the one action is going to a session's pane in wmux.
+// workspace when wmux runs, the past conversations by project (Conversations), the installed plugins, the
+// marketplaces and Learn's courses (Courses), each opening onto what it holds. It is read from Claude Code's own files,
+// from wmux and from a clone of learn, never written; the actions are going to a session's pane in wmux and opening a
+// lesson on the site.
 //
 // The keys, the mouse and the brain move through it from the render loop's thread, while the slow reads (wmux answers
 // in about half a second a call) run on the thread pool and land in the node they fill.
@@ -50,7 +51,8 @@ internal sealed class Shelf
         }
     }
 
-    // Opens the shelf at its root, or at one of its sections: "sessions", "conversations", "plugins" or "marketplaces".
+    // Opens the shelf at its root, or at one of its sections: "sessions", "conversations", "plugins", "marketplaces" or
+    // "courses".
     public void Show(double now, string section = "")
     {
         lock (gate)
@@ -58,7 +60,7 @@ internal sealed class Shelf
             path.Clear();
             var root = new Level("Delta") { Rows = Roots() };
             path.Add(root);
-            var at = section switch { "sessions" => 0, "conversations" => 1, "plugins" => 2, "marketplaces" => 3, _ => -1 };
+            var at = section switch { "sessions" => 0, "conversations" => 1, "plugins" => 2, "marketplaces" => 3, "courses" => 4, _ => -1 };
             if (at >= 0)
             {
                 root.Selected = at;
@@ -198,15 +200,19 @@ internal sealed class Shelf
         new("Conversations", Words.Say("This computer's conversations, by project", "Les conversations de cet ordinateur, par projet"), Conversations.Projects),
         new("Plugins", Words.Say("The installed plugins", "Les plugins installés"), Plugins),
         new("Marketplaces", Words.Say("The plugin catalogs Claude Code knows", "Les catalogues de plugins connus"), Marketplaces),
+        new(Words.Say("Courses", "Cours"), Words.Say("Guitar Alchemist Learn's courses", "Les cours de Guitar Alchemist Learn"), Courses.List),
     ];
 
     internal static string ClaudeDir() =>
         Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") is { Length: > 0 } dir ? dir : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
 
     // A running Claude Code session, from its file in ~/.claude/sessions.
-    internal sealed record Session(int Pid, string Id, string Name, string Cwd, string Status, string Version, long Started);
+    internal sealed record Session(int Pid, string Id, string Name, string Cwd, string Status, string Version, long Started, bool Alive = true);
 
-    internal static List<Session> RunningSessions()
+    internal static List<Session> RunningSessions() => [.. SessionFiles().Where(s => s.Alive)];
+
+    // Every session file, Alive false where its process is gone: a file a crash left behind.
+    internal static List<Session> SessionFiles()
     {
         var sessions = new List<Session>();
         var dir = Path.Combine(ClaudeDir(), "sessions");
@@ -222,7 +228,7 @@ internal sealed class Shelf
                 using var doc = JsonDocument.Parse(File.ReadAllText(file));
                 var r = doc.RootElement;
                 var pid = r.TryGetProperty("pid", out var p) && p.TryGetInt32(out var n) ? n : 0;
-                if (pid == 0 || !Alive(pid))
+                if (pid == 0)
                 {
                     continue;
                 }
@@ -230,7 +236,7 @@ internal sealed class Shelf
                 var cwd = Text(r, "cwd");
                 var name = Text(r, "name");
                 sessions.Add(new Session(pid, Text(r, "sessionId"), name.Length > 0 ? name : Path.GetFileName(cwd.TrimEnd('\\', '/')), cwd, Text(r, "status"), Text(r, "version"),
-                    r.TryGetProperty("startedAt", out var s) && s.TryGetInt64(out var ms) ? ms : 0));
+                    r.TryGetProperty("startedAt", out var s) && s.TryGetInt64(out var ms) ? ms : 0, Alive(pid)));
             }
             catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
             {
@@ -259,7 +265,7 @@ internal sealed class Shelf
     {
         var sessions = RunningSessions();
         var wmux = Wmux.Read();
-        var outside = Words.Say("Outside wmux", "Hors de wmux");
+        var outside = Words.Say("No wmux pane", "Sans volet wmux"); // a background session (kind bg) has no pane anywhere
         var groups = sessions
             .GroupBy(s => wmux.Workspaces.TryGetValue(s.Id, out var w) ? w : outside)
             .OrderBy(g => g.Key == outside ? 1 : 0).ThenBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase);
@@ -498,16 +504,26 @@ internal sealed class Shelf
             {
                 if (workspaces is not null && workspaces.RootElement.TryGetProperty("workspaces", out var ws))
                 {
-                    foreach (var w in ws.EnumerateArray())
+                    var listed = ws.EnumerateArray().Select(w => (Id: Text(w, "id"), Title: Text(w, "title"))).ToList();
+                    var answers = Each(listed.Select(w => w.Id).ToList(), id => Run("list-surfaces", "--workspace", id));
+                    try
                     {
-                        var title = Text(w, "title");
-                        using var surfaces = Run("list-surfaces", "--workspace", Text(w, "id"));
-                        if (surfaces is not null && surfaces.RootElement.TryGetProperty("surfaces", out var ss))
+                        for (var i = 0; i < listed.Count; i++)
                         {
-                            foreach (var surface in ss.EnumerateArray())
+                            if (answers[i] is { } surfaces && surfaces.RootElement.TryGetProperty("surfaces", out var ss) && ss.ValueKind == JsonValueKind.Array)
                             {
-                                workspaceOfSurface[Text(surface, "id")] = title;
+                                foreach (var surface in ss.EnumerateArray())
+                                {
+                                    workspaceOfSurface[Text(surface, "id")] = listed[i].Title;
+                                }
                             }
+                        }
+                    }
+                    finally
+                    {
+                        foreach (var answer in answers)
+                        {
+                            answer?.Dispose();
                         }
                     }
                 }
@@ -524,6 +540,142 @@ internal sealed class Shelf
 
             return new Snapshot(workspaceOf, surfaceOf, blocked);
         }
+
+        // Each session's surface, state ("working", "idle", "blocked") and provider ("claude", "codex"), from agent-state
+        // alone: one call, for the agents' office, which asks every few seconds. Null when the call failed, which is not
+        // an answer with no agent (KeptReading); without wmux there is no agent.
+        public static Dictionary<string, (string Surface, string State, string Provider)>? AgentStates()
+        {
+            if (!File.Exists(Exe))
+            {
+                return [];
+            }
+
+            using var doc = Run("agent-state");
+            return DecodeAgentStates(doc);
+        }
+
+        // Each surface's workspace, its stable ID and its title: a call for the workspaces and one for each workspace's
+        // surfaces, so the agents' office asks only now and then. Null when a call failed, which is not an empty answer
+        // (KeptReading); without wmux there is no workspace.
+        public static Dictionary<string, (string Id, string Title)>? SurfaceWorkspaces()
+        {
+            if (!File.Exists(Exe))
+            {
+                return [];
+            }
+
+            using var workspaces = Run("list-workspaces");
+            return DecodeWorkspaces(workspaces, id => Run("list-surfaces", "--workspace", id));
+        }
+
+        // agent-state's answer: null unless it is an object holding an array of states, each an object. A state without
+        // a session is a pane with no session, not an agent: it is left out.
+        internal static Dictionary<string, (string Surface, string State, string Provider)>? DecodeAgentStates(JsonDocument? doc)
+        {
+            if (Listed(doc, "states") is not { } list)
+            {
+                return null;
+            }
+
+            var states = new Dictionary<string, (string, string, string)>();
+            foreach (var s in list.EnumerateArray())
+            {
+                if (s.ValueKind != JsonValueKind.Object)
+                {
+                    return null;
+                }
+
+                var id = Text(s, "sessionId");
+                if (id.Length > 0)
+                {
+                    states[id] = (Text(s, "surfaceId"), Text(s, "state"), Text(s, "sessionProvider"));
+                }
+            }
+
+            return states;
+        }
+
+        // list-workspaces' answer and each workspace's list-surfaces (surfacesOf): null unless each is an object holding
+        // its array, and every workspace and surface in them has an ID; an array may be empty.
+        internal static Dictionary<string, (string Id, string Title)>? DecodeWorkspaces(JsonDocument? workspaces, Func<string, JsonDocument?> surfacesOf)
+        {
+            if (Listed(workspaces, "workspaces") is not { } ws)
+            {
+                return null;
+            }
+
+            var listed = new List<(string Id, string Title)>();
+            foreach (var w in ws.EnumerateArray())
+            {
+                var (id, title) = (Text(w, "id"), Text(w, "title"));
+                if (id.Length == 0)
+                {
+                    return null; // a workspace without an ID: the answer is not one
+                }
+
+                listed.Add((id, title));
+            }
+
+            var answers = Each(listed.Select(w => w.Id).ToList(), surfacesOf);
+            try
+            {
+                var workspaceOf = new Dictionary<string, (string, string)>();
+                for (var i = 0; i < listed.Count; i++)
+                {
+                    if (Listed(answers[i], "surfaces") is not { } ss)
+                    {
+                        return null; // a workspace whose panes are unknown: the reading is incomplete
+                    }
+
+                    foreach (var surface in ss.EnumerateArray())
+                    {
+                        var surfaceId = Text(surface, "id");
+                        if (surfaceId.Length == 0)
+                        {
+                            return null; // a pane without an ID cannot be placed
+                        }
+
+                        workspaceOf[surfaceId] = listed[i];
+                    }
+                }
+
+                return workspaceOf;
+            }
+            finally
+            {
+                foreach (var answer in answers)
+                {
+                    answer?.Dispose();
+                }
+            }
+        }
+
+        // Each workspace's panes, asked of wmux at once rather than one after the other: each call costs it about half a
+        // second, and nine workspaces kept the shelf's sessions about ten seconds from showing.
+        private static JsonDocument?[] Each(IReadOnlyList<string> ids, Func<string, JsonDocument?> surfacesOf)
+        {
+            var answers = new JsonDocument?[ids.Count];
+            try
+            {
+                Parallel.For(0, ids.Count, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i => answers[i] = surfacesOf(ids[i]));
+            }
+            catch (AggregateException e)
+            {
+                foreach (var answer in answers)
+                {
+                    answer?.Dispose();
+                }
+
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(e.InnerExceptions[0]);
+            }
+
+            return answers;
+        }
+
+        // The array named in an answer whose root is an object, or null.
+        private static JsonElement? Listed(JsonDocument? doc, string name) =>
+            doc is { RootElement: { ValueKind: JsonValueKind.Object } root } && root.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array ? list : null;
 
         // Shows a surface's pane: its workspace first, then the surface.
         public static void Focus(string surface)

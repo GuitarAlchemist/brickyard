@@ -1,0 +1,146 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// gatewayInvite is the phone gateway's own entry on this computer, for Delta's window (brickyard-remote's
+// -local-port): POST /invite answers {"link", "expires"}, a link that lets guests watch the window from afar for an
+// hour; 409 while a guest watches, since the window would show them the next one, and 404 when it lets no guest in.
+const gatewayInvite = "http://127.0.0.1:8813/invite"
+
+// gatewayGuestMic switches whether guests hear the room through the gateway's microphone: POST {"on"}, 204, or 404
+// when the gateway has no microphone.
+const gatewayGuestMic = "http://127.0.0.1:8813/guests/mic"
+
+// gatewayPairNew asks the gateway for a new pairing code: POST, 202, after which the gateway posts the new link to the
+// brain's /link as it does at its start; 404 from a gateway that makes a code only when it starts.
+const gatewayPairNew = "http://127.0.0.1:8813/pair/new"
+
+// pairNewEvery is the least time between two asks for a new pairing code: the window asks each time its card opens
+// without a code alive.
+const pairNewEvery = 10 * time.Second
+
+var (
+	errWatching  = errors.New("a guest watches the window: invite from the paired phone")
+	errGuestsOff = errors.New("the phone gateway lets no guest in: it needs -guest-host")
+	errPairSoon  = errors.New("a new pairing code was asked for a moment ago")
+	errPairOld   = errors.New("the phone gateway makes a pairing code only when it starts: restart it for a new one")
+)
+
+// pairNew asks the gateway at address for a new pairing code, as the window does when its pairing card opens with no
+// code alive. The code itself comes later, through /link.
+func (r *remote) pairNew(address string, now time.Time) error {
+	r.mu.Lock()
+	if now.Sub(r.pairAsked) < pairNewEvery {
+		r.mu.Unlock()
+		return errPairSoon
+	}
+	r.pairAsked = now
+	r.mu.Unlock()
+	req, err := http.NewRequest(http.MethodPost, address, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, r.secret)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("no phone gateway answers on this computer: %w", err)
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusAccepted, http.StatusOK, http.StatusNoContent:
+		return nil
+	case http.StatusNotFound:
+		return errPairOld
+	}
+	return fmt.Errorf("the phone gateway answered %s", resp.Status)
+}
+
+// invite asks the gateway at address for an invitation, as the window's Inviter button does, with the secret the
+// gateway also sends this brain. The link lets someone watch: it goes to the window and the clipboard, never a log.
+func (r *remote) invite(address string) (link string, until time.Time, err error) {
+	req, err := http.NewRequest(http.MethodPost, address, nil)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, r.secret)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("no phone gateway answers on this computer: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusConflict:
+		return "", time.Time{}, errWatching
+	case http.StatusNotFound:
+		return "", time.Time{}, errGuestsOff
+	default:
+		return "", time.Time{}, fmt.Errorf("the phone gateway answered %s", resp.Status)
+	}
+	var body struct {
+		Link    string    `json:"link"`
+		Expires time.Time `json:"expires"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body); err != nil {
+		return "", time.Time{}, fmt.Errorf("the phone gateway's invitation: %w", err)
+	}
+	if u, err := url.Parse(body.Link); err != nil || u.Scheme != "https" || u.Host == "" || body.Expires.IsZero() {
+		return "", time.Time{}, errors.New("the phone gateway answered something other than an invitation")
+	}
+	return body.Link, body.Expires, nil
+}
+
+// guestMic asks the gateway at address to let guests hear the room, or to stop, as a click on the window's guest
+// badge does.
+func (r *remote) guestMic(address string, on bool) error {
+	req, err := http.NewRequest(http.MethodPost, address, strings.NewReader(fmt.Sprintf(`{"on":%v}`, on)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, r.secret)
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("no phone gateway answers on this computer: %w", err)
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusNotFound:
+		return errors.New("the phone gateway has no microphone for guests: it needs -mic")
+	}
+	return fmt.Errorf("the phone gateway answered %s", resp.Status)
+}
+
+// invitationRefused names why the window shows no invitation, for its card: watching, off or gateway.
+func invitationRefused(err error) string {
+	switch {
+	case errors.Is(err, errWatching):
+		return "watching"
+	case errors.Is(err, errGuestsOff):
+		return "off"
+	}
+	return "gateway"
+}
+
+// copyText puts text on Windows' clipboard, for the user to paste the link into a message.
+func copyText(text string) error {
+	cmd := exec.Command("clip.exe")
+	hideConsole(cmd)
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}

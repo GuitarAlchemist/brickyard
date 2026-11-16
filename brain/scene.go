@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -16,11 +19,13 @@ type scene struct {
 	mu       sync.Mutex
 	addr     string
 	conn     net.Conn
-	hello    []byte    // the line each new connection starts with, if any: what a window must know whatever it missed
-	launch   func()    // starts the window, when the brain may (startScene)
-	wanted   bool      // the window should be on screen
-	launched time.Time // its last start, so that a window that cannot start is not started at every line
-	closed   string    // the file the window leaves when the user closes it, if known
+	hello    []byte                     // the line each new connection starts with, if any: what a window must know whatever it missed
+	recall   func() map[string]any      // a line each new connection gets after hello, made then, as a pairing code with the seconds it has left; nil for none
+	asked    func(event map[string]any) // what the window asks for, such as {"language":"fr+en"}, or nil
+	launch   func()                     // starts the window, when the brain may (startScene)
+	wanted   bool                       // the window should be on screen
+	launched time.Time                  // its last start, so that a window that cannot start is not started at every line
+	closed   string                     // the file the window leaves when the user closes it, if known
 }
 
 // relaunchEvery is the least time between two starts of the window.
@@ -70,6 +75,42 @@ func (s *scene) greet(event map[string]any) {
 	s.hello = append(line, '\n')
 }
 
+// lastPairing keeps the gateway's last pairing code, so that a window started after it came still shows it while it
+// lives (recall). The code is a credential: it stays in memory, never in a log or the journal.
+type lastPairing struct {
+	mu    sync.Mutex
+	rows  []string
+	until time.Time
+}
+
+func (p *lastPairing) set(rows []string, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rows, p.until = rows, now.Add(pairingSeconds*time.Second)
+}
+
+// line is the pairing line for a window that connects now, or nil when no code lives a second more.
+func (p *lastPairing) line(now time.Time) map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	left := p.until.Sub(now).Seconds()
+	if p.rows == nil || left < 1 {
+		return nil
+	}
+	return map[string]any{"pairing": map[string]any{"rows": p.rows, "seconds": left}}
+}
+
+// read hands each JSON line the window writes back on c to asked, until c closes.
+func (s *scene) read(c net.Conn) {
+	lines := bufio.NewScanner(c)
+	for lines.Scan() {
+		var event map[string]any
+		if json.Unmarshal(lines.Bytes(), &event) == nil && s.asked != nil {
+			s.asked(event)
+		}
+	}
+}
+
 func (s *scene) send(event map[string]any) {
 	if s == nil || s.addr == "" {
 		return
@@ -89,9 +130,16 @@ func (s *scene) send(event map[string]any) {
 				return
 			}
 			s.conn = c
+			go s.read(c)
 		}
 		s.conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 		out := append(line, '\n')
+		if fresh && s.recall != nil {
+			if event := s.recall(); event != nil {
+				later, _ := json.Marshal(event)
+				out = append(append(later, '\n'), out...)
+			}
+		}
 		if fresh && s.hello != nil {
 			out = append(append([]byte(nil), s.hello...), out...)
 		}
@@ -101,4 +149,20 @@ func (s *scene) send(event map[string]any) {
 		s.conn.Close()
 		s.conn = nil
 	}
+}
+
+// waitsForEdit says whether the dotnet watch that writes the log named waits for an edit because the window it ran
+// exited, as after a crash: its last line then says so.
+func waitsForEdit(name string) bool {
+	f, err := os.Open(name)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err == nil && info.Size() > 4096 {
+		f.Seek(-4096, io.SeekEnd)
+	}
+	tail, _ := io.ReadAll(f)
+	lines := bytes.Split(bytes.TrimSpace(tail), []byte("\n"))
+	return bytes.Contains(lines[len(lines)-1], []byte("Waiting for a file to change"))
 }

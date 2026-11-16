@@ -9,8 +9,12 @@ internal static class Conversations
     private const int Listed = 60; // the conversations listed in a project, the most recent
     private const int Requests = 6; // the last requests shown in a conversation
 
-    // What a transcript's ends say: its title, the folder it ran in, and its requests, oldest first.
-    internal sealed record Ends(string Title, string Cwd, List<(string Text, DateTimeOffset At)> Requests);
+    internal const long Search = 16L << 20; // the bytes from its end the wall searches for a long session's latest requests
+
+    // What a transcript's ends say: its title, the folder it ran in, and its requests, oldest first. Unfound is the bytes
+    // read from its end without a request in them when more lie before: its latest requests are then unknown, never
+    // taken from its start.
+    internal sealed record Ends(string Title, string Cwd, List<(string Text, DateTimeOffset At)> Requests, long Unfound = 0);
 
     public static List<Shelf.Node> Projects()
     {
@@ -74,6 +78,11 @@ internal static class Conversations
             rows.Add(new Shelf.Node(Short(text, 72), When(at.LocalDateTime)));
         }
 
+        if (ends.Unfound > 0)
+        {
+            rows.Add(new Shelf.Node(Words.Say("Last requests unknown", "Dernières demandes inconnues"), Words.Say($"none in its last {Size(ends.Unfound)}", $"aucune dans ses derniers {Size(ends.Unfound)}")));
+        }
+
         rows.Add(new Shelf.Node(Words.Say("Folder", "Dossier"), ends.Cwd));
         rows.Add(new Shelf.Node(Words.Say("Last activity", "Dernière activité"), When(file.LastWriteTime) + (live ? Words.Say(", running", ", en cours") : "")));
         rows.Add(new Shelf.Node(Words.Say("Size", "Taille"), Size(file.Length)));
@@ -81,26 +90,44 @@ internal static class Conversations
         return rows;
     }
 
-    // Reads a transcript's ends. The last title wins: one the user gave (/rename) over Claude Code's own.
-    internal static Ends Read(string path)
+    // Reads a transcript's ends. The last title wins: one the user gave (/rename) over Claude Code's own. When its last
+    // Edge bytes hold no request, its latest are looked for in up to search bytes from its end, in one read; the first
+    // requests stand for them only when the two ends cover the whole file.
+    internal static Ends Read(string path, long search = Edge)
     {
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        var tail = Scan(Lines(file, Math.Max(0, file.Length - Edge)));
+        var tail = Scan(Lines(file, Math.Max(0, file.Length - Edge), Edge));
         if (file.Length <= Edge || (tail.Title.Length > 0 && tail.Cwd.Length > 0 && tail.Requests.Count > 0))
         {
             return tail.Title.Length > 0 || tail.Requests.Count == 0 ? tail : tail with { Title = tail.Requests[0].Text };
         }
 
-        var head = Scan(Lines(file, 0));
+        var head = Scan(Lines(file, 0, Edge));
+        var (requests, unfound) = (tail.Requests, 0L);
+        if (requests.Count == 0 && file.Length <= 2L * Edge)
+        {
+            requests = head.Requests;
+        }
+        else if (requests.Count == 0)
+        {
+            var span = Math.Min(file.Length, Math.Max(search, Edge));
+            if (span > Edge)
+            {
+                requests = Scan(Lines(file, file.Length - span, span)).Requests;
+            }
+
+            unfound = requests.Count == 0 && span < file.Length ? span : 0;
+        }
+
         var title = tail.Title.Length > 0 ? tail.Title : head.Title.Length > 0 ? head.Title : head.Requests.Concat(tail.Requests).Select(r => r.Text).FirstOrDefault() ?? "";
-        return new Ends(title, tail.Cwd.Length > 0 ? tail.Cwd : head.Cwd, tail.Requests.Count > 0 ? tail.Requests : head.Requests);
+        return new Ends(title, tail.Cwd.Length > 0 ? tail.Cwd : head.Cwd, requests, unfound);
     }
 
-    // The whole lines in the Edge bytes from offset: the first is dropped unless it starts the file, and the last
+    // The whole lines in the length bytes from offset: the first is dropped unless it starts the file, and the last
     // unless it ends it.
-    private static List<ReadOnlyMemory<byte>> Lines(FileStream file, long offset)
+    private static List<ReadOnlyMemory<byte>> Lines(FileStream file, long offset, long length)
     {
-        var buffer = new byte[(int)Math.Min(Edge, file.Length - offset)];
+        var buffer = new byte[(int)Math.Min(length, file.Length - offset)];
         file.Position = offset;
         file.ReadExactly(buffer);
         var lines = new List<ReadOnlyMemory<byte>>();
@@ -261,7 +288,25 @@ internal static class Conversations
             ends = Read(large);
             check(ends.Title == "Long work" && ends.Cwd == @"C:\new" && ends.Requests.Select(r => r.Text).SequenceEqual(["Termine"]),
                 "a large conversation's title from its start, its folder and requests from its end");
-            check(Short("une  phrase\n bien trop longue", 12) == "une phrase…", "a long label is shortened");
+            // A long session whose latest request lies far behind its last tools' outputs: never its first one instead.
+            var deep = Path.Combine(dir.FullName, "deep.jsonl");
+            using (var w = new StreamWriter(deep))
+            {
+                var filler = """{"type":"assistant","message":{"content":"<padding>"}}""".Replace("<padding>", new string('x', 1000), StringComparison.Ordinal);
+                w.WriteLine("""{"type":"user","cwd":"C:\\work","timestamp":"2026-10-15T21:40:00Z","message":{"content":"Le tout début"}}""");
+                for (var i = 0; i < 600; i++) w.WriteLine(filler);
+                w.WriteLine("""{"type":"user","timestamp":"2026-11-04T15:39:37Z","message":{"content":"La plus récente"}}""");
+                for (var i = 0; i < 800; i++) w.WriteLine(filler);
+            }
+
+            ends = Read(deep);
+            check(!ends.Requests.Any(r => r.Text == "Le tout début"), "a long session's first request is never given as its latest");
+            check(ends.Requests.Count == 0 && ends.Unfound == Edge && ends.Cwd == @"C:\work", "read at its ends only, its latest requests are said unknown");
+            ends = Read(deep, Search);
+            check(ends.Requests is [.., ("La plus récente", var latestAt)] && latestAt == new DateTimeOffset(2026, 11, 4, 15, 39, 37, TimeSpan.Zero) && ends.Unfound == 0,
+                "searched further back, within the bound, its latest request is found with its date");
+            ends = Read(deep, 512 * 1024);
+            check(ends.Requests.Count == 0 && ends.Unfound == 512 * 1024, "beyond the bound searched, its latest requests are unknown, with the bytes searched");
         }
         finally
         {

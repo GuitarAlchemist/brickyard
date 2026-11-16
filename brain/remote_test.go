@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,7 +66,11 @@ func remoteServer(t *testing.T, r *remote) *httptest.Server {
 func wavBytes(t *testing.T, rate int, seconds float64) []byte {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "a.wav")
-	if err := writeWav(path, rate, make([]float32, int(seconds*float64(rate)))); err != nil {
+	tone := make([]float32, int(seconds*float64(rate))) // loud enough for speech
+	for i := range tone {
+		tone[i] = float32(0.1 * math.Sin(2*math.Pi*220*float64(i)/float64(rate)))
+	}
+	if err := writeWav(path, rate, tone); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -107,7 +113,7 @@ func TestARemoteDeviceSpeaksToDeltaWithTheSecret(t *testing.T) {
 	if code, _ := post(speech, "s3cret"); code != http.StatusServiceUnavailable {
 		t.Fatalf("before Delta hears: %d", code)
 	}
-	r.hearWith(func([]float32) (string, error) { return " Delta, quelle heure est-il ? ", nil })
+	r.hearWith(func([]float32) (string, string, error) { return " Delta, quelle heure est-il ? ", "fr", nil })
 	if code, _ := post(wavBytes(t, 22050, 1), "s3cret"); code != http.StatusBadRequest {
 		t.Fatalf("a WAV at 22 kHz: %d", code)
 	}
@@ -360,7 +366,7 @@ func TestAGatewaysPairingLinkReachesTheWindowAsAQRCode(t *testing.T) {
 func TestAnAnswerToAnotherDevicePlaysThereOnly(t *testing.T) {
 	r := &remote{secret: "s3cret", route: func(u utterance) (int, string) { return 12, "channel" }}
 	srv := remoteServer(t, r)
-	r.hearWith(func([]float32) (string, error) { return "Delta, quelle heure est-il ?", nil })
+	r.hearWith(func([]float32) (string, string, error) { return "Delta, quelle heure est-il ?", "fr", nil })
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/hear", bytes.NewReader(wavBytes(t, earsRate, 1)))
 	req.Header.Set(hookHeader, "1")
 	req.Header.Set(remoteHeader, "s3cret")
@@ -382,5 +388,100 @@ func TestAnAnswerToAnotherDevicePlaysThereOnly(t *testing.T) {
 	subscribeSaid(t, r, "own")
 	if r.aloud(20) || !r.aloud(21) || !r.aloud(22) || !r.aloud(99) {
 		t.Fatalf("aloud: %v %v %v %v", r.aloud(20), r.aloud(21), r.aloud(22), r.aloud(99))
+	}
+}
+
+// A recording with no sound in it, such as a page whose sound was off sent (44 bytes, 0.00 s), never reaches Whisper,
+// which would invent a sentence over the silence, as « Söyut, Elda. » was, live: it is heard as nothing.
+func TestASilentRecordingIsHeardAsNothing(t *testing.T) {
+	asked := 0
+	r := &remote{secret: "s3cret", route: func(u utterance) (int, string) { t.Errorf("routed %q", u.text); return 1, "channel" }}
+	r.hearWith(func([]float32) (string, string, error) { asked++; return "Söyut, Elda.", "fr", nil })
+	srv := remoteServer(t, r)
+	silent := func(seconds float64) []byte {
+		path := filepath.Join(t.TempDir(), "silent.wav")
+		if err := writeWav(path, earsRate, make([]float32, int(seconds*earsRate))); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := os.ReadFile(path)
+		return data
+	}
+	for _, wav := range [][]byte{silent(0), silent(2)} {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/hear", bytes.NewReader(wav))
+		req.Header.Set(hookHeader, "1")
+		req.Header.Set(remoteHeader, "s3cret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var answer map[string]any
+		json.NewDecoder(resp.Body).Decode(&answer)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted || answer["route"] != "nothing" || answer["text"] != "" {
+			t.Errorf("%d bytes: %d %v", len(wav), resp.StatusCode, answer)
+		}
+	}
+	if asked != 0 {
+		t.Errorf("Whisper was asked %d times", asked)
+	}
+}
+
+// The gateway says how many guests watch the window from afar, and whether they hear the room, for the window to say so.
+func TestTheWindowLearnsWhenGuestsWatch(t *testing.T) {
+	var told []string
+	r := &remote{secret: "s3cret", watch: func(guests int, hear bool) { told = append(told, fmt.Sprintf("%d %v", guests, hear)) }}
+	srv := remoteServer(t, r)
+	for body, want := range map[string]int{`{"watching":2}`: http.StatusNoContent, `{"watching":1,"mic":true}`: http.StatusNoContent,
+		`{}`: http.StatusBadRequest, `{"watching":-1}`: http.StatusBadRequest, `{"watching":1,"mic":"yes"}`: http.StatusBadRequest,
+		`{"watching":"2"}`: http.StatusBadRequest, `{"watching":100}`: http.StatusBadRequest} {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/guests", strings.NewReader(body))
+		req.Header.Set(hookHeader, "1")
+		req.Header.Set(remoteHeader, "s3cret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("%s: %d, want %d", body, resp.StatusCode, want)
+		}
+	}
+	slices.Sort(told)
+	if !slices.Equal(told, []string{"1 true", "2 false"}) {
+		t.Errorf("told %v", told)
+	}
+}
+
+// The phone icon's screen lights while a device listens to /said, and goes dark once it stops; a guest's page, which
+// does not play its own answers, does not light it.
+func TestThePhoneIconKnowsWhenADeviceListens(t *testing.T) {
+	told := make(chan int, 4)
+	r := &remote{secret: "s3cret", listen: func(n int) { told <- n }}
+	srv := remoteServer(t, r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	subscribeSaid(t, r, "")
+	if n := <-told; n != 0 {
+		t.Fatalf("a guest's page counts as %d devices", n)
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/said", nil)
+	req.Header.Set(hookHeader, "1")
+	req.Header.Set(remoteHeader, r.secret)
+	req.Header.Set(playsHeader, "own")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	for _, want := range []int{1, 0} {
+		select {
+		case n := <-told:
+			if n != want {
+				t.Fatalf("told %d devices, want %d", n, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("never told %d devices", want)
+		}
+		cancel()
 	}
 }

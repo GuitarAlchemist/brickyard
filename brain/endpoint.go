@@ -94,6 +94,32 @@ func (e *endpoint) reset() {
 	e.talking = false
 }
 
+// voiced counts the 20 ms frames of samples loud enough to be speech in a quiet room, as the endpoint hears it.
+func voiced(samples []float32) int {
+	n := 0
+	for at := 0; at+frameSamples <= len(samples); at += frameSamples {
+		if rms(samples[at:at+frameSamples]) > 0.01 {
+			n++
+		}
+	}
+	return n
+}
+
+// voicedLevel is how loud samples' voiced frames are, their RMS together: a microphone close to the mouth hears them
+// louder than one across the room.
+func voicedLevel(samples []float32) float64 {
+	sum, n := 0.0, 0
+	for at := 0; at+frameSamples <= len(samples); at += frameSamples {
+		if r := rms(samples[at : at+frameSamples]); r > 0.01 {
+			sum, n = sum+r*r, n+1
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return math.Sqrt(sum / float64(n))
+}
+
 func rms(frame []float32) float64 {
 	if len(frame) == 0 {
 		return 0

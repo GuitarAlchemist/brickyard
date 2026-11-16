@@ -18,6 +18,8 @@ folder:
 | Native libraries inside the BRUTAL packages (GLFW, shaderc, SPIRV-Tools and the rest) | as packaged | as listed in each package's `THIRD-PARTY-NOTICES` | `scene\` |
 | The Brutal logo | [ahwootech/brutal-branding](https://github.com/ahwootech/brutal-branding/tree/5d38373a24fed6f8afcc8bc803c96b6163ddf4b4) at 5d38373, `LOGO_BRUTAL_WHT.png`, SHA-256 `59768c2ab60fc835af29b1d686e5a76604e959fb4e84adf2bfb7fd26e7355d0c` | Ahwoo's. It is shown as BRUTAL's licence requires (README) | `scene\brand\` |
 | CommunityToolkit.HighPerformance | 8.4.2 | MIT | `scene\` |
+| Jint, the JavaScript interpreter that runs the arcade game's script | 4.17.0 | BSD-2-Clause; its package names the licence only, so its text is kept in `LICENSES\Jint\` | `scene\` |
+| Acornima, Jint's JavaScript parser | 1.7.0 | BSD-3-Clause; text kept in `LICENSES\Acornima\` | `scene\` |
 | .NET runtime (self-contained) | 10.0.13 | MIT, with its third-party notices | `scene\` |
 | Go runtime and standard library | as built | BSD-3-Clause | `brain.exe` |
 
@@ -40,3 +42,35 @@ Ollama and qwen3:8b are not used.
 | A Piper voice | See its model card. en_US-ljspeech-medium's dataset, LJ Speech, is public domain. fr_FR-siwis-medium's dataset is CC BY 4.0, and the voice was fine-tuned from lessac |
 | whisper.cpp | MIT |
 | Whisper large-v3-turbo, ggml conversion | MIT |
+| MediaPipe, for `hands\` | Apache-2.0 |
+| OpenCV (`opencv-contrib-python`, which MediaPipe requires) | Apache-2.0. Its wheel includes FFmpeg, under the LGPL |
+| MediaPipe's gesture recognizer model | Google's. Its model card names no licence; MediaPipe's code is Apache-2.0 |
+
+`/delta:setup` does not install the camera process: uv fetches MediaPipe and OpenCV when you first start it, and the
+process downloads its model.
+
+## Fetched, never shipped
+
+The arcade cabinet plays PARSEC, a third party's game at https://parsec.games.bu.app/. Its page is fetched from that
+site each time the game starts and its script runs in the scene; nothing of it is copied into this repository or the
+release, and the scene keeps only its high score (`%LOCALAPPDATA%\delta\arcade-storage.json`).
+
+The hall's photographed materials are Poly Haven's scans, CC0 1.0 (https://polyhaven.com/license):
+`brick_wall_001` (Rob Tuytel, Dimitrios Savva), `concrete_floor_worn_001` and `concrete_wall_003` (Dimitrios Savva, Rico
+Cilliers), `rough_wood` and `green_metal_rust` (Rob Tuytel). `tools/textures` downloads and packs them into
+`%LOCALAPPDATA%\delta\materials`, recording each file's SHA-256; neither this repository nor the release holds them yet.
+The brick wall is not the scan as photographed: Blender (GPL; run as a tool, nothing of it is copied) lays the scan's
+own bricks afresh with `tools/textures/wall.py`, and what it writes is packed in the scan's place.
+
+Gaia's planet is painted with NASA's Blue Marble: Next Generation, with topography and bathymetry (July 2004, 21600 ×
+10800), credited as NASA asks: **NASA Earth Observatory** (https://earthobservatory.nasa.gov/features/BlueMarble).
+NASA's imagery is not copyrighted in the United States; NASA's guidelines ask that it be credited and not used to imply
+NASA's endorsement. `tools/textures` (`-globes only` for the globe alone) downloads it and writes it at 8192 × 4096, in
+two halves, into `%LOCALAPPDATA%\delta\materials\globes\earth`, with `globe.json` holding its source, its credit and
+the download's SHA-256; neither this repository nor the release holds it.
+
+## Ideas, not code
+
+The agents' office (`modules/AgentOffice`) takes its idea from
+[agent-office](https://github.com/AgentSystemLabs/agent-office) (MIT), and its widgets compose as GA's Lego demo
+(ga-brutal, MIT) does. Neither's code nor assets are copied.
