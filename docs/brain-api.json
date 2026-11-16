@@ -56,7 +56,7 @@
       "post": {
         "operationId": "postGesture",
         "summary": "A hand gesture a camera process saw",
-        "description": "The camera process (hands/delta_hands.py, which the user starts) posts each gesture it sees. The brain records it in the journal and acts on it, in order, when its confidence is at least 0.6: a face, hearts, a step through the shelf while the shelf is open, or opening the conversation. Only `X-Delta-Hook` is needed. The body is read up to 64 KiB.",
+        "description": "A camera process posts each gesture it sees; none ships yet. The brain records it in the journal and acts on it, in order, when its confidence is at least 0.6: a face, a step through the shelf while the shelf is open, or opening the conversation. Only `X-Delta-Hook` is needed. The body is read up to 64 KiB.",
         "security": [
           {
             "deltaHook": []
@@ -567,7 +567,6 @@
             "type": "string",
             "enum": [
               "fist",
-              "i_love_you",
               "open_palm",
               "point_down",
               "point_up",
