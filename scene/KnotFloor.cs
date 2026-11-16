@@ -296,25 +296,48 @@ internal static class KnotFloor
     // passes over which stays IX's; only the rope near a post is Delta's. A knot without a post is IX's path as it is.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Knot, Shown> Showing = new();
 
-    private sealed record Shown(Rope[] Ropes, float Moved, float Before, float After, float Fade);
+    private sealed record Shown(Rope[] Ropes, float Moved, float Before, float After, float Fade, Bends Bent, Bends Relaxed);
+
+    // How a knot's ropes bend and cross: the tightest radius they turn round in plan and the steepest of their slopes
+    // (95th percentile), in rope radii; and the crossings of their plan and its writhe (the sum of their signs, over
+    // and under as the heights say), the ropes only, without the posts.
+    internal readonly record struct Bends(float Tightest, float Slope, int Crossings, int Writhe);
 
     internal static Rope[] Show(Knot k) => Showing.GetValue(k, Choose).Ropes;
 
     // How far the floor moved IX's rope at most, in rope radii; the least clearance between two parts of the knot's ropes,
     // IX's and as shown, from surface to surface in diameters, between points on two ropes or more than 4 diameters apart
-    // along one (round it when closed); and the fade taken, in rope radii.
-    internal static (float Moved, float Before, float After, float Fade) Measure(Knot k)
+    // along one (round it when closed); the fade taken, in rope radii; and how the ropes bend and cross, laid on the wood
+    // and then relaxed (Relax).
+    internal static (float Moved, float Before, float After, float Fade, Bends Bent, Bends Relaxed) Measure(Knot k)
     {
         var s = Showing.GetValue(k, Choose);
-        return (s.Moved, s.Before, s.After, s.Fade);
+        return (s.Moved, s.Before, s.After, s.Fade, s.Bent, s.Relaxed);
     }
 
     private static Shown Choose(Knot k)
     {
+        var shown = OnTheWood(k);
+        var ropes = Relax(k, shown.Ropes);
+        var moved = 0f;
+        for (var r = 0; r < ropes.Length; r++)
+        {
+            if (!k.Posts.Contains(r))
+            {
+                var ix = k.Ropes[r];
+                moved = MathF.Max(moved, ropes[r].Points.Max(p => Nearest(p, ix.Points, ix.Closed).Distance));
+            }
+        }
+
+        return shown with { Ropes = ropes, Moved = moved / k.Radius, After = Least(k, ropes), Bent = BendsOf(k, shown.Ropes), Relaxed = BendsOf(k, ropes) };
+    }
+
+    private static Shown OnTheWood(Knot k)
+    {
         var before = Least(k, k.Ropes);
         if (k.Posts.Length == 0)
         {
-            return new(k.Ropes, 0f, before, before, 0f);
+            return new(k.Ropes, 0f, before, before, 0f, default, default);
         }
 
         Shown? last = null;
@@ -330,7 +353,7 @@ internal static class KnotFloor
                 }
             }
 
-            last = new(ropes, moved / k.Radius, before, Least(k, ropes), fade);
+            last = new(ropes, moved / k.Radius, before, Least(k, ropes), fade, default, default);
             if (last.After >= MathF.Min(before, 0f) - 0.005f)
             {
                 break;
@@ -338,6 +361,246 @@ internal static class KnotFloor
         }
 
         return last!;
+    }
+
+    // The rope as it lies, from IX's path: IX keeps two parts of a knot a diameter apart and lifts the rope over each
+    // crossing within a few radii, so its path turns in places tighter than a rope's own radius (0.12 of it in the
+    // Prusik) and climbs a crossing at 30 degrees; drawn as a laid rope, those turns crease and the climbs wave. Each rope
+    // is resampled every half radius and smoothed without shrinking (Taubin's λ|μ, 160 passes: what is shorter than about
+    // 6 radii fades, what is longer stays), its open ends drawn straight, each point kept within one radius of where it started and
+    // never nearer another part of the knot than a diameter (two points more than 4 radii apart along a rope, or on two
+    // ropes) nor nearer a post than the wood and a radius. The steps are a small part of a radius, so no part passes
+    // through another: which goes over which stays IX's, and the plan's crossings and writhe are measured before and
+    // after (BendsOf) to show it.
+    private static Rope[] Relax(Knot k, Rope[] shaped)
+    {
+        var (r, h) = (k.Radius, k.Radius / 2f);
+        var ropes = shaped.ToArray();
+        var moving = new List<int>();
+        var paths = new List<SN.Vector3[]>();
+        for (var i = 0; i < ropes.Length; i++)
+        {
+            if (k.Posts.Contains(i))
+            {
+                continue;
+            }
+
+            var p = ropes[i].Points;
+            var even = ropes[i].Closed ? Resample([.. p, p[0]], h)[..^1] : Resample(p, h);
+            if (even.Length >= 4)
+            {
+                moving.Add(i);
+                paths.Add(even);
+            }
+        }
+
+        var origin = paths.Select(p => p.ToArray()).ToArray();
+        var posts = k.Posts.Select(i => (Axis: ropes[i].Points, ropes[i].Closed, Clear: RadiusOf(k, i) + (1.02f * r))).ToArray();
+        var (tether, apart, gapAlong) = (r, 2.02f * r, 4f * r);
+        var cell = apart;
+        var grid = new Dictionary<(int, int, int), List<(int Rope, int At)>>();
+        (int, int, int) Key(SN.Vector3 p) => ((int)MathF.Floor(p.X / cell), (int)MathF.Floor(p.Y / cell), (int)MathF.Floor(p.Z / cell));
+
+        void Pass(float f)
+        {
+            for (var q = 0; q < paths.Count; q++)
+            {
+                var (p, closed) = (paths[q], ropes[moving[q]].Closed);
+                var n = p.Length;
+                var next = p.ToArray();
+                for (var i = closed ? 0 : 1; i < (closed ? n : n - 1); i++)
+                {
+                    var (a, b) = (p[(i - 1 + n) % n], p[(i + 1) % n]);
+                    next[i] = p[i] + (f * (((a + b) * 0.5f) - p[i]));
+                }
+
+                if (!closed)
+                {
+                    // An end goes towards where its two neighbours point, so that it straightens without shortening.
+                    next[0] = p[0] + (f * (((2f * p[1]) - p[2]) - p[0]));
+                    next[n - 1] = p[n - 1] + (f * (((2f * p[n - 2]) - p[n - 3]) - p[n - 1]));
+                }
+
+                paths[q] = next;
+            }
+        }
+
+        for (var pass = 0; pass < 160; pass++)
+        {
+            Pass(0.5f);
+            Pass(-0.53f);
+            for (var q = 0; q < paths.Count; q++)
+            {
+                for (var i = 0; i < paths[q].Length; i++)
+                {
+                    var d = paths[q][i] - origin[q][i];
+                    if (d.Length() > tether)
+                    {
+                        paths[q][i] = origin[q][i] + (SN.Vector3.Normalize(d) * tether);
+                    }
+                }
+            }
+
+            for (var sweep = 0; sweep < 2; sweep++)
+            {
+                grid.Clear();
+                for (var q = 0; q < paths.Count; q++)
+                {
+                    for (var i = 0; i < paths[q].Length; i++)
+                    {
+                        var key = Key(paths[q][i]);
+                        if (!grid.TryGetValue(key, out var list))
+                        {
+                            grid[key] = list = [];
+                        }
+
+                        list.Add((q, i));
+                    }
+                }
+
+                for (var q = 0; q < paths.Count; q++)
+                {
+                    var (p, closed) = (paths[q], ropes[moving[q]].Closed);
+                    for (var i = 0; i < p.Length; i++)
+                    {
+                        var (x, y, z) = Key(p[i]);
+                        for (var dx = -1; dx <= 1; dx++)
+                        {
+                            for (var dy = -1; dy <= 1; dy++)
+                            {
+                                for (var dz = -1; dz <= 1; dz++)
+                                {
+                                    if (!grid.TryGetValue((x + dx, y + dy, z + dz), out var near))
+                                    {
+                                        continue;
+                                    }
+
+                                    foreach (var (q2, j) in near)
+                                    {
+                                        if (q2 < q || (q2 == q && j <= i))
+                                        {
+                                            continue;
+                                        }
+
+                                        if (q2 == q)
+                                        {
+                                            var gap = Math.Abs(j - i);
+                                            if ((closed ? Math.Min(gap, p.Length - gap) : gap) * h < gapAlong)
+                                            {
+                                                continue;
+                                            }
+                                        }
+
+                                        var (a, b) = (paths[q][i], paths[q2][j]);
+                                        var d = SN.Vector3.Distance(a, b);
+                                        if (d >= apart || d < 1e-6f)
+                                        {
+                                            continue;
+                                        }
+
+                                        var push = (b - a) / d * ((apart - d) / 2f);
+                                        paths[q][i] = a - push;
+                                        paths[q2][j] = b + push;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            foreach (var (axis, closed, clear) in posts)
+            {
+                for (var q = 0; q < paths.Count; q++)
+                {
+                    for (var i = 0; i < paths[q].Length; i++)
+                    {
+                        var (on, d) = Nearest(paths[q][i], axis, closed);
+                        if (d < clear)
+                        {
+                            paths[q][i] = on + ((d > 1e-6f ? (paths[q][i] - on) / d : SN.Vector3.UnitZ) * clear);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (var q = 0; q < paths.Count; q++)
+        {
+            ropes[moving[q]] = new(ropes[moving[q]].Closed, paths[q]);
+        }
+
+        return ropes;
+    }
+
+    internal static Bends BendsOf(Knot k, Rope[] ropes)
+    {
+        var (tightest, slopes) = (float.MaxValue, new List<float>());
+        var segments = new List<(SN.Vector3 A, SN.Vector3 B, int Rope, int At, int Count, bool Closed)>();
+        for (var r = 0; r < ropes.Length; r++)
+        {
+            if (k.Posts.Contains(r))
+            {
+                continue;
+            }
+
+            var (p, closed) = (ropes[r].Points, ropes[r].Closed);
+            var count = closed ? p.Length : p.Length - 1;
+            for (var i = 0; i < count; i++)
+            {
+                segments.Add((p[i], p[(i + 1) % p.Length], r, i, count, closed));
+            }
+
+            for (var i = 1; i + 1 < p.Length; i++)
+            {
+                var (u, v) = (new SN.Vector2(p[i].X - p[i - 1].X, p[i].Y - p[i - 1].Y), new SN.Vector2(p[i + 1].X - p[i].X, p[i + 1].Y - p[i].Y));
+                var (lu, lv) = (u.Length(), v.Length());
+                if (lu > 1e-6f && lv > 1e-6f)
+                {
+                    var turn = MathF.Abs(MathF.Atan2((u.X * v.Y) - (u.Y * v.X), SN.Vector2.Dot(u, v)));
+                    if (turn > 1e-4f)
+                    {
+                        tightest = MathF.Min(tightest, (lu + lv) / 2f / turn / k.Radius);
+                    }
+
+                    slopes.Add(MathF.Abs(p[i + 1].Z - p[i].Z) / lv);
+                }
+            }
+        }
+
+        var (crossings, writhe) = (0, 0);
+        for (var s = 0; s < segments.Count; s++)
+        {
+            for (var t = s + 1; t < segments.Count; t++)
+            {
+                var (a, b) = (segments[s], segments[t]);
+                if (a.Rope == b.Rope && (Math.Abs(a.At - b.At) <= 1 || (a.Closed && Math.Abs(a.At - b.At) == a.Count - 1)))
+                {
+                    continue;
+                }
+
+                var (d1, d2) = (new SN.Vector2(a.B.X - a.A.X, a.B.Y - a.A.Y), new SN.Vector2(b.B.X - b.A.X, b.B.Y - b.A.Y));
+                var den = (d1.X * d2.Y) - (d1.Y * d2.X);
+                if (MathF.Abs(den) < 1e-12f)
+                {
+                    continue;
+                }
+
+                var w = new SN.Vector2(b.A.X - a.A.X, b.A.Y - a.A.Y);
+                var (u, v) = (((w.X * d2.Y) - (w.Y * d2.X)) / den, ((w.X * d1.Y) - (w.Y * d1.X)) / den);
+                if (u < 0f || u >= 1f || v < 0f || v >= 1f)
+                {
+                    continue;
+                }
+
+                crossings++;
+                var over = SN.Vector3.Lerp(a.A, a.B, u).Z > SN.Vector3.Lerp(b.A, b.B, v).Z;
+                writhe += (den > 0) == over ? 1 : -1;
+            }
+        }
+
+        slopes.Sort();
+        return new(tightest, slopes.Count > 0 ? slopes[(int)(0.95f * (slopes.Count - 1))] : 0f, crossings, writhe);
     }
 
     private static float Least(Knot k, Rope[] ropes)
@@ -602,6 +865,8 @@ internal static class KnotFloor
             return [];
         }
 
+        // Each knot laid on its wood and relaxed (Choose) at once, the knots side by side: a few seconds one after another.
+        Parallel.ForEach(m.Knots, k => Measure(k));
         var lays = Layout(m);
         for (var i = 0; i < m.Knots.Length; i++)
         {
@@ -1054,16 +1319,32 @@ internal static class KnotFloor
             var sparPath = shownHitch[1].Points;
             var nearest = shownHitch[0].Points.Min(p => Nearest(p, sparPath, closed: false).Distance);
             var wood = hitch.Radius * hitch.PostScale;
-            var kept = hitch.Ropes[0].Points.Zip(shownHitch[0].Points).Where(p => Nearest(p.First, sparPath, false).Distance >= 14f * hitch.Radius).ToArray();
+            var kept = hitch.Ropes[0].Points.Zip(OnTheWood(hitch).Ropes[0].Points).Where(p => Nearest(p.First, sparPath, false).Distance >= 14f * hitch.Radius).ToArray();
             var measured = Measure(hitch);
             Check(sparPath.Length == 2 && nearest >= wood + hitch.Radius - 1e-4f && kept.Length > 10 && kept.All(p => p.First == p.Second)
-                && measured.After >= MathF.Min(measured.Before, 0f) - 0.005f && Measure(good.Knots[0]) is { Moved: 0f, Fade: 0f },
+                && measured.After >= MathF.Min(measured.Before, 0f) - 0.005f && Measure(good.Knots[0]) is { Fade: 0f, Moved: <= 1.1f },
                 $"a spar is straight and as thick as the deck drew it, the rope moved out onto it ({(nearest - wood) / hitch.Radius:F2} radii from its axis to the wood) and left as IX laid it far from it");
+
+            // A rope that crosses over itself, zigzagging by a quarter of its radius at each point: relaxed, it turns no
+            // tighter than a radius, stays within a radius of IX's path, and crosses as it did, over and under.
+            var zigzag = good.Knots[0] with
+            {
+                Id = "zigzag",
+                Ropes = [new(false, [.. Enumerable.Range(0, 161).Select(i =>
+                {
+                    var t = -2f + (i * 0.025f);
+                    return new SN.Vector3((t * t) - 1f, (t * t * t) - t + (MathF.Abs(t) > 1.3f ? (i % 2 == 0 ? 0.1f : -0.1f) : 0f), t);
+                })])],
+            };
+            var relaxed = Measure(zigzag);
+            Check(relaxed.Bent.Tightest < 0.5f && relaxed.Relaxed.Tightest >= 1f && relaxed.Bent.Crossings >= 1
+                && (relaxed.Relaxed.Crossings, relaxed.Relaxed.Writhe) == (relaxed.Bent.Crossings, relaxed.Bent.Writhe) && relaxed.Moved <= 1.05f,
+                $"a creased rope relaxes (tightest turn {relaxed.Bent.Tightest:F2} then {relaxed.Relaxed.Tightest:F2} radii, moved {relaxed.Moved:F2}), crossing as IX had it ({relaxed.Bent.Crossings}/{relaxed.Bent.Writhe} then {relaxed.Relaxed.Crossings}/{relaxed.Relaxed.Writhe})");
 
             var knots = BuildKnots(good);
             var one = new Marins([good.Knots[0]], "");
             var lay = Layout(one)[0];
-            var axis = good.Knots[0].Ropes[0].Points.Select(lay.World).ToArray();
+            var axis = Show(good.Knots[0])[0].Points.Select(lay.World).ToArray();
             var strands = BuildKnots(one).Where(v => v.Material == Material.Rope).ToArray();
             float Off(SN.Vector3 p) => Enumerable.Range(0, 400).Min(i =>
             {
@@ -1072,7 +1353,7 @@ internal static class KnotFloor
                 return SN.Vector3.Distance(p, SN.Vector3.Lerp(axis[j], axis[j + 1], u - j));
             });
             var farthest = strands.Where((_, i) => i % 97 == 0).Max(v => Off(v.Pos));
-            Check(strands.Length > 1000 && farthest <= RopeRadius * 1.05f, $"a rope is three strands within its radius of IX's path ({farthest * 1000:F2} mm for {RopeRadius * 1000:F0})");
+            Check(strands.Length > 1000 && farthest <= RopeRadius * 1.05f, $"a rope is three strands within its radius of its path ({farthest * 1000:F2} mm for {RopeRadius * 1000:F0})");
             var lowest = knots.Min(v => v.Pos.Y);
             Check(knots.Any(v => v.Material == Material.Wood) && knots.All(v => float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z) && MathF.Abs(v.Normal.Length() - 1) < 1e-3f)
                 && lowest >= TableTop - 0.001f && lowest < TableTop + 0.002f, $"a hitch's spar is wood, and each knot lies on the table's top ({(lowest - TableTop) * 1000:F2} mm)");

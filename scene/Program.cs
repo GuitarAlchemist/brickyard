@@ -1587,7 +1587,7 @@ internal static unsafe class Stage
         (ropeVertices, cardsEn, cardsFr) = ([], [], []);
         Console.WriteLine(marins.Knots.Length > 0
             ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {knotRopes.Count} vertices of rope{(knotRopes.Resident ? " in the GPU's memory" : " in the host's memory")}, the fuller table {KnotFloor.Fill:P0} full; "
-              + $"rope moved onto the wood, at most, and clearance as shown: {string.Join(", ", marins.Knots.Where(k => k.Posts.Length > 0).Select(k => (k, m: KnotFloor.Measure(k))).Select(x => $"{x.k.Id} {x.m.Moved:F1} r faded over {x.m.Fade:F0} r, {x.m.Before:F2} then {x.m.After:F2} d"))}"
+              + $"each knot moved from IX's path at most, its clearance, tightest turn, steepest slope and plan crossings/writhe, IX's then as shown: {string.Join(", ", marins.Knots.Select(k => (k, m: KnotFloor.Measure(k))).Select(x => $"{x.k.Id} {x.m.Moved:F1} r, {x.m.Before:F2}>{x.m.After:F2} d, {x.m.Bent.Tightest:F2}>{x.m.Relaxed.Tightest:F2} r, {x.m.Bent.Slope:F2}>{x.m.Relaxed.Slope:F2}, {x.m.Bent.Crossings}/{x.m.Bent.Writhe}>{x.m.Relaxed.Crossings}/{x.m.Relaxed.Writhe}"))}"
             : $"SCENE knots: none ({marins.Why}, {knotsPath})");
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
