@@ -1575,12 +1575,16 @@ internal static unsafe class Stage
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
         var knotsPath = KnotFloor.Path(Option(args, "--marins"));
         var marins = KnotFloor.Load(knotsPath);
-        var knotRopes = new Mesh(device, physical, KnotFloor.BuildKnots(marins), resident: true);
+        var (ropeVertices, cardsEn, cardsFr) = (KnotFloor.BuildKnots(marins), KnotFloor.BuildCards(marins, fr: false), KnotFloor.BuildCards(marins, fr: true));
+        var knotRopes = new Mesh(device, physical, ropeVertices, resident: true);
+        // Where the ropes and the cards are, to draw them only when the picture shows some of it (KnotFloor.Seen).
+        var knotBox = KnotFloor.Box(ropeVertices, cardsEn, cardsFr);
         var knots = new Dictionary<bool, Mesh>
         {
-            [false] = new Mesh(device, physical, KnotFloor.BuildCards(marins, fr: false)),
-            [true] = new Mesh(device, physical, KnotFloor.BuildCards(marins, fr: true)),
+            [false] = new Mesh(device, physical, cardsEn),
+            [true] = new Mesh(device, physical, cardsFr),
         };
+        (ropeVertices, cardsEn, cardsFr) = ([], [], []);
         Console.WriteLine(marins.Knots.Length > 0
             ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {knotRopes.Count} vertices of rope{(knotRopes.Resident ? " in the GPU's memory" : " in the host's memory")}, the fuller table {KnotFloor.Fill:P0} full; "
               + $"rope moved onto the wood, at most, and clearance as shown: {string.Join(", ", marins.Knots.Where(k => k.Posts.Length > 0).Select(k => (k, m: KnotFloor.Measure(k))).Select(x => $"{x.k.Id} {x.m.Moved:F1} r faded over {x.m.Fade:F0} r, {x.m.Before:F2} then {x.m.After:F2} d"))}"
@@ -3666,8 +3670,12 @@ internal static unsafe class Stage
                     }
                 }
 
-                Draw(cb, layout, knotRopes, new Push(SN.Matrix4x4.Identity, viewProj, default));
-                Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
+                // The knots' 1.2 million vertices of rope, and their cards, only when the picture shows the tables.
+                if (KnotFloor.Seen(viewProj, knotBox))
+                {
+                    Draw(cb, layout, knotRopes, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                    Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
+                }
 
                 // The hall last: what stands in front of the floor and the wall is already in the depth buffer, so
                 // their fragments hidden behind it are never shaded (nor their rays traced).

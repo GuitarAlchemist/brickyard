@@ -543,6 +543,53 @@ internal static class KnotFloor
         return lays;
     }
 
+    // The box round the given vertices.
+    internal static (SN.Vector3 Min, SN.Vector3 Max) Box(params Vertex[][] parts)
+    {
+        var (lo, hi) = (new SN.Vector3(float.MaxValue), new SN.Vector3(float.MinValue));
+        foreach (var part in parts)
+        {
+            foreach (var v in part)
+            {
+                (lo, hi) = (SN.Vector3.Min(lo, v.Pos), SN.Vector3.Max(hi, v.Pos));
+            }
+        }
+
+        return (lo, hi);
+    }
+
+    // Whether a picture drawn with viewProj may show some of the box: false only when all its corners lie beyond one
+    // side of the view (left, right, below, above, behind or past the far plane), as Vulkan clips.
+    internal static bool Seen(SN.Matrix4x4 viewProj, (SN.Vector3 Min, SN.Vector3 Max) box)
+    {
+        if (box.Min.X > box.Max.X)
+        {
+            return false;
+        }
+
+        Span<int> outside = stackalloc int[6];
+        for (var c = 0; c < 8; c++)
+        {
+            var p = SN.Vector4.Transform(new SN.Vector4((c & 1) == 0 ? box.Min.X : box.Max.X, (c & 2) == 0 ? box.Min.Y : box.Max.Y, (c & 4) == 0 ? box.Min.Z : box.Max.Z, 1f), viewProj);
+            outside[0] += p.X < -p.W ? 1 : 0;
+            outside[1] += p.X > p.W ? 1 : 0;
+            outside[2] += p.Y < -p.W ? 1 : 0;
+            outside[3] += p.Y > p.W ? 1 : 0;
+            outside[4] += p.Z < 0f ? 1 : 0;
+            outside[5] += p.Z > p.W ? 1 : 0;
+        }
+
+        foreach (var n in outside)
+        {
+            if (n == 8)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     // How full the fuller table is, of its length, after the last Layout: knots and the least gap between them.
     internal static float Fill { get; private set; }
 
@@ -1029,6 +1076,15 @@ internal static class KnotFloor
             var lowest = knots.Min(v => v.Pos.Y);
             Check(knots.Any(v => v.Material == Material.Wood) && knots.All(v => float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z) && MathF.Abs(v.Normal.Length() - 1) < 1e-3f)
                 && lowest >= TableTop - 0.001f && lowest < TableTop + 0.002f, $"a hitch's spar is wood, and each knot lies on the table's top ({(lowest - TableTop) * 1000:F2} mm)");
+
+            var box = Box(knots);
+            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(1f, 16f / 9f, 0.05f, 60f);
+            var stair = new SN.Vector3(5.05f, Level + 1.6f, 0.6f);
+            Check(Seen(SN.Matrix4x4.CreateLookAt(stair, new(5.05f, Level + 0.9f, -3f), SN.Vector3.UnitY) * projection, box)
+                && !Seen(SN.Matrix4x4.CreateLookAt(stair, stair + new SN.Vector3(0f, 0f, 3f), SN.Vector3.UnitY) * projection, box)
+                && !Seen(SN.Matrix4x4.CreateLookAt(new(0f, 1.2f, 1.5f), new(0f, 0.9f, 4f), SN.Vector3.UnitY) * projection, box)
+                && !Seen(SN.Matrix4x4.Identity, Box()),
+                "the knots are drawn when the picture looks at them, not when it looks away");
 
             var en = BuildCards(good, fr: false);
             var empty = BuildCards(new([], "absent"), fr: false);
