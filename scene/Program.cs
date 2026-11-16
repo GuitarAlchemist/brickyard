@@ -675,9 +675,10 @@ internal static unsafe class Stage
         }
 
         // NVIDIA Streamline (Streamline.cs) with --dlss: initialised before the instance and the device, whose extensions,
-        // features and queues it adds to.
+        // features and queues it adds to. --dlss-g alone implies --dlss.
         Streamline.Needs[] streamlineNeeds = [];
-        if (args.Contains("--dlss"))
+        var rayReconstruction = false; // DLSS-RR's functions bound once the device is told
+        if (args.Contains("--dlss") || args.Contains("--dlss-g"))
         {
             var dir = Option(args, "--streamline") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "streamline");
             if (Streamline.Init(dir, args.Contains("--dlss-g") ? Streamline.FrameGeneration : Streamline.Upscaling, args.Contains("--streamline-log")) is { } why)
@@ -990,6 +991,17 @@ internal static unsafe class Stage
             var told = Streamline.SetVulkanInfo(device.VkHandle, instance.VkHandle, physical.VkHandle, (uint)family, 1,
                 (uint)computeFamily, computeFamily == family ? (uint)(1 + slGraphics) : 0, flowFamily < 0 ? 0 : (uint)flowFamily, 0, flowFamily >= 0);
             Console.WriteLine($"SCENE streamline told of the device: {Streamline.ResultName(told)}; queues graphics {family}x{graphicsCount} compute {computeFamily}x{(computeFamily == family ? slCompute : computeCount)} optical flow {(flowFamily < 0 ? "none" : $"{flowFamily}x1")}");
+            if (told == 0)
+            {
+                Streamline.BindPresent(device.VkHandle);
+            }
+
+            if (told == 0 && Streamline.Supported(Streamline.FeatureDlssRR, physical.VkHandle) == 0)
+            {
+                var bound = Streamline.BindRayReconstruction();
+                rayReconstruction = bound is null;
+                Console.WriteLine($"SCENE streamline ray reconstruction: {bound ?? "ready"}");
+            }
         }
         var reflex = reflexOn ? new Reflex(device, args.Contains("--reflex")) : null;
 
@@ -1574,6 +1586,14 @@ internal static unsafe class Stage
                 rtPipeline, reorder, properties.Limits.TimestampPeriod)
             : null;
         Console.WriteLine(tracer is not null ? $"SCENE path tracing: offered, by {tracer.How}, {PathTracer.Bounces} bounces, kept {PathTracer.MaxHistory} frames; F9 or --path-tracing" : "SCENE path tracing: none (no ray queries)");
+        if (tracer is not null && rayReconstruction)
+        {
+            // --dlss: the path tracer through Ray Reconstruction, in --dlss-mode's mode (performance by default).
+            var mode = Array.IndexOf(Streamline.Modes, Option(args, "--dlss-mode") ?? "performance");
+            tracer.UpscaleMode = (uint)Math.Max(mode, 1);
+            tracer.JitterSign = args.Contains("--dlss-jitter-flip") ? -1f : 1f;
+            Console.WriteLine($"SCENE path tracing through DLSS Ray Reconstruction, {Streamline.Modes[tracer.UpscaleMode]}");
+        }
         var maps = stackalloc VkDescriptorImageInfo[4];
         foreach (var frameSet in frameSets)
         {
@@ -1977,8 +1997,12 @@ internal static unsafe class Stage
                 Has("VK_EXT_opacity_micromap") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 Words.Say("VK_EXT_opacity_micromap · for alpha-tested leaves and fences; the hall has none", "VK_EXT_opacity_micromap · pour le feuillage et les grillages découpés ; la salle n'en a pas")),
             new("DLSS (Super Resolution, Ray Reconstruction)",
-                nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                Words.Say("NGX's extensions, VK_NVX_binary_import and VK_NVX_image_view_handle; needs NVIDIA's SDK", "extensions de NGX, VK_NVX_binary_import et VK_NVX_image_view_handle ; demande le SDK de NVIDIA")),
+                tracer is { Upscaling: true } && pathTracing ? Panel.Rtx.Use
+                    : tracer is { UpscaleMode: > 0 } || (nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle")) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                tracer is { UpscaleMode: > 0 } t
+                    ? Words.Say($"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}): the path tracer at {t.Width}x{t.Height}, denoised and upscaled to {t.OutputWidth}x{t.OutputHeight} (--dlss)",
+                        $"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}) : le path tracer à {t.Width}x{t.Height}, débruité et agrandi à {t.OutputWidth}x{t.OutputHeight} (--dlss)")
+                    : Words.Say("NGX's extensions, VK_NVX_binary_import and VK_NVX_image_view_handle; --dlss with NVIDIA's Streamline", "extensions de NGX, VK_NVX_binary_import et VK_NVX_image_view_handle ; --dlss avec Streamline de NVIDIA")),
             new("Reflex",
                 reflex is { LowLatency: true } ? Panel.Rtx.Use : Has("VK_NV_low_latency2") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 reflex is { LowLatency: true }
@@ -3308,7 +3332,7 @@ internal static unsafe class Stage
             if (tracer is not null && pathTracing && !splashing)
             {
                 tracer.Resize(extent.Width, extent.Height);
-                tracer.Record(cb, slot, viewProj, eye, pose.Fov, hazy ? Haze : 0f, materials.Photographed,
+                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? Haze : 0f, materials.Photographed,
                     hazy && quality == Quality.Low ? new SN.Vector4(0.075f, 0.09f, 0.115f, 0f) : new SN.Vector4(0.006f, 0.005f, 0.005f, 0f));
             }
             if (arcadeGpu is not null) arcadeGpu.UploadAfterFence(cb, slot, arcade!.Frame);
@@ -3689,17 +3713,19 @@ internal static unsafe class Stage
                 reflex.Mark(swapchain, frameId, VkLatencyMarkerNV.PresentStartNV);
             }
 
+            var presentInfo = new VkPresentInfoKHR
+            {
+                WaitSemaphoreCount = 1,
+                WaitSemaphores = &signalSemaphore,
+                SwapchainCount = 1,
+                Swapchains = &presentSwapchain,
+                ImageIndices = &presentIndex,
+                Next = paceByScreen || reflex is not null ? &presentIdInfo : null,
+            };
             try
             {
-                result = queue.PresentKHR(new VkPresentInfoKHR
-                {
-                    WaitSemaphoreCount = 1,
-                    WaitSemaphores = &signalSemaphore,
-                    SwapchainCount = 1,
-                    Swapchains = &presentSwapchain,
-                    ImageIndices = &presentIndex,
-                    Next = paceByScreen || reflex is not null ? &presentIdInfo : null,
-                });
+                // With Streamline (--dlss), through its interposer, which keeps its books there once a frame.
+                result = Streamline.Presents ? (VkResult)Streamline.Present(queue.VkHandle, &presentInfo) : queue.PresentKHR(presentInfo);
             }
             catch (VkResultError e) when (e.Result == VkResult.ErrorOutOfDateKHR)
             {

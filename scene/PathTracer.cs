@@ -78,9 +78,39 @@ internal sealed unsafe class PathTracer : IDisposable
         VkFormat.R16G16B16A16SFloat, VkFormat.R16G16B16A16SFloat, // 15, 16: its glow, kept
         VkFormat.R16G16B16A16SFloat, VkFormat.R16G16B16A16SFloat, // 17, 18: the filter's
         VkFormat.R16G16B16A16SFloat, // 19: the picture
+        // Ray Reconstruction's (DLSS-RR, --dlss): what it is given at the size traced, and what it gives at the
+        // window's; a pixel each when it is off.
+        VkFormat.R16G16SFloat, // 20: in pixels, from where the surface is to where it was a frame ago
+        VkFormat.R32SFloat, // 21: its depth along the view
+        VkFormat.R16G16B16A16SFloat, // 22: its diffuse colour
+        VkFormat.R16G16B16A16SFloat, // 23: its specular colour, as the light around reflects it
+        VkFormat.R16G16B16A16SFloat, // 24: its normal, and its roughness in w
+        VkFormat.R16G16B16A16SFloat, // 25: its light, one path's, unfiltered
+        VkFormat.R16G16B16A16SFloat, // 26: Ray Reconstruction's picture
     ];
 
     private const int Output = 12; // the picture's index in Images
+    private const int Motion = 13, Depth = 14, Diffuse = 15, Specular = 16, NormalRoughness = 17, Colour = 18, Upscaled = 19;
+
+    // Ray Reconstruction (--dlss): DLSS's mode (1 performance ... 6 DLAA, Streamline.Modes), 0 when off. The trace
+    // then runs at the size DLSS asks for that mode, one jittered path a pixel without the frames kept or the filter,
+    // and Ray Reconstruction denoises and upscales it to the window's size.
+    public uint UpscaleMode { get; set; }
+
+    // +1, or -1 to try the jitter's other sign (--dlss-jitter-flip).
+    public float JitterSign { get; set; } = 1f;
+
+    public bool Upscaling { get; private set; }
+
+    public int OutputWidth { get; private set; }
+
+    public int OutputHeight { get; private set; }
+
+    public long Evaluations { get; private set; }
+
+    public string? UpscaleError { get; private set; }
+
+    private uint sizedFor;
 
     public PathTracer(Device device, PhysicalDevice physical, int slots, RayScene rays, VkImageView albedo, VkImageView normal, VkImageView arm, VkSampler materialSampler,
         VkImageView globes, VkSampler globeSampler, DescriptorPoolEx splashPool, DescriptorSetLayoutEx splashLayout, bool rtPipeline, bool reorder, float timestampPeriod)
@@ -183,21 +213,40 @@ internal sealed unsafe class PathTracer : IDisposable
 
     public int Height { get; private set; }
 
-    // The images at the window's size, made again when it changes; the kept light starts over.
+    // The images at the window's size, or at the size Ray Reconstruction traces at, made again when it or the mode
+    // changes; the kept light starts over.
     public void Resize(int width, int height)
     {
-        if (width == Width && height == Height)
+        if (width == OutputWidth && height == OutputHeight && UpscaleMode == sizedFor)
         {
             return;
         }
 
         device.WaitIdle();
         DestroyTargets();
-        Width = width;
-        Height = height;
+        OutputWidth = width;
+        OutputHeight = height;
+        sizedFor = UpscaleMode;
+        (Width, Height) = (width, height);
+        Upscaling = false;
+        if (UpscaleMode != 0)
+        {
+            if (Streamline.RenderSize(UpscaleMode, width, height) is { } traced)
+            {
+                (Width, Height) = traced;
+                Upscaling = true;
+            }
+            else
+            {
+                UpscaleError = $"no render size for DLSS {Streamline.Modes[UpscaleMode]} at {width}x{height}";
+                Console.WriteLine($"SCENE ray reconstruction: {UpscaleError}; traced without it");
+            }
+        }
+
         for (var i = 0; i < Images.Length; i++)
         {
-            targets[i] = new Target(device, physical, Images[i], width, height);
+            var (w, h) = 7 + i < 20 ? (Width, Height) : !Upscaling ? (1, 1) : i == Upscaled ? (width, height) : (Width, Height);
+            targets[i] = new Target(device, physical, Images[i], w, h);
         }
 
         var infos = stackalloc VkDescriptorImageInfo[Images.Length];
@@ -210,7 +259,7 @@ internal sealed unsafe class PathTracer : IDisposable
             }
         }
 
-        var picture = new VkDescriptorImageInfo { Sampler = compositeSampler, ImageView = targets[Output].View, ImageLayout = VkImageLayout.General };
+        var picture = new VkDescriptorImageInfo { Sampler = compositeSampler, ImageView = targets[Upscaling ? Upscaled : Output].View, ImageLayout = VkImageLayout.General };
         device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = composite, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &picture }], []);
         fresh = true;
     }
@@ -219,8 +268,9 @@ internal sealed unsafe class PathTracer : IDisposable
     public void Forget() => fresh = true;
 
     // Before the render pass, after RayScene.Record: the frame traced, kept and filtered into the picture.
-    public void Record(CommandBuffer cb, int slot, SN.Matrix4x4 viewProj, SN.Vector3 eye, float fovDegrees, float haze, bool photographed, SN.Vector4 background)
+    public void Record(CommandBuffer cb, int slot, SN.Matrix4x4 view, SN.Matrix4x4 projection, SN.Vector3 eye, float fovDegrees, float haze, bool photographed, SN.Vector4 background)
     {
+        var viewProj = view * projection;
         // The slot's last timestamps, its fence waited for before this recording.
         if (timed[slot])
         {
@@ -248,10 +298,22 @@ internal sealed unsafe class PathTracer : IDisposable
         }
         else
         {
-            // Last frame's filter and picture read and written before this one's trace starts.
-            Memory(cb, VkPipelineStageFlags.ComputeShaderBit | VkPipelineStageFlags.FragmentShaderBit, tracing);
+            // Last frame's filter, Ray Reconstruction and picture read and written before this one's trace starts.
+            Memory(cb, VkPipelineStageFlags.ComputeShaderBit | VkPipelineStageFlags.FragmentShaderBit | (Upscaling ? VkPipelineStageFlags.AllCommandsBit : 0), tracing);
         }
 
+        // Ray Reconstruction's jitter: Halton's (2, 3) sequence, over as many phases as DLSS asks for the scale.
+        var (jx, jy) = (0f, 0f);
+        if (Upscaling)
+        {
+            var scale = OutputWidth / (float)Width;
+            var phases = Math.Max(8, (int)MathF.Ceiling(8f * scale * scale));
+            var index = (int)(frame % phases) + 1;
+            (jx, jy) = (Halton(index, 2), Halton(index, 3));
+        }
+
+        SN.Matrix4x4.Invert(view, out var toWorld);
+        var forward = -new SN.Vector3(toWorld.M31, toWorld.M32, toWorld.M33);
         var pixelAngle = 2f * MathF.Tan(fovDegrees * MathF.PI / 360f) / Height;
         *(TraceFrame*)(uniforms.Mapped + (slot * UniformStep)) = new TraceFrame
         {
@@ -261,9 +323,13 @@ internal sealed unsafe class PathTracer : IDisposable
             Size = new(Width, Height, frame, MaxOut ? MaxOutSamples : 1),
             Options = new(photographed ? 1f : 0f, MaxOut ? MaxOutBounces : Bounces, MaxHistory, reset ? 1f : 0f),
             Background = background with { W = pixelAngle },
+            Upscale = new(Upscaling ? 1f : 0f, jx, jy, 0f),
+            Forward = new(forward, 0f),
         };
+        var prior = previousViewProj;
         previousViewProj = viewProj;
         var parity = (int)(frame & 1);
+        var frameIndex = frame;
         frame++;
 
         // Written once everything before it is done (the ray scene's build, the last frame), so that the two stamps
@@ -285,13 +351,90 @@ internal sealed unsafe class PathTracer : IDisposable
             cb.Dispatch(gx, gy, 1);
         }
 
-        cb.BindPipeline(VkPipelineBindPoint.Compute, filter);
-        cb.BindDescriptorSets(VkPipelineBindPoint.Compute, layout, 0, [sets[slot]], []);
-        for (var pass = 0; pass < 3; pass++)
+        if (Upscaling)
         {
-            Memory(cb, pass == 0 ? tracing : VkPipelineStageFlags.ComputeShaderBit, VkPipelineStageFlags.ComputeShaderBit);
-            Push(cb, new PassPush(parity, pass, pass == 2 ? 1 : 0));
-            cb.Dispatch(gx, gy, 1);
+            // The guides written, Ray Reconstruction denoises and upscales the light into the window's picture; it
+            // leaves the command buffer's bindings its own, so the shoulder's pass binds all again after it.
+            Memory(cb, tracing, VkPipelineStageFlags.AllCommandsBit);
+            SN.Matrix4x4.Invert(projection, out var toView);
+            SN.Matrix4x4.Invert(prior, out var fromPrior);
+            var constants = new Streamline.Constants
+            {
+                CameraViewToClip = projection,
+                ClipToCameraView = toView,
+                ClipToLensClip = SN.Matrix4x4.Identity,
+                ClipToPrevClip = inverse * prior,
+                PrevClipToClip = fromPrior * viewProj,
+                JitterOffset = new SN.Vector2(jx - 0.5f, jy - 0.5f) * JitterSign,
+                MvecScale = new(1f / Width, 1f / Height),
+                CameraPos = eye,
+                CameraUp = new(toWorld.M21, toWorld.M22, toWorld.M23),
+                CameraRight = new(toWorld.M11, toWorld.M12, toWorld.M13),
+                CameraFwd = forward,
+                // System.Numerics' perspective, depth 0 to 1: M33 = far / (near - far), M43 = near far / (near - far).
+                CameraNear = projection.M43 / projection.M33,
+                CameraFar = projection.M43 / (projection.M33 + 1f),
+                CameraFov = fovDegrees * MathF.PI / 180f,
+                CameraAspectRatio = OutputWidth / (float)OutputHeight,
+                MotionVectorsInvalidValue = float.MaxValue,
+                CameraMotionIncluded = 1,
+                Reset = (byte)(reset ? 1 : 0),
+                MinRelativeLinearDepthObjectSeparation = 40f,
+            };
+            var options = new Streamline.DLSSDOptions
+            {
+                Mode = UpscaleMode,
+                OutputWidth = (uint)OutputWidth,
+                OutputHeight = (uint)OutputHeight,
+                PreExposure = 1f,
+                ExposureScale = 1f,
+                ColorBuffersHDR = 1,
+                NormalRoughnessMode = 1, // packed: the roughness in the normal's w
+                WorldToCameraView = view,
+                CameraViewToWorld = toWorld,
+            };
+            var resources = stackalloc Streamline.Resource[7];
+            int[] tagged = [Colour, Upscaled, Depth, Motion, Diffuse, Specular, NormalRoughness];
+            uint[] types = [Streamline.BufferScalingInputColor, Streamline.BufferScalingOutputColor, Streamline.BufferLinearDepth, Streamline.BufferMotionVectors,
+                Streamline.BufferAlbedo, Streamline.BufferSpecularAlbedo, Streamline.BufferNormalRoughness];
+            var tags = new Streamline.ResourceTag[tagged.Length];
+            for (var i = 0; i < tagged.Length; i++)
+            {
+                var target = targets[tagged[i]];
+                resources[i] = target.Resource();
+                tags[i] = Streamline.Tag(&resources[i], types[i], target.Width, target.Height);
+            }
+
+            if (Streamline.EvaluateRayReconstruction(cb.VkHandle, frameIndex, ref constants, ref options, tags) is { } failed)
+            {
+                if (UpscaleError is null)
+                {
+                    Console.WriteLine($"SCENE ray reconstruction failed: {failed}");
+                }
+
+                UpscaleError = failed;
+            }
+            else
+            {
+                Evaluations++;
+            }
+
+            Memory(cb, VkPipelineStageFlags.AllCommandsBit, VkPipelineStageFlags.ComputeShaderBit);
+            cb.BindPipeline(VkPipelineBindPoint.Compute, filter);
+            cb.BindDescriptorSets(VkPipelineBindPoint.Compute, layout, 0, [sets[slot]], []);
+            Push(cb, new PassPush(parity, 0, 2));
+            cb.Dispatch((OutputWidth + Group - 1) / Group, (OutputHeight + Group - 1) / Group, 1);
+        }
+        else
+        {
+            cb.BindPipeline(VkPipelineBindPoint.Compute, filter);
+            cb.BindDescriptorSets(VkPipelineBindPoint.Compute, layout, 0, [sets[slot]], []);
+            for (var pass = 0; pass < 3; pass++)
+            {
+                Memory(cb, pass == 0 ? tracing : VkPipelineStageFlags.ComputeShaderBit, VkPipelineStageFlags.ComputeShaderBit);
+                Push(cb, new PassPush(parity, pass, pass == 2 ? 1 : 0));
+                cb.Dispatch(gx, gy, 1);
+            }
         }
 
         cb.WriteTimestamp(VkPipelineStageFlags.BottomOfPipeBit, timestamps, (2 * slot) + 1);
@@ -307,7 +450,23 @@ internal sealed unsafe class PathTracer : IDisposable
         }
 
         var sorted = GpuMilliseconds.Order().ToArray();
-        return $"GPU {sorted[sorted.Length / 2]:F2} ms p50, {sorted[(int)(sorted.Length * 0.95)]:F2} ms p95 over {sorted.Length} frames, by {How}";
+        var upscaled = Upscaling
+            ? $"; traced at {Width}x{Height}, Ray Reconstruction ({Streamline.Modes[UpscaleMode]}) to {OutputWidth}x{OutputHeight}, {Evaluations} evaluations{(UpscaleError is { } e ? $", last error: {e}" : "")}"
+            : "";
+        return $"GPU {sorted[sorted.Length / 2]:F2} ms p50, {sorted[(int)(sorted.Length * 0.95)]:F2} ms p95 over {sorted.Length} frames, by {How}{upscaled}";
+    }
+
+    private static float Halton(int index, int b)
+    {
+        var (f, r) = (1f, 0f);
+        while (index > 0)
+        {
+            f /= b;
+            r += f * (index % b);
+            index /= b;
+        }
+
+        return r;
     }
 
     // In the render pass, after the meshes: the picture over them, through the splash's pipeline.
@@ -455,6 +614,8 @@ internal sealed unsafe class PathTracer : IDisposable
         public SN.Vector4 Size;
         public SN.Vector4 Options;
         public SN.Vector4 Background;
+        public SN.Vector4 Upscale; // Ray Reconstruction: on, and the jitter within the pixel
+        public SN.Vector4 Forward; // the view's direction, for the depth along it
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -472,9 +633,14 @@ internal sealed unsafe class PathTracer : IDisposable
         private readonly Device device;
         private readonly VkDeviceMemory memory;
 
+        public const VkImageUsageFlags Usage = VkImageUsageFlags.StorageBit | VkImageUsageFlags.SampledBit | VkImageUsageFlags.TransferSrcBit | VkImageUsageFlags.TransferDstBit;
+
         public Target(Device device, PhysicalDevice physical, VkFormat format, int width, int height)
         {
             this.device = device;
+            Format = format;
+            Width = width;
+            Height = height;
             Image = device.CreateImage(new VkImageCreateInfo
             {
                 ImageType = VkImageType._2D,
@@ -484,7 +650,7 @@ internal sealed unsafe class PathTracer : IDisposable
                 ArrayLayers = 1,
                 Samples = VkSampleCountFlags._1Bit,
                 Tiling = VkImageTiling.Optimal,
-                Usage = VkImageUsageFlags.StorageBit | VkImageUsageFlags.SampledBit,
+                Usage = Usage,
                 SharingMode = VkSharingMode.Exclusive,
                 InitialLayout = VkImageLayout.Undefined,
             }, null);
@@ -502,6 +668,16 @@ internal sealed unsafe class PathTracer : IDisposable
         public VkImage Image { get; }
 
         public VkImageView View { get; }
+
+        public VkFormat Format { get; }
+
+        public int Width { get; }
+
+        public int Height { get; }
+
+        // As Streamline takes it, in the General layout.
+        public Streamline.Resource Resource() =>
+            Streamline.Image(Image.VkHandle, memory.VkHandle, View.VkHandle, Width, Height, (uint)Format, (uint)Usage);
 
         public void Dispose()
         {
@@ -525,7 +701,7 @@ internal sealed unsafe class PathTracer : IDisposable
         #ifdef SER
         #extension GL_NV_shader_invocation_reorder : require
         #endif
-        layout(set = 0, binding = 0) uniform Trace { mat4 invViewProj; mat4 prevViewProj; vec4 eye; vec4 size; vec4 options; vec4 background; } t;
+        layout(set = 0, binding = 0) uniform Trace { mat4 invViewProj; mat4 prevViewProj; vec4 eye; vec4 size; vec4 options; vec4 background; vec4 upscale; vec4 forward; } t;
         layout(set = 0, binding = 1) uniform accelerationStructureEXT hallRays;
         struct Inst { uvec2 vertices; uint count; uint pad; vec4 glow; vec4 prev0; vec4 prev1; vec4 prev2; };
         layout(std430, set = 0, binding = 2) readonly buffer Instances { Inst inst[]; };
@@ -546,6 +722,13 @@ internal sealed unsafe class PathTracer : IDisposable
         layout(set = 0, binding = 17, rgba16f) uniform image2D filtA;
         layout(set = 0, binding = 18, rgba16f) uniform image2D filtB;
         layout(set = 0, binding = 19, rgba16f) uniform image2D picture;
+        layout(set = 0, binding = 20, rg16f) uniform image2D rrMotion;
+        layout(set = 0, binding = 21, r32f) uniform image2D rrDepth;
+        layout(set = 0, binding = 22, rgba16f) uniform image2D rrDiffuse;
+        layout(set = 0, binding = 23, rgba16f) uniform image2D rrSpecular;
+        layout(set = 0, binding = 24, rgba16f) uniform image2D rrNormal;
+        layout(set = 0, binding = 25, rgba16f) uniform image2D rrColour;
+        layout(set = 0, binding = 26, rgba16f) uniform image2D rrUpscaled;
         layout(push_constant) uniform Pass { int parity; int pass; int final; int pad; } pc;
 
         // This frame's (now) or last frame's images, the two swapping each frame.
@@ -569,6 +752,14 @@ internal sealed unsafe class PathTracer : IDisposable
         }
 
         float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+        // The haze, as the Low lighting's.
+        vec3 haze(vec3 c, vec3 p)
+        {
+            float density = t.eye.w * exp(-0.35 * max(0.5 * (p.y + t.eye.y), 0.0));
+            float through = exp(-density * max(length(p - t.eye.xyz) - 3.0, 0.0));
+            return mix(vec3(0.075, 0.09, 0.115), c, through);
+        }
 
         """;
 
@@ -922,6 +1113,36 @@ internal sealed unsafe class PathTracer : IDisposable
             return light;
         }
 
+        // The light the surroundings reflect off a surface of reflectance f0 and GGX alpha, seen at nv: the specular
+        // colour Ray Reconstruction is given (its guide's EnvBRDFApprox2, Ray Tracing Gems chapter 32). HLSL's
+        // mul(M, x) is GLSL's x * M for the same list of numbers.
+        vec3 specularAlbedo(vec3 f0, float alpha, float nv)
+        {
+            vec4 x = vec4(1.0, nv, nv * nv, nv * nv * nv);
+            vec4 y = vec4(1.0, alpha, alpha * alpha, alpha * alpha * alpha);
+            float bias = dot(x.xy * mat2(0.99044, -1.28514, 1.29678, -0.755907), y.xy)
+                / dot(x.xyw * mat3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563, 626.13, 316.627), y.xyw);
+            float scale = dot(x.xy * mat2(0.0365463, 3.32707, 9.0632, -9.04756), y.xy)
+                / dot(x.xzw * mat3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589, 19.7886, -20.2123), y.xyw);
+            bias *= clamp(f0.g * 50.0, 0.0, 1.0);
+            return f0 * max(0.0, scale) + max(0.0, bias);
+        }
+
+        // Ray Reconstruction's guides for a pixel: its light, where its surface (before, last frame's place) was a
+        // frame ago, in pixels from where the jittered ray met it now, its depth along the view, its colours, its
+        // normal and roughness.
+        void guides(ivec2 px, vec2 jitter, vec3 light, vec3 before, float depth, vec3 diffuse, vec3 specular, vec3 n, float roughness)
+        {
+            vec4 clip = t.prevViewProj * vec4(before, 1.0);
+            vec2 motion = clip.w > 0.0 ? (clip.xy / clip.w * 0.5 + 0.5) * t.size.xy - (vec2(px) + jitter) : vec2(0.0);
+            imageStore(rrMotion, px, vec4(motion, 0.0, 0.0));
+            imageStore(rrDepth, px, vec4(depth));
+            imageStore(rrDiffuse, px, vec4(diffuse, 1.0));
+            imageStore(rrSpecular, px, vec4(specular, 1.0));
+            imageStore(rrNormal, px, vec4(n, roughness));
+            imageStore(rrColour, px, vec4(light, 1.0));
+        }
+
         void main()
         {
             #ifdef RAYGEN
@@ -938,6 +1159,12 @@ internal sealed unsafe class PathTracer : IDisposable
             seed = uint(px.x) * 1973u + uint(px.y) * 9277u + uint(t.size.z) * 26699u;
             rnd();
             vec2 jitter = vec2(rnd(), rnd());
+            bool upscaled = t.upscale.x > 0.5;
+            if (upscaled)
+            {
+                jitter = t.upscale.yz; // the same for every pixel, as Ray Reconstruction is told
+            }
+
             vec2 ndc = (vec2(px) + jitter) / vec2(size) * 2.0 - 1.0;
             vec4 far = t.invViewProj * vec4(ndc, 0.5, 1.0);
             vec3 eye = t.eye.xyz;
@@ -946,6 +1173,12 @@ internal sealed unsafe class PathTracer : IDisposable
             Surface s;
             if (!hit(eye, d, 60.0, t.background.w, false, s))
             {
+                if (upscaled)
+                {
+                    guides(px, jitter, t.background.rgb, eye + d * 1000.0, 1000.0, vec3(0.0), vec3(0.0), -d, 1.0);
+                    return;
+                }
+
                 // Nothing: the surroundings, kept as nothing.
                 store(px, vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(t.background.rgb, 0.0));
                 return;
@@ -961,6 +1194,19 @@ internal sealed unsafe class PathTracer : IDisposable
             }
 
             light /= float(paths);
+
+            if (upscaled)
+            {
+                // To Ray Reconstruction: the light as it is, its glow and haze, bright outliers cut; nothing kept or
+                // filtered here.
+                vec3 seen = light + s.glow;
+                float l = luma(seen);
+                seen *= l > 24.0 ? 24.0 / l : 1.0;
+                vec3 f0 = mix(vec3(s.f0), s.base, s.metal);
+                guides(px, jitter, haze(seen, s.p), s.before, s.dist * dot(d, t.forward.xyz),
+                    s.base * (1.0 - s.metal), specularAlbedo(f0, s.alpha, max(dot(s.n, -d), 1e-4)), s.n, sqrt(s.alpha));
+                return;
+            }
 
             // The light over the surface's colour, so that the filter keeps the scans' detail; bright outliers cut.
             vec3 albedo = max(s.base, vec3(0.03));
@@ -1025,14 +1271,7 @@ internal sealed unsafe class PathTracer : IDisposable
         """;
 
     private const string FilterShader = """
-        // The haze and the shoulder, as the Low lighting's.
-        vec3 haze(vec3 c, vec3 p)
-        {
-            float density = t.eye.w * exp(-0.35 * max(0.5 * (p.y + t.eye.y), 0.0));
-            float through = exp(-density * max(length(p - t.eye.xyz) - 3.0, 0.0));
-            return mix(vec3(0.075, 0.09, 0.115), c, through);
-        }
-
+        // The shoulder, as the Low lighting's.
         vec3 shoulder(vec3 x)
         {
             const float a = 0.6;
@@ -1045,10 +1284,21 @@ internal sealed unsafe class PathTracer : IDisposable
         }
 
         // One à-trous pass, 5 × 5 taps 1, 2 or 4 pixels apart, each weighed by how alike its surface is (normal, plane)
-        // and its light, the light's bar narrowing as frames are kept; the last pass gives the picture.
+        // and its light, the light's bar narrowing as frames are kept; the last pass gives the picture. With Ray
+        // Reconstruction (final 2), the one pass puts its picture, at the window's size, through the shoulder.
         void main()
         {
             ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+            if (pc.final == 2)
+            {
+                if (all(lessThan(px, imageSize(rrUpscaled))))
+                {
+                    imageStore(rrUpscaled, px, vec4(shoulder(max(imageLoad(rrUpscaled, px).rgb, vec3(0.0))), 1.0));
+                }
+
+                return;
+            }
+
             ivec2 size = ivec2(t.size.xy);
             if (px.x >= size.x || px.y >= size.y)
             {

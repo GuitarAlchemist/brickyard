@@ -1532,14 +1532,44 @@ five, queues graphics 0×2, compute 2×2, optical flow 5×1. `SelfTest` holds th
 probe compiled against the SDK's headers printed. `--streamline-log` prints Streamline's verbose log. Nothing is
 evaluated yet: DLSS on the path tracer and frame generation are the next slices.
 
-**Not to be used until the author's word.** Optional over-the-air updates (`eAllowOTA`) and downloaded plugins are off,
+**Accepted by the author the same day** ("2 - c'est acceptable"). Optional over-the-air updates (`eAllowOTA`) and downloaded plugins are off,
 as in the Godot fork's `harden_streamline.py`, yet `slInit` runs the driver's NGX updater
 (`DriverStore\...\nvngx_update.exe -api bootstrap|update`) for every feature loaded: Streamline's
 `pluginManager.cpp` does so in every production build, whatever the flags. It costs about 1.4 s a feature (15 s to
 the first frame with five), and during one run on 2026-11-15 an updater process held a TCP connection to
 72.136.195.99:443. So `--dlss` contacts NVIDIA as the driver's DLSS updater does in any DLSS game; the Observatory's
-fork does the same. *To verify / decide*: whether the author accepts that, or Streamline is built from source without
-`SL_PRODUCTION` (then unsigned, and NGX may refuse it).
+fork does the same. Asked to choose between the scene's own render scale and DLSS with that contact, the author chose
+DLSS.
+
+### Ray Reconstruction on the path tracer, --dlss (2026-11-15)
+
+The author, of Max out at 17 fps: "toujours tres peu de FPS", then "2 - c'est acceptable". With `--dlss`, the path
+tracer (F9) traces at the size DLSS asks for (`slDLSSDGetOptimalSettings`; `--dlss-mode performance` by default, or
+balanced, quality, ultra-performance, ultra-quality, dlaa), one path a pixel jittered by Halton's (2, 3) sequence, with
+neither its kept frames nor its à-trous filter. The trace writes Ray Reconstruction's guides: the light with its glow
+and haze, motion in pixels from where the jittered ray met the surface to where that surface was a frame ago, depth
+along the view, diffuse colour, specular colour (the guide's EnvBRDFApprox2), the shading normal with the linear
+roughness packed in w. `slSetConstants`, `slDLSSDSetOptions`, `slSetTagForFrame` (every image in the General layout,
+`eValidUntilPresent`) and `slEvaluateFeature` go into the frame's command buffer; one compute pass then puts the
+4K output through the shoulder, and the composite draws it. Streamline leaves the command buffer's bindings its own
+(manual hooking, no state tracking): everything after binds again.
+
+Measured hidden on the RTX 5080, 3840x2054, traced at 1920x1027:
+- 2506 evaluations in one run, none failed. Trace, Ray Reconstruction and shoulder: 4.0–4.2 ms of GPU, against 7.2–7.4
+  ms for the native trace and its filter.
+- Max out, `--present-wait`: native 50 fps, frame p95 33.6 ms, a frame ahead for 1193 of 1339 frames; with Ray
+  Reconstruction 59 fps, p95 17.8 ms, never a frame ahead. The path tracer's GPU time 13.6 → 6.5 ms.
+- 2560x1440 quality: traced at 1707x960, 3.8 ms.
+- The jitter's sign, at a fixed view (`--view 1`): as the sample's offset from the pixel's centre (+1) the bricks are
+  visibly sharper than with `--dlss-jitter-flip`, the mean absolute Laplacian 4.0 against 3.4 (and 3.3 against 2.9 on
+  another frame). A first comparison with the camera moving had suggested the opposite.
+
+In manual hooking the host must present through Streamline, or its common plugin's once-a-frame bookkeeping and
+collection never runs ("presentCommon() was not observed", logged at the first evaluation). The scene presents
+through the interposer's `vkQueuePresentKHR` (its `vkGetDeviceProcAddr`, once the device is told), which runs
+`presentCommon` then the device's own present; the error is gone. At shutdown NVIDIA's DLSS plugin, loaded but never
+evaluated, logs `destroyKernel(ctx.mvecKernel) failed 6`: harmless so far. *To verify*: the live window (not yet
+installed), and Ray Reconstruction's look on the screens and the globe, whose albedo guides are plain.
 
 ## Known problems
 
