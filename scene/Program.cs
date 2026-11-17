@@ -746,6 +746,7 @@ internal static unsafe class Stage
         // leaves it out.
         Streamline.Needs[] streamlineNeeds = [];
         var rayReconstruction = false; // DLSS-RR's functions bound once the device is told
+        var superResolution = false; // DLSS's (Super Resolution) bound once the device is told
         var frameGeneration = false; // DLSS-G's, with the swapchain through Streamline (--dlss-g)
         var streamlineHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "streamline");
         var dlssByItself = !hidden && !args.Contains("--no-dlss") && File.Exists(Path.Combine(streamlineHome, "sl.interposer.dll"));
@@ -849,10 +850,14 @@ internal static unsafe class Stage
             _ when properties.DeviceType == VkPhysicalDeviceType.Cpu => (Quality.Flat, $"{gpu} draws on the CPU"),
             _ => (Quality.Low, $"{gpu} is a {properties.DeviceType switch { VkPhysicalDeviceType.DiscreteGpu => "discrete", VkPhysicalDeviceType.IntegratedGpu => "integrated", VkPhysicalDeviceType.VirtualGpu => "virtual", _ => "other" }} GPU"),
         };
-        // Low draws four samples a pixel, which every Vulkan GPU offers, and resolves them into the swapchain's image.
-        var samples = quality == Quality.Low ? VkSampleCountFlags._4Bit : VkSampleCountFlags._1Bit;
+        // Low draws four samples a pixel, which every Vulkan GPU offers, and resolves them into the swapchain's image;
+        // with DLSS Super Resolution offered (Streamline, an NVIDIA RTX GPU), one sample: DLSS smooths the edges instead,
+        // from the jittered frames (RasterUpscaler), unless --no-dlss-sr.
+        var dlssSmooths = quality == Quality.Low && Streamline.Loaded && !args.Contains("--no-dlss-sr")
+            && Streamline.Features.Contains(Streamline.FeatureDlss) && Streamline.Supported(Streamline.FeatureDlss, physical.VkHandle) == 0;
+        var samples = quality == Quality.Low && !dlssSmooths ? VkSampleCountFlags._4Bit : VkSampleCountFlags._1Bit;
         var msaa = samples != VkSampleCountFlags._1Bit;
-        Console.WriteLine($"SCENE quality {quality.ToString().ToLowerInvariant()} because {because}{(msaa ? ", with 4x MSAA" : "")}");
+        Console.WriteLine($"SCENE quality {quality.ToString().ToLowerInvariant()} because {because}{(msaa ? ", with 4x MSAA" : dlssSmooths ? ", its edges smoothed by DLSS instead of MSAA" : "")}");
 
         // The screen's pace (VK_KHR_present_id and VK_KHR_present_wait), when the GPU offers it: a frame can wait for the
         // last one to be on screen.
@@ -1090,6 +1095,14 @@ internal static unsafe class Stage
                 Console.WriteLine($"SCENE streamline ray reconstruction: {bound ?? "ready"}");
             }
 
+            // Super Resolution on the raster pass (RasterUpscaler), unless --no-dlss-sr; not with Low's MSAA.
+            if (told == 0 && !msaa && !args.Contains("--no-dlss-sr") && Streamline.Supported(Streamline.FeatureDlss, physical.VkHandle) == 0)
+            {
+                var bound = Streamline.BindSuperResolution();
+                superResolution = bound is null;
+                Console.WriteLine($"SCENE streamline super resolution: {bound ?? "ready"}");
+            }
+
             // Frame generation (--dlss-g): its functions, the swapchain's proxies and Reflex's low latency mode, then
             // the window's surface made again through the interposer, so that DLSS-G knows it.
             if (told == 0 && rayReconstruction && Streamline.Features.Contains(Streamline.FeatureDlssG))
@@ -1283,7 +1296,9 @@ internal static unsafe class Stage
         var hudless = frameGeneration;
         var hallPass = default(VkRenderPass);
         var cardsPass = default(VkRenderPass);
-        if (hudless)
+        // Super Resolution (RasterUpscaler) draws the hall into its own pass, then the cards' pass over the window's
+        // image: DLSS's picture first, the cards after it.
+        if (hudless || superResolution)
         {
             Span<VkAttachmentDescription> split = [attachments[0], attachments[1], attachments[2]];
             if (msaa)
@@ -1779,6 +1794,10 @@ internal static unsafe class Stage
             MaxAnisotropy = anisotropic ? 16f : 1f,
             MaxLod = 16f,
         }, null);
+        // DLSS Super Resolution's mode (--dlss-sr-mode, quality by default), and the textures sampled as at the window's
+        // size, as DLSS's guide asks: a mip bias of log2(drawn / window), -0.58 in quality.
+        var srMode = (uint)Math.Max(Array.IndexOf(Streamline.Modes, Option(args, "--dlss-sr-mode") ?? "quality"), 1);
+        var lodBias = superResolution && Streamline.SuperResolutionSize(srMode, 3840, 2160) is { } srSize ? MathF.Log2(srSize.Width / 3840f) : 0f;
         var materialSampler = device.CreateSampler(new VkSamplerCreateInfo
         {
             MagFilter = VkFilter.Linear,
@@ -1787,6 +1806,7 @@ internal static unsafe class Stage
             AddressModeU = VkSamplerAddressMode.Repeat,
             AddressModeV = VkSamplerAddressMode.Repeat,
             AddressModeW = VkSamplerAddressMode.Repeat,
+            MipLodBias = lodBias,
             AnisotropyEnable = anisotropic,
             MaxAnisotropy = anisotropic ? 16f : 1f,
             MaxLod = 16f,
@@ -1855,6 +1875,16 @@ internal static unsafe class Stage
             tracer.UpscaleMode = (uint)Math.Max(mode, 1);
             tracer.JitterSign = args.Contains("--dlss-jitter-flip") ? -1f : 1f;
             Console.WriteLine($"SCENE path tracing through DLSS Ray Reconstruction, {Streamline.Modes[tracer.UpscaleMode]}");
+        }
+
+        // DLSS Super Resolution on the raster pass (the window drawn without path tracing), in --dlss-sr-mode's mode
+        // (quality by default); F7 turns it off and on.
+        var upscaler = superResolution ? new RasterUpscaler(device, physical, surfaceFormat.Format, depthFormat, dependency, setLayout) : null;
+        var upscaling = upscaler is not null;
+        if (upscaler is not null)
+        {
+            upscaler.Mode = srMode;
+            Console.WriteLine($"SCENE raster pass through DLSS Super Resolution, {Streamline.Modes[upscaler.Mode]}, textures' mip bias {lodBias:F2}; F7 or --no-dlss-sr");
         }
         var maps = stackalloc VkDescriptorImageInfo[4];
         foreach (var frameSet in frameSets)
@@ -2260,9 +2290,12 @@ internal static unsafe class Stage
                 Has("VK_EXT_opacity_micromap") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 Words.Say("VK_EXT_opacity_micromap · for alpha-tested leaves and fences; the hall has none", "VK_EXT_opacity_micromap · pour le feuillage et les grillages découpés ; la salle n'en a pas")),
             new("DLSS (Super Resolution, Ray Reconstruction)",
-                tracer is { Upscaling: true } && pathTracing ? Panel.Rtx.Use
-                    : tracer is { UpscaleMode: > 0 } || (nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle")) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                tracer is { UpscaleMode: > 0 } t
+                (tracer is { Upscaling: true } && pathTracing) || (upscaler is { Ready: true } && upscaling && !pathTracing) ? Panel.Rtx.Use
+                    : tracer is { UpscaleMode: > 0 } || upscaler is not null || (nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle")) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                upscaler is { Ready: true } u && upscaling && !pathTracing
+                    ? Words.Say($"Super Resolution ({Streamline.Modes[u.Mode]}): the hall drawn at {u.Width}x{u.Height}, upscaled to {u.OutputWidth}x{u.OutputHeight}, the cards at full size · F7: on or off",
+                        $"Super Resolution ({Streamline.Modes[u.Mode]}) : la salle dessinée à {u.Width}x{u.Height}, agrandie à {u.OutputWidth}x{u.OutputHeight}, les cartes en pleine taille · F7 : activer ou couper")
+                    : tracer is { UpscaleMode: > 0 } t
                     ? Words.Say($"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}): the path tracer at {t.Width}x{t.Height}, denoised and upscaled to {t.OutputWidth}x{t.OutputHeight} (--dlss)",
                         $"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}) : le path tracer à {t.Width}x{t.Height}, débruité et agrandi à {t.OutputWidth}x{t.OutputHeight} (--dlss)")
                     : Words.Say("NGX's extensions, VK_NVX_binary_import and VK_NVX_image_view_handle; --dlss with NVIDIA's Streamline", "extensions de NGX, VK_NVX_binary_import et VK_NVX_image_view_handle ; --dlss avec Streamline de NVIDIA")),
@@ -2427,6 +2460,14 @@ internal static unsafe class Stage
                 pathTracing = !pathTracing;
                 tracer.Forget();
                 Console.WriteLine($"SCENE path tracing {(pathTracing ? "on" : "off")}");
+            }
+            else if (key == GlfwKey.F7 && upscaler is not null)
+            {
+                // DLSS Super Resolution on the raster pass, or the window drawn at its own size as before.
+                upscaling = !upscaling;
+                upscaler.Forget();
+                rtxDrawn = default;
+                Console.WriteLine($"SCENE super resolution {(upscaling ? "on" : "off")}");
             }
             else if (key is GlfwKey.Home or GlfwKey.Enter) // back to the first view, from wherever the player got stuck
             {
@@ -3715,16 +3756,28 @@ internal static unsafe class Stage
             clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
             var splitCards = hudless && Streamline.Generating && !splashing; // the hall, then the cards, in two passes
+            // DLSS Super Resolution (F7): the hall drawn smaller into the upscaler's pass, jittered, then upscaled.
+            var upscaled = upscaler is not null && upscaling && !pathTracing && !splashing && !splitCards
+                && upscaler.Resize(extent.Width, extent.Height) && upscaler.Ready;
+            var drawn = upscaled ? new VkExtent2D { Width = upscaler!.Width, Height = upscaler.Height } : extent;
+            var unjittered = viewProj;
+            var jitter = default(SN.Vector2);
+            if (upscaled)
+            {
+                (jitter, var clip) = upscaler!.Jitter(args.Contains("--dlss-jitter-flip") ? -1f : 1f);
+                viewProj *= clip;
+            }
+
             cb.BeginRenderPass(new VkRenderPassBeginInfo
             {
-                RenderPass = splitCards ? hallPass : renderPass,
-                Framebuffer = framebuffers[imageIndex],
-                RenderArea = new VkRect2D { Extent = extent },
+                RenderPass = upscaled ? upscaler!.Pass : splitCards ? hallPass : renderPass,
+                Framebuffer = upscaled ? upscaler!.Framebuffer : framebuffers[imageIndex],
+                RenderArea = new VkRect2D { Extent = drawn },
                 ClearValueCount = 2,
                 ClearValues = clears,
             }, VkSubpassContents.Inline);
-            cb.SetViewport(firstViewport: 0, [new VkViewport { Width = extent.Width, Height = extent.Height, MinDepth = 0f, MaxDepth = 1f }]);
-            cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = extent }]);
+            cb.SetViewport(firstViewport: 0, [new VkViewport { Width = drawn.Width, Height = drawn.Height, MinDepth = 0f, MaxDepth = 1f }]);
+            cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = drawn }]);
             if (splashing)
             {
                 cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
@@ -3786,12 +3839,31 @@ internal static unsafe class Stage
                 if (tracer is not null && pathTracing) tracer.Composite(cb, splashPipeline, splashLayout);
 
                 // The Pong screen binds its own pipeline and descriptor set, so it comes after every mesh drawn with ours.
-                chestView = worlds[Robot.Torso] * viewProj;
+                chestView = worlds[Robot.Torso] * unjittered;
                 arcadeGpu?.Draw(cb, slot, worlds[Robot.Torso] * viewProj);
                 cabinet.DrawScreens(cb, slot, viewProj);
                 if (wall.Showing == WallSource.Kind.Pong) pongWall?.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
                 else if (wall.Showing == WallSource.Kind.Session) sessionWall.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
                 if (hallGallery.Book is { } bookFrame) readerBook.Draw(cb, slot, bookFrame * viewProj);
+
+                if (upscaled)
+                {
+                    // The hall drawn, DLSS upscales it; the window's image then takes it whole in the cards' pass, the
+                    // cards and buttons drawn over it at the window's size.
+                    cb.EndRenderPass();
+                    upscaler!.Evaluate(cb, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, jitter);
+                    cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.ColorAttachmentOutputBit, VkDependencyFlags.None, [], [],
+                        [Barrier(images[imageIndex], VkImageLayout.Undefined, VkImageLayout.ColorAttachmentOptimal, VkAccessFlags.None, VkAccessFlags.ColorAttachmentReadBit | VkAccessFlags.ColorAttachmentWriteBit)]);
+                    cb.BeginRenderPass(new VkRenderPassBeginInfo
+                    {
+                        RenderPass = cardsPass,
+                        Framebuffer = framebuffers[imageIndex],
+                        RenderArea = new VkRect2D { Extent = extent },
+                    }, VkSubpassContents.Inline);
+                    cb.SetViewport(firstViewport: 0, [new VkViewport { Width = extent.Width, Height = extent.Height, MinDepth = 0f, MaxDepth = 1f }]);
+                    cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = extent }]);
+                    upscaler.Composite(cb, splashPipeline, splashLayout);
+                }
 
                 if (splitCards)
                 {
@@ -4455,6 +4527,11 @@ internal static unsafe class Stage
             Console.WriteLine($"SCENE path tracing {tracer.Measured()} at {tracer.Width}x{tracer.Height}");
         }
 
+        if (upscaler is not null)
+        {
+            Console.WriteLine($"SCENE super resolution: {upscaler.Measured()}");
+        }
+
         if (reflex is not null)
         {
             Console.WriteLine($"SCENE reflex {reflex.Measured()}");
@@ -4462,6 +4539,7 @@ internal static unsafe class Stage
 
         reflex?.Dispose();
         tracer?.Dispose();
+        upscaler?.Dispose();
         rays?.Dispose();
         Rays = null;
         device.DestroyShaderModule(splashVertex, null);
@@ -4477,7 +4555,7 @@ internal static unsafe class Stage
         device.DestroyShaderModule(fragmentModule, null);
         Teardown();
         device.DestroyRenderPass(renderPass, null);
-        if (hudless)
+        if (hudless || superResolution)
         {
             device.DestroyRenderPass(hallPass, null);
             device.DestroyRenderPass(cardsPass, null);

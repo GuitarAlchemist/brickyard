@@ -2056,6 +2056,53 @@ than one storey has a spire on its axis. Flat quality keeps the board.
 - Hidden renders, `--demo` (6 sessions, 2 workspaces) give one ring. A throwaway build with 16 demo sessions in 4
   workspaces gives two storeys and the spire.
 
+## DLSS Super Resolution on the raster pass (2026-11-16)
+
+The author asked: « oui fais DLSS SR sur le rendu normal ». `scene/RasterUpscaler.cs` does this:
+
+- The hall is drawn into a pass of its own, at the size DLSS gives for the mode. `--dlss-sr-mode` sets the mode, quality
+  by default, which gives 2560x1369 for 3840x2054.
+- The pass is compatible with the window's: same formats, one sample, same subpass and dependency. Every pipeline
+  draws into it unchanged.
+- The projection is jittered by Halton (2, 3) in clip space. The sign is the path tracer's: +1, `--dlss-jitter-flip`
+  for -1.
+- `slEvaluateFeature(kFeatureDLSS)` upscales into an RGBA16F image.
+- The cards' pass then lays that image over the window, and the cards and buttons over it at full size.
+
+Motion vectors:
+
+- They are an image of zeros, cleared once, with `cameraMotionIncluded` false. Streamline computes the camera's motion
+  from the depth and the matrices (sl_consts.h).
+- What moves by itself has no vectors of its own and may trail: the robots' arms, the tower's turn, the screens.
+
+Textures and MSAA:
+
+- The materials' sampler takes DLSS's mip bias, log2(drawn / window): -0.58 in quality.
+- Low quality's 4x MSAA gives way to DLSS when Streamline offers it ("its edges smoothed by DLSS instead of MSAA").
+- F7 switches DLSS off and on at run time. Off, the edges are not smoothed until the next start.
+- `--no-dlss-sr` keeps the MSAA.
+- Path tracing keeps Ray Reconstruction and leaves this pass out.
+
+Streamline 2.10.0's `sl_dlss.h`, read at the v2.10.0 tag:
+
+- `DLSSOptions` (version 3, `{6AC826E4-…}`) is 88 bytes. Its offsets are checked by the selftest, with
+  `DLSSOptimalSettings` (`{EF1D0957-…}`).
+- `EvaluateRayReconstruction` and `EvaluateSuperResolution` now share one `Evaluate`.
+
+Measured in hidden runs (3840x2054, port 8899):
+
+- 395, 588 and 842 evaluations in three runs, no failure, no `presentCommon`.
+- The window's image and its cards look right.
+- With a fixed view (`--view 4`, the window's peek at 8 s), the brick wall's mean absolute Laplacian is 4.43 at +1
+  and 4.29 flipped; the bookcase's is 4.59 and 4.42. 4x MSAA at full size gives 5.68 and 6.52: the covers' small
+  print is softer through DLSS quality than drawn at 4K.
+- Frame times were not measurable that evening. The live window at 4K, Whisper and Ollama held the GPU at 100 %, and
+  the same command gave 9 to 52 fps from one run to the next. Still to measure on a quiet GPU, or live by F7 on the
+  RTX card.
+
+Shutting down still logs `dlssEntry.cpp destroyKernel(mvecKernel) failed 6`. It comes from the kernel that computes
+the camera's motion, and changes nothing on screen.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

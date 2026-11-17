@@ -73,7 +73,7 @@ Touche 8. Le mur de gauche porte les cours du site learn, ses démos et ses arti
 ## Image et performances
 
 - B : la brume. T : les légendes de la pièce.
-- F6 : max out. F9 : le path tracing. F10 : la carte RTX.
+- F6 : max out. F7 : DLSS sur l'image normale (la salle dessinée plus petite puis agrandie, les bords lissés). F9 : le path tracing. F10 : la carte RTX.
 
 ## Gestes de la main
 

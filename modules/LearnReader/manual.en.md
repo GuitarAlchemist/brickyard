@@ -73,7 +73,7 @@ Key 8. The left wall holds the learn site's courses, demos and artifacts. At the
 ## Picture and performance
 
 - B: the haze. T: the room's captions.
-- F6: max out. F9: path tracing. F10: the RTX card.
+- F6: max out. F7: DLSS on the normal picture (the hall drawn smaller, then upscaled, its edges smoothed). F9: path tracing. F10: the RTX card.
 
 ## Hand gestures
 

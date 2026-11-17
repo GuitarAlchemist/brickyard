@@ -277,10 +277,76 @@ internal static unsafe class Streamline
             : null;
     }
 
+    private static delegate* unmanaged<DLSSOptions*, DLSSOptimalSettings*, int> srOptimal;
+    private static delegate* unmanaged<ViewportHandle*, DLSSOptions*, int> srSetOptions;
+
+    // Super Resolution's own functions (DLSS on the raster pass, RasterUpscaler), once the device is told: null when
+    // they are there, else why not.
+    public static string? BindSuperResolution()
+    {
+        var get = (delegate* unmanaged<uint, byte*, nint*, int>)Export("slGetFeatureFunction");
+        nint optimal = 0, set = 0;
+        fixed (byte* a = "slDLSSGetOptimalSettings\0"u8, b = "slDLSSSetOptions\0"u8)
+        {
+            var r = get(FeatureDlss, a, &optimal);
+            if (r != 0 || optimal == 0)
+            {
+                return $"slDLSSGetOptimalSettings: {ResultName(r)}";
+            }
+
+            r = get(FeatureDlss, b, &set);
+            if (r != 0 || set == 0)
+            {
+                return $"slDLSSSetOptions: {ResultName(r)}";
+            }
+        }
+
+        srOptimal = (delegate* unmanaged<DLSSOptions*, DLSSOptimalSettings*, int>)optimal;
+        srSetOptions = (delegate* unmanaged<ViewportHandle*, DLSSOptions*, int>)set;
+        return null;
+    }
+
+    public static bool SuperResolutionBound => srSetOptions != null;
+
+    // The size Super Resolution renders at for a mode and an output size, as DLSS recommends it.
+    public static (int Width, int Height)? SuperResolutionSize(uint mode, int outputWidth, int outputHeight)
+    {
+        var options = new DLSSOptions { Base = new BaseStructure(DLSSOptionsType, 3), Mode = mode, OutputWidth = (uint)outputWidth, OutputHeight = (uint)outputHeight, PreExposure = 1f, ExposureScale = 1f };
+        var settings = new DLSSOptimalSettings { Base = new BaseStructure(DLSSOptimalSettingsType, 1) };
+        return srOptimal(&options, &settings) == 0 && settings.OptimalRenderWidth > 0 && settings.OptimalRenderHeight > 0
+            ? ((int)settings.OptimalRenderWidth, (int)settings.OptimalRenderHeight)
+            : null;
+    }
+
+    // One frame of Super Resolution, as EvaluateRayReconstruction's.
+    public static string? EvaluateSuperResolution(nint commandBuffer, uint frameIndex, ref Constants constants, ref DLSSOptions options, ResourceTag[] tags)
+    {
+        options.Base = new BaseStructure(DLSSOptionsType, 3);
+        fixed (DLSSOptions* o = &options)
+        {
+            var set = (nint)o;
+            return Evaluate(FeatureDlss, commandBuffer, frameIndex, ref constants, viewport => Failed(srSetOptions(viewport, (DLSSOptions*)set), "slDLSSSetOptions"), tags);
+        }
+    }
+
     // One frame of Ray Reconstruction, recorded into the command buffer: a new frame token for the frame's number,
     // the camera's constants, the options, the images tagged and the feature evaluated. Ok, or the first call that
     // failed and why.
     public static string? EvaluateRayReconstruction(nint commandBuffer, uint frameIndex, ref Constants constants, ref DLSSDOptions options, ResourceTag[] tags)
+    {
+        options.Base = new BaseStructure(DLSSDOptionsType, 3);
+        fixed (DLSSDOptions* o = &options)
+        {
+            var set = (nint)o;
+            return Evaluate(FeatureDlssRR, commandBuffer, frameIndex, ref constants, viewport => Failed(rrSetOptions(viewport, (DLSSDOptions*)set), "slDLSSDSetOptions"), tags);
+        }
+    }
+
+    private delegate string? SetOptions(ViewportHandle* viewport);
+
+    private static string? Failed(int r, string call) => r == 0 ? null : $"{call}: {ResultName(r)}";
+
+    private static string? Evaluate(uint feature, nint commandBuffer, uint frameIndex, ref Constants constants, SetOptions setOptions, ResourceTag[] tags)
     {
         var viewport = new ViewportHandle { Base = new BaseStructure(ViewportHandleType, 1), Value = 0 };
         // With frame generation, the frame's own token (BeginFrame), which its markers and its present carry too.
@@ -307,15 +373,9 @@ internal static unsafe class Streamline
             return $"slSetConstants: {ResultName(r)}";
         }
 
-        options.Base = new BaseStructure(DLSSDOptionsType, 3);
-        fixed (DLSSDOptions* o = &options)
+        if (setOptions(&viewport) is { } refused)
         {
-            r = rrSetOptions(&viewport, o);
-        }
-
-        if (r != 0)
-        {
-            return $"slDLSSDSetOptions: {ResultName(r)}";
+            return refused;
         }
 
         fixed (ResourceTag* t = tags)
@@ -330,7 +390,7 @@ internal static unsafe class Streamline
 
         var inputs = stackalloc BaseStructure*[1];
         inputs[0] = &viewport.Base;
-        r = ((delegate* unmanaged<uint, nint, BaseStructure**, uint, nint, int>)Export("slEvaluateFeature"))(FeatureDlssRR, token, inputs, 1, commandBuffer);
+        r = ((delegate* unmanaged<uint, nint, BaseStructure**, uint, nint, int>)Export("slEvaluateFeature"))(feature, token, inputs, 1, commandBuffer);
         return r == 0 ? null : $"slEvaluateFeature: {ResultName(r)}";
     }
 
@@ -656,7 +716,9 @@ internal static unsafe class Streamline
     private static readonly Guid ConstantsType = new(0xdcd35ad7, 0x4e4a, 0x4bad, 0xa9, 0x0c, 0xe0, 0xc4, 0x9e, 0xb2, 0x3a, 0xfe);
     private static readonly Guid ResourceType = new(0x3a9d70cf, 0x2418, 0x4b72, 0x83, 0x91, 0x13, 0xf8, 0x72, 0x1c, 0x72, 0x61);
     private static readonly Guid ResourceTagType = new(0x4c6a5aad, 0xb445, 0x496c, 0x87, 0xff, 0x1a, 0xf3, 0x84, 0x5b, 0xe6, 0x53);
-    private static readonly Guid DLSSDOptionsType = new(0x0ad87504, 0x774e, 0x4bf3, 0x96, 0x33, 0xa4, 0x4d, 0x1f, 0x7f, 0x9c, 0xb8);
+    private static readonly Guid DLSSOptionsType = new(0x6ac826e4, 0x4c61, 0x4101, 0xa9, 0x2d, 0x63, 0x8d, 0x42, 0x10, 0x57, 0xb8);
+    private static readonly Guid DLSSOptimalSettingsType = new(0xef1d0957, 0xfd58, 0x4df7, 0xb5, 0x04, 0x8b, 0x69, 0xd8, 0xaa, 0x6b, 0x76);
+    private static readonly Guid DLSSDOptionsType =new(0x0ad87504, 0x774e, 0x4bf3, 0x96, 0x33, 0xa4, 0x4d, 0x1f, 0x7f, 0x9c, 0xb8);
     private static readonly Guid DLSSDOptimalSettingsType = new(0xfbd0c637, 0xa28f, 0x41f2, 0xbc, 0x91, 0xb4, 0x21, 0xfa, 0xee, 0x8e, 0x1e);
     private static readonly Guid DLSSGOptionsType = new(0xfac5f1cb, 0x2dfd, 0x4f36, 0xa1, 0xe6, 0x3a, 0x9e, 0x86, 0x52, 0x56, 0xc5);
     private static readonly Guid DLSSGStateType = new(0xcc8ac8e1, 0xa179, 0x44f5, 0x97, 0xfa, 0xe7, 0x41, 0x12, 0xf9, 0xbc, 0x61);
@@ -794,6 +856,45 @@ internal static unsafe class Streamline
         public byte MotionVectorsDilated;
         public byte MotionVectorsJittered;
         public float MinRelativeLinearDepthObjectSeparation;
+    }
+
+    // sl::DLSSOptions (sl_dlss.h, version 3, Streamline 2.10.0): Super Resolution's. The deprecated sharpness kept in
+    // its place; the presets are sl::DLSSPreset (0, DLSS's default).
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DLSSOptions
+    {
+        public BaseStructure Base;
+        public uint Mode;
+        public uint OutputWidth;
+        public uint OutputHeight;
+        public float Sharpness;
+        public float PreExposure;
+        public float ExposureScale;
+        public byte ColorBuffersHDR;
+        public byte IndicatorInvertAxisX;
+        public byte IndicatorInvertAxisY;
+        public uint DlaaPreset;
+        public uint QualityPreset;
+        public uint BalancedPreset;
+        public uint PerformancePreset;
+        public uint UltraPerformancePreset;
+        public uint UltraQualityPreset;
+        public byte UseAutoExposure;
+        public byte AlphaUpscalingEnabled;
+    }
+
+    // sl::DLSSOptimalSettings (sl_dlss.h, version 1): laid out as DLSSDOptimalSettings.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DLSSOptimalSettings
+    {
+        public BaseStructure Base;
+        public uint OptimalRenderWidth;
+        public uint OptimalRenderHeight;
+        public float OptimalSharpness;
+        public uint RenderWidthMin;
+        public uint RenderHeightMin;
+        public uint RenderWidthMax;
+        public uint RenderHeightMax;
     }
 
     // sl::DLSSDOptions (sl_dlss_d.h, version 3).
@@ -1037,6 +1138,13 @@ internal static unsafe class Streamline
             && At(ref o, ref Unsafe.As<System.Numerics.Matrix4x4, byte>(ref o.WorldToCameraView)) == 64
             && At(ref o, ref o.AlphaUpscalingEnabled) == 192 && At(ref o, ref Unsafe.As<uint, byte>(ref o.UltraQualityPreset)) == 216, "Streamline's Ray Reconstruction options are laid out as the SDK's");
         Check(sizeof(DLSSDOptimalSettings) == 64, "Streamline's Ray Reconstruction settings are laid out as the SDK's");
+        // DLSSOptions, from sl_dlss.h 2.10.0: the base (32), three uint32 and three floats to 56, three Booleans (chars)
+        // and their padding to 60, six presets to 84, two Booleans, 88 with the base's 8-byte alignment.
+        var so = default(DLSSOptions);
+        Check(sizeof(DLSSOptions) == 88 && At(ref so, ref Unsafe.As<float, byte>(ref so.PreExposure)) == 48 && At(ref so, ref so.ColorBuffersHDR) == 56
+            && At(ref so, ref Unsafe.As<uint, byte>(ref so.DlaaPreset)) == 60 && At(ref so, ref Unsafe.As<uint, byte>(ref so.UltraQualityPreset)) == 80
+            && At(ref so, ref so.UseAutoExposure) == 84 && At(ref so, ref so.AlphaUpscalingEnabled) == 85, "Streamline's Super Resolution options are laid out as the SDK's");
+        Check(sizeof(DLSSOptimalSettings) == 64, "Streamline's Super Resolution settings are laid out as the SDK's");
         var g = default(DLSSGOptions);
         Check(sizeof(DLSSGOptions) == 120 && At(ref g, ref Unsafe.As<uint, byte>(ref g.Mode)) == 32
             && At(ref g, ref Unsafe.As<uint, byte>(ref g.NumBackBuffers)) == 52 && At(ref g, ref Unsafe.As<uint, byte>(ref g.MvecDepthWidth)) == 56
