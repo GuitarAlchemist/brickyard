@@ -2,19 +2,50 @@
 # on the live Delta. The folder and the version carry git describe, with -dirty and the time for uncommitted work, so
 # that the journal's start event says exactly what runs.
 #
-#   .\dev-deploy.ps1 -PluginData <the folder holding delta.json> [-McpJson <.mcp.json>] [-Triage qwen3:8b]
+#   .\dev-deploy.ps1 -PluginData <the folder holding delta.json> [-McpJson <.mcp.json>] [-Triage qwen3:8b] [-HotReload]
 #
-# -Triage replaces the config's -triage model; without it the config keeps its own. Then reconnect delta in Claude
+# -Triage replaces the config's -triage model; without it the config keeps its own. -HotReload runs Delta's window from
+# this checkout's scene\ under dotnet watch, so that an edit there changes the open window; without it the window is
+# the one built here. Then reconnect delta in Claude
 # Code's /mcp. The new brain records itself in %LOCALAPPDATA%\delta\brain.pid and the brain it replaces stops by
 # itself; a brain built before brain.pid existed does not, and must be stopped by hand.
+#
+# When the config already runs the window from a -scene-source other than the one this deploy would give it (this
+# checkout's scene\ with -HotReload, none without), the deploy stops before building: deploying a brain from another
+# checkout would otherwise move the live window there too, or to the published scene, which has no modules. Deploy from
+# the checkout the window runs from, or pass -MoveWindow to move it.
 param(
     [Parameter(Mandatory = $true)][string]$PluginData,
     [string]$McpJson,
-    [string]$Triage
+    [string]$Triage,
+    [switch]$HotReload,
+    [switch]$MoveWindow,
+    [switch]$GuardOnly # stops after that check, for check-deploy-guard.ps1
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $PluginData = (Resolve-Path $PluginData).Path
+
+if ($McpJson -and -not $MoveWindow) {
+    $before = @((Get-Content (Resolve-Path $McpJson).Path -Raw | ConvertFrom-Json).mcpServers.delta.args)
+    $runs = '' # Go's flag package takes -scene-source X, --scene-source X and both with =X
+    for ($i = 0; $i -lt $before.Count; $i++) {
+        if ($before[$i] -match '^--?scene-source=(.+)$') { $runs = $Matches[1] }
+        elseif ($before[$i] -match '^--?scene-source$' -and $i + 1 -lt $before.Count) { $runs = $before[$i + 1] }
+    }
+    $would = if ($HotReload) { Join-Path $root 'scene' } else { '' }
+    $same = ($runs -eq '' -and $would -eq '') -or ($runs -ne '' -and $would -ne '' -and
+        [IO.Path]::GetFullPath($runs).TrimEnd('\') -ieq [IO.Path]::GetFullPath($would).TrimEnd('\'))
+    if (-not $same) {
+        $from = if ($runs) { $runs } else { 'the published scene' }
+        $to = if ($would) { $would } else { 'the published scene, without modules' }
+        throw "the live window runs from $from; this deploy would move it to $to. Deploy from that checkout, or pass -MoveWindow"
+    }
+}
+if ($GuardOnly) {
+    'DEPLOY GUARD ok: the window stays where it runs'
+    return
+}
 
 $describe = (& git -C $root describe --tags --always --dirty).Trim()
 if ($describe -like '*-dirty') { $describe += '-' + (Get-Date -Format 'HHmmss') }
@@ -59,6 +90,18 @@ if ($Triage) {
     $kept.Add($Triage)
     $server.args = $kept.ToArray()
 }
+$kept = New-Object System.Collections.Generic.List[string]
+$old = @($server.args)
+for ($i = 0; $i -lt $old.Count; $i++) {
+    if ($old[$i] -match '^--?scene-source$') { $i++; continue } # its value follows it
+    if ($old[$i] -match '^--?scene-source=') { continue }
+    $kept.Add($old[$i])
+}
+if ($HotReload) {
+    $kept.Add('-scene-source')
+    $kept.Add((Join-Path $root 'scene'))
+}
+$server.args = $kept.ToArray()
 $json = $config | ConvertTo-Json -Depth 10
 [IO.File]::WriteAllText($path, $json + "`n", (New-Object Text.UTF8Encoding $false))
 Write-Host "Pointed $McpJson at it. Next: reconnect delta in Claude Code's /mcp."

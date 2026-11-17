@@ -127,6 +127,22 @@ func (s *sentences) flush() string {
 	return ""
 }
 
+// breathFirst cuts a long first part at its first comma with at least 30 characters before it and 20 after, so that
+// its sound, which waits for the whole part to be synthesised, starts sooner; the other parts stay as they are.
+func breathFirst(parts []string) []string {
+	if len(parts) == 0 || len([]rune(parts[0])) <= 80 {
+		return parts
+	}
+	first := []rune(parts[0])
+	for i := 30; i < len(first)-20; i++ {
+		if first[i-1] == ',' && first[i] == ' ' {
+			head, tail := strings.TrimSpace(string(first[:i])), strings.TrimSpace(string(first[i:]))
+			return append([]string{head, tail}, parts[1:]...)
+		}
+	}
+	return parts
+}
+
 // endsSentence: the text ends with a sentence mark and a space, and is long enough to be worth a breath.
 func endsSentence(t string) bool {
 	t = strings.TrimRight(t, " ")

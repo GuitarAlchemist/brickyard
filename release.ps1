@@ -1,7 +1,7 @@
 # Builds Delta for Windows x64 and packs dist\delta-<version>-win-x64.zip: the brain, the scene (self-contained, so
 # that no .NET install is needed), the launcher, and the licence and notice texts the binaries come with
 # (THIRD_PARTY.md). Needs the .NET 10 SDK and Go.
-param([string]$Version = '0.6.0')
+param([string]$Version = '0.7.1')
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $name = "delta-$Version-win-x64"
@@ -27,14 +27,26 @@ try {
     Pop-Location
 }
 
+# The scene loads the agents' office and the Pong screen from modules\ beside it, when their images are there; without
+# them the window has neither. Gaia's module is left out: it has a validation of its own.
+foreach ($module in @(
+        @{ Project = 'modules\AgentOffice\AgentOffice.Module.csproj'; Dir = 'office'; Image = 'AgentOffice.Module.dll' },
+        @{ Project = 'modules\ArcadePongModule\ArcadePong.Module.csproj'; Dir = 'arcade'; Image = 'ArcadePong.Module.dll' })) {
+    $to = Join-Path $out "scene\modules\$($module.Dir)"
+    dotnet build (Join-Path $root $module.Project) -c Release -p:DebugType=none -o $to -nologo
+    if ($LASTEXITCODE -ne 0) { throw "$($module.Project) failed to build" }
+    if (-not (Test-Path (Join-Path $to $module.Image))) { throw "$($module.Image) is not in $to" }
+}
+
 Copy-Item (Join-Path $root 'README.md'), (Join-Path $root 'THIRD_PARTY.md'), (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE.txt'), (Join-Path $root 'start-delta.ps1') $out
 New-Item -ItemType Directory -Force (Join-Path $out 'docs') | Out-Null
 Copy-Item (Join-Path $root 'docs\delta.png') (Join-Path $out 'docs')
 
-# Each licence or notice text once, from every package the scene was built from, the .NET runtime pack and Go.
+# Each licence or notice text once, from every package the scene was built from, the .NET runtime pack and Go. A
+# project of this repository in the lock (Delta.SceneModules.Contracts) is no package: LICENSE covers it.
 $packages = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $env:USERPROFILE '.nuget\packages' }
 $lock = (Get-Content (Join-Path $root 'scene\packages.lock.json') -Raw | ConvertFrom-Json).dependencies.'net10.0'
-$sources = @($lock.PSObject.Properties | ForEach-Object { @{ Id = $_.Name; Version = $_.Value.resolved } })
+$sources = @($lock.PSObject.Properties | Where-Object { $_.Value.type -ne 'Project' } | ForEach-Object { @{ Id = $_.Name; Version = $_.Value.resolved } })
 $runtime = (Get-Content (Join-Path $out 'scene\scene.runtimeconfig.json') -Raw | ConvertFrom-Json).runtimeOptions.includedFrameworks[0].version
 $sources += @{ Id = 'Microsoft.NETCore.App.Runtime.win-x64'; Version = $runtime }
 $seen = @{}
@@ -42,6 +54,9 @@ $index = @()
 foreach ($source in $sources) {
     $dir = Join-Path $packages ('{0}\{1}' -f $source.Id.ToLowerInvariant(), $source.Version)
     $texts = @(Get-ChildItem $dir -Recurse -File | Where-Object { $_.Name -match 'licen|notice|copying' -and $_.Extension -match '^(\.txt|\.md|)$' })
+    # A package that names its licence only by expression (Jint, Acornima): its text from its repository, kept here.
+    $kept = Join-Path $root "LICENSES\$($source.Id)"
+    if ($texts.Count -eq 0 -and (Test-Path $kept)) { $texts = @(Get-ChildItem $kept -File) }
     if ($texts.Count -eq 0) { throw "$($source.Id) $($source.Version) has no licence file in $dir" }
     foreach ($text in $texts) {
         $hash = (Get-FileHash $text.FullName).Hash

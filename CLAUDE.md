@@ -4,10 +4,12 @@ Delta, a voice for Claude Code on Windows: a Go brain (`brain/`), a BRUTAL scene
 (`plugins/delta/`).
 
 - **Check:** `.\check.ps1` runs what CI runs (the plugin and scripts, `gofmt`, `go vet`, `go test`, the scene's build and
-  selftest). `.githooks/pre-commit` runs the parts a commit touches, once `git config core.hooksPath .githooks` is set.
+  selftest, the widget and office tests of `check-widgets.ps1`). `.githooks/pre-commit` runs the parts a commit
+  touches, once `git config core.hooksPath .githooks` is set.
 - **Release:** bump `plugins/delta/.claude-plugin/plugin.json` (its version and the `delta-<version>` path),
   `release.ps1`'s default, and write `docs/releases/<version>.md`; `check-plugin.ps1` fails until all three agree. Push
   `main`, then the tag `v<version>`: `release.yml` builds and publishes the zip that `setup.ps1` downloads.
-- **Try a build on the live Delta:** `dev-deploy.ps1`, then reconnect delta in `/mcp`.
+- **Try a build on the live Delta:** `dev-deploy.ps1`, then reconnect delta in `/mcp`. A change to the scene or a
+  scene module alone, on a window run under `dotnet watch`: NOTES.md, « Updating the live window, scene only ».
 - **Receipts:** `NOTES.md` has a dated section per change, with what was measured and what is still to verify.
 - Machine-specific pointers, if any, are in `CLAUDE.local.md`, which git ignores.

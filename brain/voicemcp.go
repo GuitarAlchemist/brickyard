@@ -21,6 +21,7 @@ type mcpConfig struct {
 	whisperFallback                           string // the whisper-server to run when whisper cannot, if any
 	lang                                      string // what Delta hears and speaks: "en" or "fr" (lang.go)
 	scene                                     string // the scene's address
+	sceneSource                               string // the scene's project folder, to run it under dotnet watch, if any
 	journal                                   string // where to record what Delta heard and said, if anywhere
 	ollama, triage                            string // Ollama's address, and the model that sorts what Delta hears, if any
 	hooks                                     string // where Claude Code's hooks post, if anywhere (hooks.go)
@@ -64,14 +65,15 @@ func runMCP(c mcpConfig) {
 	os.Stdout = os.Stderr // stdout carries JSON-RPC and nothing else
 	logf := func(format string, args ...any) { fmt.Fprintf(os.Stderr, "delta: "+format+"\n", args...) }
 	homePaths(&c)
-	lang, err := languageOf(c.lang)
+	langs, err := languagesOf(c.lang)
 	if err != nil {
 		logf("%v", err)
 	}
+	lang := langs[0]
 
 	var hearing sync.Mutex
 	notHearing := errors.New("Delta is still starting: its ears (whisper.cpp) are loading. Try again in a few seconds.")
-	m := &mcpServer{version: version, lang: lang, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
+	m := &mcpServer{version: version, lang: lang, langs: langs, out: rpc, listenMin: 5 * time.Second, listenMax: 300 * time.Second}
 	m.gate.window = 30 * time.Second // as the user asked: a conversation lives 30 s after its last sentence
 	m.gate.follow = 30 * time.Second
 	m.gate.off = c.wakeOff
@@ -146,14 +148,70 @@ func runMCP(c mcpConfig) {
 	}
 
 	s := startScene(c, logf)
-	s.greet(map[string]any{"language": lang.code}) // the shelf's labels (Words.cs)
-	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code}
+	var muted atomic.Bool    // the user turned the computer's microphone off from the window
+	var devices atomic.Int64 // how many devices listen to Delta through the phone gateway (remote.go)
+	var gaia atomic.Value    // how the bridge to Gaia stands (ask.go)
+	gaia.Store("offline")
+	greet := func() { // what a window must know whatever it missed: its words (Words.cs), its two buttons, the phone, the version and Gaia
+		s.greet(map[string]any{"language": settingOf(m.languages()), "mic": !muted.Load(), "devices": devices.Load(), "version": version, "gaia": gaia.Load()})
+	}
+	greet()
+	mo := &mouth{s: s, gate: &m.gate, mute: c.mute, queue: make(chan said, 32), record: m.note, lang: lang.code, langOf: m.spokenIn}
+	mo.voiceIn = otherVoices(c, lang.code, logf, m.note)
+	m.relanguage = func(ls []language, by string) { // the window's button, a sentence asking it aloud, or Claude's tool
+		m.speakIn(ls)
+		greet()
+		s.send(map[string]any{"language": settingOf(ls)})
+		if err := saveLanguage(c.home, settingOf(ls)); err != nil {
+			logf("delta.json: %v", err)
+		}
+		m.note("language", map[string]any{"language": settingOf(ls), "by": by})
+		for _, l := range ls { // loads the other voice now rather than at its first sentence
+			go mo.voiceIn(l.code)
+		}
+	}
+	// The window's Inviter button, once the gateway's secret is known (below).
+	var invite func()
+	var guestMic func(on bool)             // the window's guest badge, likewise
+	var pairNew func()                     // the window's pairing card, opened with no code alive, likewise
+	s.asked = func(event map[string]any) { // the window's language, microphone and Inviter buttons
+		if asked, ok := event["invite"].(bool); ok && asked && invite != nil {
+			go invite()
+			return
+		}
+		if asked, ok := event["pair"].(bool); ok && asked && pairNew != nil {
+			go pairNew()
+			return
+		}
+		if on, ok := event["guests_mic"].(bool); ok && guestMic != nil {
+			go guestMic(on)
+			return
+		}
+		if on, ok := event["mic"].(bool); ok {
+			muted.Store(!on)
+			greet()
+			s.send(map[string]any{"mic": on})
+			m.note("mic", map[string]any{"on": on, "by": "window"})
+			return
+		}
+		setting, ok := event["language"].(string)
+		if !ok {
+			return
+		}
+		ls, err := languagesOf(setting)
+		if err != nil {
+			logf("the window asked for %q: %v", setting, err)
+			return
+		}
+		m.relanguage(ls, "window")
+	}
 	if fx, err := effect(c.fx); err != nil {
 		logf("%v; Delta speaks without an effect", err)
 	} else {
 		mo.fx = fx
 	}
 	m.speak = mo.speak
+	m.holdMax = 2 * time.Second // a phone's copy came 0.2 to 0.5 s from the headset's, live
 	m.ack, m.quiet = mo.ack, mo.quiet
 	if !c.noScene && c.scene != "" { // Delta moves its window, walks its shelf and changes its face (window.go)
 		m.tell = s.send
@@ -187,7 +245,7 @@ func runMCP(c mcpConfig) {
 	h.gesture = func(g gesture) { m.gesture(g, time.Now()) }
 
 	// Another device speaks to Delta and hears it through a gateway on this computer, such as IX's (remote.go).
-	rm := &remote{route: func(u utterance) (int, string) {
+	rm := &remote{inEars: func(delta int) { m.earsHear("remote", delta) }, route: func(u utterance) (int, string) {
 		id, where := m.heardAs(u, time.Now())
 		logf("heard %q from another device in %d ms: %s", u.text, u.asr.Milliseconds(), where)
 		if where == "ignored" || where == "dropped" || where == "local" {
@@ -212,15 +270,83 @@ func runMCP(c mcpConfig) {
 		rm.secret = secret
 		logf("remote: a gateway's secret is in %s", path)
 	}
+	var watching atomic.Int64
+	var guestsHear atomic.Bool
+	rm.watch = func(guests int, hear bool) { // the window's badge clears itself 60 s after the last post (Link.GuestsSeconds)
+		s.send(map[string]any{"guests": guests, "guests_hear": hear})
+		if watching.Swap(int64(guests)) != int64(guests) || guestsHear.Swap(hear) != hear {
+			m.note("guests", map[string]any{"watching": guests, "hear": hear})
+		}
+	}
+	guestMic = func(on bool) { // the gateway says the new state in its next /guests
+		if err := rm.guestMic(gatewayGuestMic, on); err != nil {
+			logf("guests' microphone: %v", err)
+			return
+		}
+		logf("guests' microphone: on %v, as the window asked", on)
+	}
+	var pairing lastPairing // a window started later still shows the code while it lives
+	s.recall = func() map[string]any { return pairing.line(time.Now()) }
 	rm.pair = func(rows []string) { // the journal says that a link came, never which
+		pairing.set(rows, time.Now())
 		s.send(map[string]any{"pairing": map[string]any{"rows": rows, "seconds": pairingSeconds}})
 		m.note("pairing", map[string]any{"seconds": pairingSeconds})
 		logf("remote: a pairing link came; Delta's window shows its QR code behind the phone icon")
+	}
+	pairNew = func() { // the code comes through /link, as at the gateway's start (rm.pair)
+		err := rm.pairNew(gatewayPairNew, time.Now())
+		if errors.Is(err, errPairSoon) {
+			return
+		}
+		if err != nil {
+			logf("pairing: %v", err)
+			m.note("pairing", map[string]any{"asked": true, "refused": err.Error()})
+			return
+		}
+		logf("pairing: the window asked the phone gateway for a new code")
+		m.note("pairing", map[string]any{"asked": true})
+	}
+	invite = func() { // the journal says that an invitation came and until when, never its link
+		link, until, err := rm.invite(gatewayInvite)
+		var rows []string
+		if err == nil {
+			rows, err = qrEncode(link)
+		}
+		if err != nil {
+			logf("invitation: %v", err)
+			s.send(map[string]any{"invitation": map[string]any{"refused": invitationRefused(err)}})
+			m.note("invitation", map[string]any{"refused": invitationRefused(err)})
+			return
+		}
+		copied := copyText(link) == nil
+		s.send(map[string]any{"invitation": map[string]any{"rows": rows, "seconds": max(1, time.Until(until).Seconds()), "copied": copied}})
+		m.note("invitation", map[string]any{"until": until.Local().Format("15:04"), "copied": copied})
+		logf("invitation: until %s; Delta's window shows its QR code", until.Local().Format("15:04"))
+	}
+	rm.listen = func(n int) { // the phone icon's screen lights while a device listens
+		if devices.Swap(int64(n)) != int64(n) {
+			greet()
+			s.send(map[string]any{"devices": n})
+			m.note("devices", map[string]any{"listening": n})
+		}
 	}
 	h.remote = rm
 	mo.onClip = rm.publish
 	mo.aloud = rm.aloud
 	m.attribute = rm.attribute
+	rm.asks = newAsks() // Delta's requests to Gaia, and their answers, said as the say tool says them
+	rm.asks.note = m.note
+	rm.asks.say = func(text, by, mood, requestID string) (int, error) {
+		id, _, err := m.sayAs(text, "", mood, "", by, map[string]any{"request_id": requestID})
+		return id, err
+	}
+	m.followSay = rm.asks.said
+	rm.asks.shown = func(bridge string) {
+		gaia.Store(bridge)
+		greet()
+		s.send(map[string]any{"gaia": bridge})
+		m.note("gaia", map[string]any{"bridge": bridge})
+	}
 	if c.hooks != "" {
 		go h.serve(c.hooks)
 	}
@@ -259,6 +385,7 @@ func runMCP(c mcpConfig) {
 		e, err := startEars(servers, c.whisperModel, lang.code, freePort(), c.threads, "Delta, Brickyard, Claude Code, IX, Gaia.", c.audioCtx)
 		if err == nil {
 			m.hearsOn = e.where
+			e.languages = func() []string { return codesOf(m.languages()) }
 		}
 		hearing.Lock()
 		if err != nil {
@@ -269,23 +396,23 @@ func runMCP(c mcpConfig) {
 		}
 		notHearing = nil
 		hearing.Unlock()
-		logf("ears ready on %s with %s", e.url, e.server)
-		ready := map[string]any{"server": e.server}
-		if len(e.failed) > 0 { // the journal tells which server hears, and why the first did not
-			ready["failed"] = strings.Join(e.failed, "; ")
-		}
+		line, ready := earsReady(e)
+		logf("%s", line)
 		m.note("ears", ready)
 		e.fell = func(server, why string) {
-			logf("ears: %s; %s hears now", why, server)
-			m.note("ears", map[string]any{"server": server, "failed": why})
+			line, note := earsFell(server, why)
+			logf("%s", line)
+			m.note("ears", note)
 		}
-		rm.hearWith(e.hear)
+		rm.hearWith(e.hearIn)
 		heard := make(chan utterance)
-		go listen(e, s, &mo.busy, heard, false)
+		go listen(e, s, &mo.busy, &muted, func(delta int) { m.earsHear("", delta) }, heard, false)
 		for u := range heard {
 			where := "nothing"
 			if u.text != "" {
 				where = m.hear(u, time.Now())
+			} else {
+				m.earsHear("", -1)
 			}
 			logf("heard %q in %d ms: %s", u.text, u.asr.Milliseconds(), where)
 			if where == "nothing" || where == "ignored" || where == "dropped" || where == "local" {
@@ -332,7 +459,8 @@ func homePaths(c *mcpConfig) {
 	if c.lang == "" {
 		c.lang = saved.Language
 	}
-	lang, _ := languageOf(c.lang) // runMCP reports an unknown language
+	langs, _ := languagesOf(c.lang) // runMCP reports an unknown language
+	lang := langs[0]
 	pick(&c.piper, saved.Piper, "piper", "piper.exe")
 	pick(&c.voice, saved.Voice, "voices", lang.voice)
 	pick(&c.whisper, saved.Whisper, "whisper", "whisper-server.exe")
@@ -364,8 +492,22 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	if dir, err := os.UserCacheDir(); err == nil { // the window's own marker (scene/Program.cs Closed)
 		s.closed = filepath.Join(dir, "delta", "scene-"+port+".closed")
 	}
+	var watched atomic.Bool              // dotnet watch runs on: it builds the window for a while, and restarts it after an edit itself
+	var watch atomic.Pointer[os.Process] // the dotnet watch that runs
+	var rewatch atomic.Bool              // set when the brain stops it, for its end to start it again
 	s.launch = func() {
 		cmd := exec.Command(path, "--listen", port)
+		if c.sceneSource != "" { // an edit to the source changes the open window, from its next call of the edited method on
+			if !watched.CompareAndSwap(false, true) {
+				// dotnet watch outlives a window that crashed, waiting for an edit: stop it, and its end starts it again
+				if p := watch.Load(); p != nil && c.home != "" && waitsForEdit(filepath.Join(c.home, "scene.log")) && !rewatch.Swap(true) {
+					stopTree(p)
+				}
+				return
+			}
+			cmd = exec.Command("dotnet", "watch", "run", "--project", c.sceneSource, "--non-interactive", "-r", "win-x64", "--", "--listen", port)
+			cmd.Dir = c.sceneSource // dotnet picks its SDK by the global.json above the folder it runs in, not above the project
+		}
 		hideConsole(cmd)
 		var log *os.File
 		if c.home != "" {
@@ -378,9 +520,13 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 		}
 		if err := cmd.Start(); err != nil {
 			logf("scene: %v", err)
+			watched.Store(false)
 			return
 		}
 		killWithMe(cmd.Process)
+		if c.sceneSource != "" {
+			watch.Store(cmd.Process)
+		}
 		logf("scene started on %s", c.scene)
 		go func() {
 			err := cmd.Wait()
@@ -388,6 +534,12 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 				log.Close()
 			}
 			logf("scene exited: %v", err) // nil when the user closed it
+			watched.Store(false)
+			if rewatch.Swap(false) {
+				logf("scene: dotnet watch waited on a window that exited; starting them again")
+				s.launch()
+				return
+			}
 			s.exited(err != nil)
 		}()
 	}
@@ -400,6 +552,21 @@ func startScene(c mcpConfig, logf func(string, ...any)) *scene {
 	s.launched = time.Now()
 	s.launch()
 	return s
+}
+
+// earsReady is stderr's line and the journal's ears note once Delta hears: which server hears, and why the ones
+// before it did not.
+func earsReady(e *ears) (line string, note map[string]any) {
+	note = map[string]any{"server": e.server}
+	if len(e.failed) > 0 {
+		note["failed"] = strings.Join(e.failed, "; ")
+	}
+	return fmt.Sprintf("ears ready on %s with %s", e.addr, e.server), note
+}
+
+// earsFell is stderr's line and the journal's ears note when another server takes over.
+func earsFell(server, why string) (line string, note map[string]any) {
+	return fmt.Sprintf("ears: %s; %s hears now", why, server), map[string]any{"server": server, "failed": why}
 }
 
 // freePort is a loopback port nothing listens on, so that whisper-server never collides with another.
@@ -416,16 +583,18 @@ func freePort() int {
 // the one before plays. The microphone is deaf while Delta speaks and for 300 ms after, so that Delta never hears
 // itself.
 type mouth struct {
-	s      *scene
-	gate   *wakeGate
-	mute   bool
-	queue  chan said
-	record func(event string, fields map[string]any)
-	fx     func(rate int) *warm                           // a fresh effect for each say call, or nil for Piper's own voice
-	lang   string                                         // the code of the language Delta speaks, for speakable
-	onClip func(say int, text string, w wav, path string) // each sentence as it starts, for remote.go, or nil
-	aloud  func(say int) bool                             // whether the computer plays a say call (remote.go), or nil
-	busy   atomic.Bool                                    // the microphone's: deaf while Delta speaks or while a transcript is routed
+	s       *scene
+	gate    *wakeGate
+	mute    bool
+	queue   chan said
+	record  func(event string, fields map[string]any)
+	fx      func(rate int) *warm                           // a fresh effect for each say call, or nil for Piper's own voice
+	lang    string                                         // the code of Delta's own language, for speakable
+	langOf  func(say int) string                           // the code of the language a say call speaks, or nil for lang
+	voiceIn func(code string) *voice                       // the voice of another language than the first voice's, or nil
+	onClip  func(say int, text string, w wav, path string) // each sentence as it starts, for remote.go, or nil
+	aloud   func(say int) bool                             // whether the computer plays a say call (remote.go), or nil
+	busy    atomic.Bool                                    // the microphone's: deaf while Delta speaks or while a transcript is routed
 
 	mu      sync.Mutex
 	pending int // say calls not yet spoken to the end
@@ -510,6 +679,7 @@ func (mo *mouth) run(v *voice) {
 			if rest := cut.flush(); rest != "" {
 				parts = append(parts, rest)
 			}
+			parts = breathFirst(parts) // the first sound comes sooner
 			mo.mu.Lock()
 			mo.pending++
 			mo.busy.Store(true)
@@ -517,8 +687,17 @@ func (mo *mouth) run(v *voice) {
 			if len(parts) == 0 {
 				clips <- clip{say: s.id, cost: s.cost, mood: s.mood, first: true, last: true}
 			}
+			code, speaker := mo.lang, v
+			if mo.langOf != nil {
+				code = mo.langOf(s.id)
+			}
+			if mo.voiceIn != nil {
+				if other := mo.voiceIn(code); other != nil {
+					speaker = other
+				}
+			}
 			for i, part := range parts {
-				path, err := v.say(speakable(part, mo.lang))
+				path, err := speaker.say(speakable(part, code))
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "delta: voice:", err)
 					path = ""
@@ -552,7 +731,8 @@ func (mo *mouth) run(v *voice) {
 				}
 			}
 			if err == nil {
-				line := map[string]any{"state": "speaking", "seconds": w.seconds, "envelope": w.envelope, "cost": c.cost}
+				line := map[string]any{"state": "speaking", "seconds": w.seconds, "envelope": w.envelope, "cost": c.cost,
+					"heard": map[string]any{"text": shorten(c.text, 400), "to": "said"}} // the caption shows each sentence as Delta says it
 				if mood != "" {
 					line["mood"], mood = mood, ""
 				}
@@ -637,4 +817,57 @@ func (mo *mouth) spokeSince(t time.Time) bool {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
 	return mo.pending > 0 || mo.spoke.After(t)
+}
+
+// otherVoices returns the voice of a language other than first, the language of the voice Delta starts with, started
+// at its first sentence from the Piper voice setup.ps1 installs for it beside the first. It returns nil for first, and
+// for a language whose voice is missing, which Delta then says with its first voice, as the journal tells once.
+func otherVoices(c mcpConfig, first string, logf func(string, ...any), note func(string, map[string]any)) func(code string) *voice {
+	var mu sync.Mutex
+	voices := map[string]*voice{}
+	return func(code string) *voice {
+		mu.Lock()
+		defer mu.Unlock()
+		if v, tried := voices[code]; tried || code == first {
+			return v
+		}
+		voices[code] = nil
+		l, known := languages[code]
+		if !known {
+			return nil
+		}
+		model := filepath.Join(filepath.Dir(c.voice), l.voice)
+		dir, err := os.MkdirTemp("", "delta-voice-")
+		var v *voice
+		if _, err = os.Stat(model); err == nil {
+			if v, err = startVoice(c.piper, model, dir, "--sentence_silence", "0.1"); err == nil {
+				_, err = v.say(l.hello) // loads the voice model
+			}
+		}
+		if err != nil {
+			logf("voice for %s: %v; Delta says it with its first voice", code, err)
+			note("voice", map[string]any{"lang": code, "missing": filepath.Base(model)})
+			return nil
+		}
+		voices[code] = v
+		return v
+	}
+}
+
+// saveLanguage writes the language setting into home's delta.json, keeping the rest as it is, so that the next brain
+// hears and speaks as the window last asked.
+func saveLanguage(home, setting string) error {
+	path := filepath.Join(home, "delta.json")
+	saved := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &saved); err != nil {
+			return err
+		}
+	}
+	saved["language"] = setting
+	data, err := json.MarshalIndent(saved, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }

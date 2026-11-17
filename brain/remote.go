@@ -27,6 +27,10 @@ import (
 //	POST /hear  a 16 kHz mono 16-bit WAV of at most 30 s; 202 {"utterance_id","text","route"}, 503 until Delta hears
 //	GET  /said  server-sent events, one per sentence as it starts playing: {"say_id","text","seconds","t_ms","wav_b64"}
 //	POST /link  {"url"}, the https link of at most 106 bytes that a phone opens to pair with the gateway; 204
+//	POST /guests {"watching","mic"}, how many guests the gateway lets watch the window from afar, 0 to 99, and whether
+//	            they hear the room, at each change and every 30 s while any watch; 204. The window says so until 60 s
+//	            after the last post.
+//	POST /ask, GET /asks, POST /answer  Delta's requests to another assistant and their answers (ask.go)
 //
 // A sentence from /hear is routed as one addressed to Delta, since holding the device's button addressed it. Its heard
 // line and channel event carry source "remote". A chime tells the room when Delta says nothing back at once, nor is
@@ -51,29 +55,35 @@ type remote struct {
 	route  func(u utterance) (id int, route string) // routes a transcript as hear does
 	chime  func()                                   // tells the room a sentence came from another device
 	pair   func(rows []string)                      // shows a pairing link's QR code, one string of 0 and 1 per row
+	watch  func(guests int, hear bool)              // shows how many guests watch the window from afar, and whether they hear the room, or nil
+	inEars func(delta int)                          // told +1 as a sentence is transcribed, -1 if it is not routed, or nil
+	listen func(devices int)                        // told how many devices play their answers from /said at each change, or nil
+	asks   *asks                                    // Delta's requests to other assistants, or nil (ask.go)
 
 	mu         sync.Mutex
-	transcribe func(samples []float32) (string, error) // nil until Delta's ears are ready
-	subs       map[chan []byte]bool                    // the devices listening to /said: whether each plays its answers
-	answers    map[int]replyTo                         // whom each sentence about to be said answers, by say_id
-	heard      map[int]bool                            // the utterances that came through /hear, the last 64
+	transcribe func(samples []float32) (text, lang string, err error) // nil until Delta's ears are ready
+	subs       map[chan []byte]bool                                   // the devices listening to /said: whether each plays its answers
+	answers    map[int]replyTo                                        // whom each sentence about to be said answers, by say_id
+	heard      map[int]bool                                           // the utterances that came through /hear, the last 64
+	pairAsked  time.Time                                              // when the window last asked the gateway for a new pairing code
 }
 
-// replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, and by, who wrote it
-// (claude, local or ack).
-type replyTo struct{ utterance, by string }
+// replyTo is whom a sentence answers, as its say note gives it: the utterance_id, "" for none, by, who wrote it
+// (claude, local, ack, or an assistant Delta asked), and the request_id of the request it answers, "" for none.
+type replyTo struct{ utterance, by, request string }
 
 // attribute keeps whom a say call answers, from its say note (mcp.go), for publish to send with each of its sentences.
 func (r *remote) attribute(say map[string]any) {
 	id, _ := say["say_id"].(int)
 	utterance, _ := say["utterance_id"].(string)
 	by, _ := say["by"].(string)
+	request, _ := say["request_id"].(string)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.answers == nil {
 		r.answers = map[int]replyTo{}
 	}
-	r.answers[id] = replyTo{utterance, by}
+	r.answers[id] = replyTo{utterance, by, request}
 	for old := range r.answers {
 		if old <= id-64 { // said long ago, or never, such as an acknowledgement the mouth dropped
 			delete(r.answers, old)
@@ -82,16 +92,21 @@ func (r *remote) attribute(say map[string]any) {
 }
 
 // hearWith gives /hear Delta's ears, once whisper-server is ready.
-func (r *remote) hearWith(transcribe func(samples []float32) (string, error)) {
+func (r *remote) hearWith(transcribe func(samples []float32) (text, lang string, err error)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.transcribe = transcribe
 }
 
-func (r *remote) handle(mux *http.ServeMux) {
+// handle registers the gateway's paths on mux, and Delta's requests' when it keeps them.
+func (r *remote) handle(mux router) {
 	mux.HandleFunc("/hear", r.hear)
 	mux.HandleFunc("/said", r.said)
 	mux.HandleFunc("/link", r.link)
+	mux.HandleFunc("/guests", r.guests)
+	if r.asks != nil {
+		r.asks.handle(mux, r.allowed)
+	}
 }
 
 // allowed answers 403 unless the request has the method, the hooks' header and the secret.
@@ -131,14 +146,26 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	start := time.Now()
-	text, err := transcribe(sound.samples)
-	if err != nil {
-		http.Error(w, "transcription: "+err.Error(), http.StatusBadGateway)
-		return
+	inEars := func(delta int) {
+		if r.inEars != nil {
+			r.inEars(delta)
+		}
 	}
-	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote"}
+	inEars(1) // a copy the headset heard waits for this one (twice.go)
+	text, lang := "", ""
+	if voiced(sound.samples) >= minVoiced { // Whisper invents words over silence, such as a page whose sound was off sends
+		if text, lang, err = transcribe(sound.samples); err != nil {
+			inEars(-1)
+			http.Error(w, "transcription: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+	u := utterance{text: strings.TrimSpace(text), ended: start, asr: time.Since(start), source: "remote", lang: lang,
+		level: voicedLevel(sound.samples)}
 	id, where := 0, "nothing"
-	if u.text != "" {
+	if u.text == "" {
+		inEars(-1)
+	} else {
 		id, where = r.route(u)
 		if r.chime != nil && where != "channel" && where != "local" && where != "duplicate" {
 			r.chime()
@@ -165,6 +192,21 @@ func (r *remote) hear(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(answer)
 }
 
+// listening tells listen how many devices listen now, such as the user's phone: those that play their own answers,
+// and not the gateway's guest pages, which do not say so. The caller holds mu, so that two changes are told in order.
+func (r *remote) listening() {
+	if r.listen == nil {
+		return
+	}
+	n := 0
+	for _, own := range r.subs {
+		if own {
+			n++
+		}
+	}
+	r.listen(n)
+}
+
 func (r *remote) said(w http.ResponseWriter, req *http.Request) {
 	if !r.allowed(w, req, http.MethodGet) {
 		return
@@ -184,10 +226,12 @@ func (r *remote) said(w http.ResponseWriter, req *http.Request) {
 		r.subs = map[chan []byte]bool{}
 	}
 	r.subs[ch] = req.Header.Get(playsHeader) == "own"
+	r.listening()
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
 		delete(r.subs, ch)
+		r.listening()
 		r.mu.Unlock()
 	}()
 	alive := time.NewTicker(15 * time.Second)
@@ -237,6 +281,26 @@ func (r *remote) link(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// guests takes how many guests the gateway lets watch the window from afar, and whether they hear the room through
+// its microphone, so that nobody is seen or heard without knowing it.
+func (r *remote) guests(w http.ResponseWriter, req *http.Request) {
+	if !r.allowed(w, req, http.MethodPost) {
+		return
+	}
+	var body struct {
+		Watching *int `json:"watching"`
+		Mic      bool `json:"mic"`
+	}
+	if err := json.NewDecoder(io.LimitReader(req.Body, 4096)).Decode(&body); err != nil || body.Watching == nil || *body.Watching < 0 || *body.Watching > 99 {
+		http.Error(w, `{"watching"}, from 0 to 99, and "mic", please`, http.StatusBadRequest)
+		return
+	}
+	if r.watch != nil {
+		r.watch(*body.Watching, body.Mic)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // aloud says whether the computer plays a say call: not when it answers a sentence from another device while a device
 // listening to /said plays the answers to its own sentences, since the two would echo a moment apart. A device that
 // does not say so, such as a gateway whose page plays only after a tap, leaves every answer to the computer.
@@ -275,8 +339,12 @@ func (r *remote) publish(sayID int, text string, sound wav, path string) {
 	if err != nil {
 		return
 	}
-	event, _ := json.Marshal(map[string]any{"say_id": sayID, "utterance_id": a.utterance, "by": a.by, "text": text,
-		"seconds": sound.seconds, "t_ms": time.Now().UnixMilli(), "wav_b64": base64.StdEncoding.EncodeToString(data)})
+	fields := map[string]any{"say_id": sayID, "utterance_id": a.utterance, "by": a.by, "text": text,
+		"seconds": sound.seconds, "t_ms": time.Now().UnixMilli(), "wav_b64": base64.StdEncoding.EncodeToString(data)}
+	if a.request != "" {
+		fields["request_id"] = a.request
+	}
+	event, _ := json.Marshal(fields)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for ch := range r.subs {

@@ -1,0 +1,9 @@
+{
+  "note": "Delta's illustrative pose: wings opened about the back, the body's sides apart. IX checks the flat fold only.",
+  "ridge": [15, 9],
+  "parts": [
+    {"name": "wing", "faces": [0, 2, 3], "to": 80},
+    {"name": "wing", "faces": [1, 6, 7, 47, 48, 49, 50], "to": 80},
+    {"name": "body", "faces": [4, 5, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46], "to": 160, "spread": true}
+  ]
+}

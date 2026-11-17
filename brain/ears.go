@@ -2,15 +2,21 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,16 +36,18 @@ const earsPatience = 30 * time.Second
 // ggml-large-v3-turbo-q5_0), used as they are. Given several servers, such as a GPU build and then the CPU build, the
 // ears run the first that starts and hears, and the next when the one running dies.
 type ears struct {
-	url      string
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	dead     chan struct{} // closed once cmd has exited
-	server   string        // the server running now
-	rest     []string      // the servers to fall back on, in order
-	failed   []string      // why the servers before this one did not start
-	run      func(server string) error
-	fell     func(server, why string) // told when another server takes over, if set
-	patience time.Duration            // how long a transcription may take before the server is taken for hung
+	url       string // where it transcribes, under its path (earsPath): never written to a log, the journal or an answer
+	addr      string // its loopback address, which the messages give instead
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	dead      chan struct{} // closed once cmd has exited
+	server    string        // the server running now
+	rest      []string      // the servers to fall back on, in order
+	failed    []string      // why the servers before this one did not start
+	run       func(server string) error
+	fell      func(server, why string) // told when another server takes over, if set
+	patience  time.Duration            // how long a transcription may take before the server is taken for hung
+	languages func() []string          // the codes Delta hears now, one or two, or nil for the server's own (-l)
 }
 
 // utterance is something heard: its text, when the speaker stopped (or the line was read), and how long the
@@ -48,7 +56,9 @@ type utterance struct {
 	text   string
 	ended  time.Time
 	asr    time.Duration
-	source string // "" for this computer's microphone, "remote" for another device (remote.go)
+	source string  // "" for this computer's microphone, "remote" for another device (remote.go)
+	lang   string  // the language it was spoken in, as Whisper heard it, or "" when nobody asked
+	level  float64 // how loud its voiced frames were (voicedLevel): the closer the microphone, the louder
 }
 
 // startEars runs whisper-server on the loopback port, transcribing lang ("en" or "fr"): the first of servers that
@@ -59,13 +69,9 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 		c.Close()
 		return nil, fmt.Errorf("ears: %s is already taken", addr)
 	}
-	// -nf: no temperature fallback. With it, a mumbled reply took 31.6 s to come back as "Euh... Oui."; a voice loop
-	// would rather have a rough transcript at once.
-	args := []string{"-m", model, "-l", lang, "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt, "-nf"}
-	if audioCtx > 0 {
-		args = append(args, "-ac", strconv.Itoa(audioCtx))
-	}
-	e := &ears{url: "http://" + addr, patience: earsPatience}
+	path := earsPath()
+	args := earsArgs(model, lang, port, threads, prompt, audioCtx, path)
+	e := &ears{url: "http://" + addr + path, addr: addr, patience: earsPatience}
 	e.run = func(server string) error { return e.start(server, args, addr) }
 	for i, server := range servers {
 		if err := e.run(server); err != nil {
@@ -76,6 +82,29 @@ func startEars(servers []string, model, lang string, port, threads int, prompt s
 		return e, nil
 	}
 	return nil, fmt.Errorf("%s", strings.Join(e.failed, "; "))
+}
+
+// earsArgs are whisper-server's arguments: the loopback port, its routes under path (earsPath).
+// -nf: no temperature fallback. With it, a mumbled reply took 31.6 s to come back as "Euh... Oui."; a voice loop
+// would rather have a rough transcript at once.
+func earsArgs(model, lang string, port, threads int, prompt string, audioCtx int, path string) []string {
+	args := []string{"-m", model, "-l", lang, "-t", strconv.Itoa(threads), "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--prompt", prompt, "-nf"}
+	if audioCtx > 0 {
+		args = append(args, "-ac", strconv.Itoa(audioCtx))
+	}
+	return append(args, "--request-path", path)
+}
+
+// earsPath is the path every route of whisper-server sits under (its --request-path), drawn at each start and known to
+// the brain alone. whisper.cpp answers every request with Access-Control-Allow-Origin: * and checks neither Origin nor
+// Host, so a web page reaches its loopback port and could read what /inference makes of its audio, or post a file's
+// path to /load, which tells whether that file exists and exits on one that is no model, leaving Delta deaf. Under a
+// path it cannot guess, it finds neither. Both servers Delta runs take --request-path: IX's b5454, which setup.ps1
+// installs, and the CUDA build.
+func earsPath() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return "/" + hex.EncodeToString(b)
 }
 
 // start runs one server and waits until it hears. Its caller holds mu, or alone has e.
@@ -95,12 +124,16 @@ func (e *ears) start(server string, args []string, addr string) error {
 	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		select {
 		case <-dead: // a GPU build without its libraries stops at once
+			if cmd.ProcessState.ExitCode() == 0 { // whisper-server's answer to an argument it does not take
+				return fmt.Errorf("ears: %s stopped at once with exit status 0, as whisper-server does on an argument it "+
+					"does not take: it may be too old for --request-path, which keeps its routes from web pages", server)
+			}
 			return fmt.Errorf("ears: %s stopped: %v", server, cmd.ProcessState)
 		default:
 		}
 		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
 			c.Close()
-			if _, err := e.ask(make([]float32, earsRate)); err != nil {
+			if _, _, err := e.ask(make([]float32, earsRate)); err != nil {
 				e.stop()
 				return fmt.Errorf("ears: %s: %w", server, err)
 			}
@@ -126,14 +159,20 @@ func (e *ears) where() string {
 // hear transcribes 16 kHz mono samples. When the server died or hung, the next one takes over and hears them, as it
 // does a sentence that failed while another sentence's failure brought the next one.
 func (e *ears) hear(samples []float32) (string, error) {
+	text, _, err := e.hearIn(samples)
+	return text, err
+}
+
+// hearIn is hear, which also returns the language the samples were spoken in, among those e.languages gives.
+func (e *ears) hearIn(samples []float32) (text, lang string, err error) {
 	e.mu.Lock()
 	asked := e.server
 	e.mu.Unlock()
-	text, err := e.ask(samples)
+	text, lang, err = e.ask(samples)
 	if err != nil && e.fallBack(asked, err) {
 		return e.ask(samples)
 	}
-	return text, err
+	return text, lang, err
 }
 
 // fallBack runs the next server if the one asked died, or hung while another can take over, and says whether another
@@ -173,32 +212,93 @@ func (e *ears) fallBack(asked string, why error) bool {
 	return false
 }
 
-// ask posts the samples to the server running now.
-func (e *ears) ask(samples []float32) (string, error) {
+// ask posts the samples to the server running now, in the language Delta hears, or in either of its two: then Whisper
+// detects the language, and when it hears a third, which short sentences can fool it into, the samples are heard
+// again in the likelier of the two.
+func (e *ears) ask(samples []float32) (text, lang string, err error) {
+	var codes []string
+	if e.languages != nil {
+		codes = e.languages()
+	}
+	if len(codes) < 2 {
+		if len(codes) == 1 {
+			lang = codes[0]
+		}
+		out, err := e.post(samples, lang)
+		return cleanHeard(out.Text), lang, err
+	}
+	out, err := e.post(samples, "auto")
+	if err != nil {
+		return "", "", err
+	}
+	lang = likeliest(codes, out.Probabilities)
+	if top := likeliest(slices.Collect(maps.Keys(out.Probabilities)), out.Probabilities); top != "" && !slices.Contains(codes, top) {
+		if out, err = e.post(samples, lang); err != nil {
+			return "", "", err
+		}
+	}
+	return cleanHeard(out.Text), lang, nil
+}
+
+// heardOut is what whisper-server answers: the text, and with verbose_json, how likely each language is.
+type heardOut struct {
+	Text          string             `json:"text"`
+	Error         string             `json:"error"`
+	Probabilities map[string]float64 `json:"language_probabilities"`
+}
+
+// post asks the server to transcribe the samples in a language, "auto" to detect it, or "" for the server's own.
+func (e *ears) post(samples []float32, lang string) (heardOut, error) {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	file, _ := form.CreateFormFile("file", "heard.wav")
 	file.Write(encodeWav(samples, earsRate))
-	form.WriteField("response_format", "json")
+	format := "json"
+	if lang == "auto" {
+		format = "verbose_json"
+	}
+	form.WriteField("response_format", format)
 	form.WriteField("temperature", "0.0")
+	if lang != "" {
+		form.WriteField("language", lang)
+	}
 	form.Close()
+	var out heardOut
 	client := http.Client{Timeout: e.patience}
 	resp, err := client.Post(e.url+"/inference", form.FormDataContentType(), &body)
 	if err != nil {
-		return "", err
+		return out, e.hidePath(err)
 	}
 	defer resp.Body.Close()
-	var out struct {
-		Text  string `json:"text"`
-		Error string `json:"error"`
-	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("ears: %s: %w", resp.Status, err)
+		return out, fmt.Errorf("ears: %s: %w", resp.Status, err)
 	}
 	if out.Error != "" {
-		return "", fmt.Errorf("ears: %s", out.Error)
+		return out, fmt.Errorf("ears: %s", out.Error)
 	}
-	return cleanHeard(out.Text), nil
+	return out, nil
+}
+
+// hidePath keeps the ears' path out of a request's error, which names the whole URL: the error goes to the journal, to
+// stderr and to /hear's answer. The address stays, and the cause, for the diagnosis; *url.Error stays too, so that a
+// timeout is still told from a dead server.
+func (e *ears) hidePath(err error) error {
+	var u *url.Error
+	if errors.As(err, &u) && e.addr != "" {
+		u.URL = "http://" + e.addr + "/…/inference"
+	}
+	return err
+}
+
+// likeliest is the code among codes that Whisper found likeliest, the first when it gave no probabilities.
+func likeliest(codes []string, probabilities map[string]float64) string {
+	best := ""
+	for _, code := range codes {
+		if best == "" || probabilities[code] > probabilities[best] {
+			best = code
+		}
+	}
+	return best
 }
 
 func (e *ears) close() {
@@ -279,9 +379,14 @@ func cleanHeard(text string) string {
 	return text
 }
 
+// partialEvery is how often, in 20 ms frames of speech, the caption's partial transcript is renewed: every second.
+const partialEvery = 50
+
 // listen turns the microphone into utterances: it tells the scene when someone starts speaking, transcribes what they
 // said once they stop, and hears nothing while Delta is busy answering.
-func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels bool) {
+// hearing, if set, is told +1 as a sentence starts and -1 when it ends without reaching out, for a phone's copy of it
+// to wait for this one (twice.go).
+func listen(e *ears, s *scene, busy, muted *atomic.Bool, hearing func(delta int), out chan<- utterance, levels bool) {
 	frames := make(chan []float32, 64)
 	m, err := openMic(frames)
 	if err != nil {
@@ -291,7 +396,19 @@ func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels b
 	defer m.close()
 	fmt.Println("listening on the default microphone")
 	var cut endpoint
+	inSpeech := false
+	heard := func(delta int) {
+		if hearing != nil {
+			hearing(delta)
+		}
+	}
 	peak, count := 0.0, 0
+	meter, ticks, shown := 0.0, 0, 0.0 // the window's microphone meter, the loudest frame of every 100 ms
+	// While someone speaks, the caption shows what they have said so far, transcribed again every partialEvery: only
+	// while transcribing is quick, as on a GPU, since the sentence's own transcript waits for the partial one.
+	var said atomic.Int64 // changes as each sentence starts and ends, so that a late partial transcript is dropped
+	var partial atomic.Bool
+	next, quick := 0, true
 	for frame := range frames {
 		if levels { // every 2 s, the loudest frame and the room's noise as the endpoint measures it
 			peak, count = max(peak, rms(frame)), count+1
@@ -300,16 +417,50 @@ func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels b
 				peak, count = 0, 0
 			}
 		}
-		if busy.Load() {
+		deaf := busy.Load() || (muted != nil && muted.Load())
+		if meter, ticks = max(meter, rms(frame)), ticks+1; ticks == 5 {
+			if deaf {
+				meter = 0
+			}
+			if meter > 0 || shown > 0 {
+				s.send(map[string]any{"mic_level": math.Round(meter*1e4) / 1e4})
+			}
+			meter, ticks, shown = 0, 0, meter
+		}
+		if deaf { // while Delta speaks, and while the user turned it off
 			cut.reset()
+			if inSpeech {
+				inSpeech = false
+				said.Add(1)
+				heard(-1)
+			}
 			continue
 		}
 		event, speech := cut.feed(frame)
 		switch event {
 		case speechStarted:
+			inSpeech = true
+			said.Add(1)
+			next = partialEvery
+			heard(1)
 			s.send(map[string]any{"state": "listening"})
+		case noSpeechEvent:
+			if !inSpeech || !quick || len(cut.speech) < next*frameSamples || !partial.CompareAndSwap(false, true) {
+				continue
+			}
+			next = len(cut.speech)/frameSamples + partialEvery
+			samples, sentence := slices.Clone(cut.speech), said.Load()
+			go func() {
+				defer partial.Store(false)
+				if text, _, err := e.ask(samples); err == nil && text != "" && said.Load() == sentence {
+					s.send(map[string]any{"heard": map[string]any{"text": shorten(text, 400), "to": "hearing"}})
+				}
+			}()
 		case speechEnded:
+			inSpeech = false
+			said.Add(1)
 			if speech == nil {
+				heard(-1)
 				s.send(map[string]any{"state": "idle"})
 				continue
 			}
@@ -317,11 +468,12 @@ func listen(e *ears, s *scene, busy *atomic.Bool, out chan<- utterance, levels b
 			ended := time.Now().Add(-endFrames * 20 * time.Millisecond) // the speaker stopped when the quiet began
 			s.send(map[string]any{"state": "thinking"})
 			t0 := time.Now()
-			text, err := e.hear(speech)
+			text, lang, err := e.hearIn(speech)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "brain:", err)
 			}
-			out <- utterance{text: text, ended: ended, asr: time.Since(t0)}
+			quick = time.Since(t0) < time.Second
+			out <- utterance{text: text, ended: ended, asr: time.Since(t0), lang: lang, level: voicedLevel(speech)}
 		}
 	}
 }

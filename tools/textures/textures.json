@@ -1,0 +1,11 @@
+{
+  "size": 2048,
+  "materials": [
+    {"name": "brick-wall", "polyhaven": "brick_wall_001", "res": "2k", "metres": 2.7,
+     "laid": {"mortar": "concrete_wall_003", "mortar_res": "2k", "period": 2.7, "scan_metres": 1.3, "seed": 7, "size": 4096}},
+    {"name": "concrete-floor", "polyhaven": "concrete_floor_worn_001", "res": "2k", "metres": 3.0},
+    {"name": "concrete-cast", "polyhaven": "concrete_wall_003", "res": "2k", "metres": 3.0},
+    {"name": "pallet-wood", "polyhaven": "rough_wood", "res": "2k", "metres": 0.5},
+    {"name": "painted-steel", "polyhaven": "green_metal_rust", "res": "2k", "metres": 1.0}
+  ]
+}

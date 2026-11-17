@@ -104,7 +104,26 @@ internal sealed unsafe class Tray : IDisposable
             return 0;
         }
 
+        var face = FacePixels(size);
         var pixels = (uint*)bits;
+        for (var i = 0; i < face.Length; i++)
+        {
+            pixels[i] = face[i]; // a 32-bit DIB is ARGB in a little-endian uint
+        }
+
+        var mask = CreateBitmap(size, size, 1, 1, 0);
+        var iconInfo = new IconInfo { IsIcon = 1, Mask = mask, Color = color };
+        var result = CreateIconIndirect(ref iconInfo);
+        DeleteObject(color);
+        DeleteObject(mask);
+        return result;
+    }
+
+    // Delta's face as size by size ARGB pixels, row by row from the top left, transparent around the shell: the tray's
+    // icon and the window's, in its title bar and the taskbar.
+    internal static uint[] FacePixels(int size)
+    {
+        var pixels = new uint[size * size];
         for (var y = 0; y < size; y++)
         {
             for (var x = 0; x < size; x++)
@@ -136,12 +155,23 @@ internal sealed unsafe class Tray : IDisposable
             }
         }
 
-        var mask = CreateBitmap(size, size, 1, 1, 0);
-        var iconInfo = new IconInfo { IsIcon = 1, Mask = mask, Color = color };
-        var result = CreateIconIndirect(ref iconInfo);
-        DeleteObject(color);
-        DeleteObject(mask);
-        return result;
+        return pixels;
+    }
+
+    // The same face as GLFW takes a window's icon: RGBA bytes, red first.
+    internal static byte[] FaceRgba(int size)
+    {
+        var argb = FacePixels(size);
+        var rgba = new byte[argb.Length * 4];
+        for (var i = 0; i < argb.Length; i++)
+        {
+            rgba[(i * 4) + 0] = (byte)(argb[i] >> 16);
+            rgba[(i * 4) + 1] = (byte)(argb[i] >> 8);
+            rgba[(i * 4) + 2] = (byte)argb[i];
+            rgba[(i * 4) + 3] = (byte)(argb[i] >> 24);
+        }
+
+        return rgba;
     }
 
     private delegate nint WndProc(nint hwnd, uint message, nint wParam, nint lParam);

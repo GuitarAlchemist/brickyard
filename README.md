@@ -32,7 +32,15 @@ You need Windows 10 or 11, x64, with a GPU whose driver supports Vulkan 1.3, a m
    what is already there, tells you what it would download, and asks first.
    - The first time, that is about 700 MB: Delta, Piper and a voice for that language, whisper.cpp, and a Whisper
      model.
-   - To change the language later, run `/delta:setup` again and ask for the other one.
+   - To change the language later, run `/delta:setup` again and ask for the other one, or click the language button
+     left of the phone icon in Delta's window, or press L. It goes through FR, FR·EN and EN: with two, Delta
+     hears both and answers each sentence in the language it was spoken in, with that language's Piper voice, which
+     it looks for beside the first one; without it, Delta says it in its first voice. `delta.json` keeps the choice.
+     You can also ask it aloud, which a phone needs: "speak English only", « parle seulement français », « passe en
+     mode bilingue ». Asking for a language puts it first and Delta still hears the other one; asking again keeps it
+     alone.
+   - The microphone button left of it turns the computer's microphone off, struck through in red, and on again. A
+     phone paired through the gateway still reaches Delta. Each new brain starts with the microphone on.
    - If you already have Piper, whisper.cpp or the model, give Claude their paths instead.
    - Each download is checked against its SHA-256.
 3. Talk to Delta, in either of two ways:
@@ -73,7 +81,7 @@ and in French whatever its language, and answers in its own:
   project, the most recent first, each opening onto its last requests. "Show the plugins" and "show the marketplaces"
   list what is installed. While the shelf is open, "go down", "go up", "open" and "back" move through it, without
   "Delta" within 20 seconds of the last step, and "close the menu" closes it. In French: « montre-moi les sessions »,
-  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». Tab or M opens it
+  « montre les conversations », « descends », « monte », « ouvre », « retour », « ferme le menu ». M opens it
   with the keyboard too, then the arrows, Enter, Backspace and Esc; the mouse and its wheel work as well. In a session
   that runs in wmux, "Go to this session" shows its pane. The shelf's labels follow Delta's language.
 
