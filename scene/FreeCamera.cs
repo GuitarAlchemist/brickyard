@@ -36,6 +36,7 @@ internal sealed class FreeCamera
         (new(-3.3f, -3f), 0f, new(0.35f, 0.35f)), // the pillars
         (new(3.3f, -3f), 0f, new(0.35f, 0.35f)),
         (new(ArcadeCabinet.Position.X, ArcadeCabinet.Position.Z), ArcadeCabinet.Yaw, new(0.335f, 0.4f)), // the arcade cabinet, turned to the room
+        (HallGallery.Footprint.Centre, 0f, HallGallery.Footprint.Half), // the gallery's bookcase and counter along the left wall
     ];
 
     private const float Sensitivity = 0.0025f; // radians a pixel, the Observatory's
@@ -279,6 +280,7 @@ internal sealed class FreeCamera
         (new(0f, 1.75f, 0.6f), new(0f, 1.78f, -3.3f)), // the clocks of Ottawa and Paris
         ArcadeCabinet.View, // in front of the arcade cabinet, at a player's height
         (new(5.05f, KnotFloor.Level + WalkHeight, 0.6f), new(5.05f, KnotFloor.Level + 0.9f, -3f)), // the knots' floor, at the stair's top
+        (new(-2.4f, WalkHeight, 1.2f), new(-6.25f, 1.45f, 1.2f)), // the gallery on the left wall: courses, demos and artifacts
     ];
 
     // 1 for the drift, 2 to 7 for the views; false for any other number. A cut lands at once, as behind the cinematic's

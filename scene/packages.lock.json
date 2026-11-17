@@ -145,6 +145,11 @@
         "resolved": "8.4.2",
         "contentHash": "2hmtrrU18x6NL3mbuAqwy0KpnoEEJOuK6sH5RKQfD/jHijn2pqvqBUC7WGy9dgNBL9BDA7eOC0kirsNPMp2f4Q=="
       },
+      "FSharp.Core": {
+        "type": "Transitive",
+        "resolved": "10.0.115",
+        "contentHash": "KhHV8iLzxsYYSEaAG1Rpj+etxAwZIHVl1NTtpzg3iDU0WOtLst6aVoEAP6H7tniIW3k8JkTuylDGQQZHBxbKPg=="
+      },
       "Microsoft.Extensions.Configuration": {
         "type": "Transitive",
         "resolved": "10.0.0",
@@ -262,6 +267,19 @@
       },
       "Delta.SceneModules.Contracts": {
         "type": "Project"
+      },
+      "gallery": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.0.115, 10.0.115]",
+          "Lego": "[1.0.0, )"
+        }
+      },
+      "lego": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.0.115, 10.0.115]"
+        }
       }
     },
     "net10.0/win-x64": {

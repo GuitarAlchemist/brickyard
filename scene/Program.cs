@@ -488,6 +488,13 @@ internal static unsafe class Stage
             ao *= occlusion;
             vec3 light = (keyColor * key * shade + fillColor * fill + vec3(0.12, 0.1, 0.09) * bounce + 0.03) * ao;
 
+            // The gallery's picture lights (HallGallery.Wash): a warm wash from a line along the left wall, 0.75 m out
+            // and 2.45 m up, on what faces it near that wall, falling off with distance; untraced, so nothing shadows it.
+            vec3 washAt = vec3(-5.5, 2.45, clamp(vWorld.z, -3.3, 5.9));
+            vec3 toWash = washAt - vWorld;
+            float washD = max(length(toWash), 0.05);
+            light += vec3(1.0, 0.86, 0.66) * 0.75 * max(dot(n, toWash / washD), 0.0) / (1.0 + 0.8 * washD * washD) * (1.0 - smoothstep(-5.4, -4.2, vWorld.x)) * ao;
+
             // Blinn-Phong highlights of both lights, roughly normalised so that a tighter one is brighter, and the hall
             // reflected, both weighed by Schlick's Fresnel.
             vec3 f0 = mix(vec3(m.x), base, m.z);
@@ -509,6 +516,9 @@ internal static unsafe class Stage
 
             float knots = (1.0 - smoothstep(0.0, 0.8, box(vWorld.xz - vec2(5.075, -1.2), vec2(1.17, 2.1)))) * smoothstep(1.8, 2.0, vWorld.y);
             pool = max(pool, 0.9 * knots);
+            // The gallery along the left wall is in its picture lights' light, up to their height (HallGallery).
+            float gallery = (1.0 - smoothstep(0.0, 1.2, box(vWorld.xz - vec2(-5.7, 1.25), vec2(0.55, 4.65)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
+            pool = max(pool, 0.8 * gallery);
             float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
             outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
         }
@@ -1582,6 +1592,10 @@ internal static unsafe class Stage
         // The hall closed round (HallShell): walls, ceiling, windows and lamps, drawn but not traced.
         var (shellVertices, glassVertices, bulbVertices) = HallShell.Build(photographed: materialDir is not null);
         var (shell, shellGlass, shellBulbs) = (new Mesh(device, physical, shellVertices), new Mesh(device, physical, glassVertices), new Mesh(device, physical, bulbVertices));
+        // The gallery on the left wall (HallGallery): the learn site's courses, demos and artifacts, from gallery.json
+        // (--gallery FILE), drawn from Lego's blocks and redrawn when the file changes; a click on one opens its page.
+        var hallGallery = new HallGallery(vertices => new Mesh(device, physical, vertices), FramesInFlight, Option(args, "--gallery"));
+        Console.WriteLine($"SCENE gallery: {hallGallery.Summary}");
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
         var knotsPath = KnotFloor.Path(Option(args, "--marins"));
         var marins = KnotFloor.Load(knotsPath);
@@ -2504,6 +2518,10 @@ internal static unsafe class Stage
             return true;
         }
 
+        // A click on a course, a demo or an artifact in the gallery opens its page in the browser.
+        bool TryGalleryClick(double x, double y) =>
+            !shelf.Open && !pairingShown && !invitationShown && !notesShown && officeView is { } view && hallGallery.Click(view, extent.Width, extent.Height, x, y);
+
         // A click on a session's robot, picked by the office.
         void OfficeClicked(string session)
         {
@@ -2602,7 +2620,7 @@ internal static unsafe class Stage
         // the cabinet that it falls on takes it.
         void Click(double x, double y, bool simulated = false)
         {
-            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y)) TryCabinetClick(x, y, simulated);
+            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y) && !TryGalleryClick(x, y)) TryCabinetClick(x, y, simulated);
         }
 
         // --wall-real, once a frame after the splash: once the office's reading names the session and its robot is drawn
@@ -3500,6 +3518,7 @@ internal static unsafe class Stage
 
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
+            hallGallery.Frame(); // frees the gallery's meshes no frame still uses, and swaps in one redrawn from its file
             if (stamped[slot])
             {
                 var stamps = stackalloc ulong[2];
@@ -3694,6 +3713,7 @@ internal static unsafe class Stage
                 DrawUntraced(cb, layout, shell, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 DrawUntraced(cb, layout, shellGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
                 DrawUntraced(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
+                hallGallery.Draw((mesh, glow) => DrawUntraced(cb, layout, mesh, new Push(SN.Matrix4x4.Identity, viewProj, glow)), viewProj, Words.Language == "fr");
 
                 // Path traced, the picture goes over what the meshes drew, whose depth stays for the screens after.
                 if (tracer is not null && pathTracing) tracer.Composite(cb, splashPipeline, splashLayout);
@@ -4310,6 +4330,7 @@ internal static unsafe class Stage
         shell.Dispose();
         shellGlass.Dispose();
         shellBulbs.Dispose();
+        hallGallery.Dispose();
         foreach (var gallery in knots.Values)
         {
             gallery.Dispose();

@@ -5,7 +5,11 @@ using SN = System.Numerics;
 internal static class WidgetPicking
 {
     public static string? Pick<TSurface>(IEnumerable<WidgetStage<TSurface>.Hit> hits, SN.Matrix4x4 viewProjection, int width, int height, double x, double y)
-        where TSurface : class, IDisposable
+        where TSurface : class, IDisposable =>
+        Pick(hits.Select(h => (h.Click, h.Min, h.Max)), viewProjection, width, height, x, y);
+
+    // Any boxes in the world, each naming what a click on it does: the hall's gallery's slots too (HallGallery).
+    public static string? Pick(IEnumerable<(string Click, SN.Vector3 Min, SN.Vector3 Max)> hits, SN.Matrix4x4 viewProjection, int width, int height, double x, double y)
     {
         if (width <= 0 || height <= 0) return null;
         string? best = null;

@@ -1,0 +1,10 @@
+<Project>
+
+  <!-- No lock file of their own: the scene restores them for win-x64, which a lock file made without a runtime refuses
+       in locked mode. FSharp.Core is pinned exactly (Directory.Build.props) and the scene's packages.lock.json records
+       it, as it does module-contracts' packages (ORIGIN.md). -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+</Project>

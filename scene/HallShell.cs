@@ -11,7 +11,8 @@ internal static class HallShell
 {
     internal const float Top = 4.85f; // the ceiling's underside, level with the beam over the pillars
     // The walls' inner faces: the right one is the knots' floor's end wall (KnotFloor), the back one the brick wall's.
-    private const float Left = -6.25f, Right = 6.25f, Back = -3.45f, Front = 6.0f, Thick = 0.16f;
+    internal const float Left = -6.25f, Right = 6.25f, Back = -3.45f, Front = 6.0f;
+    private const float Thick = 0.16f;
 
     // The lamps over the hall's floor, each hanging over (x, z); the Low shader's pools are at the same places.
     internal static readonly SN.Vector2[] FloorLamps = [new(-3.2f, -0.6f), new(0f, 1.6f), new(3.0f, -0.6f), new(-3.2f, 3.4f)];
@@ -44,11 +45,11 @@ internal static class HallShell
             Boxes.Add(o, new(0f, Top - 0.225f, z), new(Right - Left, 0.012f, 0.2f), paint); // its lower flange
         }
 
-        // Windows: in the left wall three tall ones; in the right wall two over the knots' floor and the stair; in the
-        // front wall two beside the door.
+        // Windows: in the left wall three clerestories over the gallery (HallGallery); in the right wall two over the
+        // knots' floor and the stair; in the front wall two beside the door.
         foreach (var z in new[] { -1.6f, 1.4f, 4.4f })
         {
-            Window(o, glass, new(Left, 2.45f, z), SN.Vector3.UnitX, SN.Vector3.UnitZ, 2.2f, 3.2f, steel, pane);
+            Window(o, glass, new(Left, 3.7f, z), SN.Vector3.UnitX, SN.Vector3.UnitZ, 2.2f, 1.2f, steel, pane);
         }
 
         Window(o, glass, new(Right, 3.75f, -1.4f), -SN.Vector3.UnitX, -SN.Vector3.UnitZ, 2.4f, 1.6f, steel, pane);

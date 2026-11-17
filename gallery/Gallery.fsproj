@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The hall's gallery as Lego blocks (Blocks.fs): a bookcase for the learn site's courses, a wall of screens for its
+       demos and frames for its artifacts. It describes; the scene draws (scene/HallGallery.cs). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Blocks.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lego\Lego\Lego.fsproj" />
+  </ItemGroup>
+
+</Project>
