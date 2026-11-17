@@ -5,7 +5,10 @@ using static Delta.SceneModules.Widgets;
 namespace Delta.AgentOffice;
 
 // The agents' office: a station per Claude Code session on the robot's left, each a desk with a small Delta at it, in
-// an enclosure per wmux workspace (one more for the sessions outside wmux) that carries the workspace's name.
+// a round tower. The stations stand in rings, facing out, each wmux workspace's after a sign with its name (the sessions
+// outside wmux last); a ring full, the next goes on a step above and further in, so the tower grows a storey as the
+// sessions grow, everything smaller only when that is not enough. The rings turn slowly, one turn in Turn seconds;
+// a ring with the selected robot on it holds still, so that a robot clicked stays under the pointer.
 // Everything is widgets nested in widgets: a station holds a desk, a name plate, a robot fixed to the desk's seat and
 // the selection's mark above it; the robot a torso, with the head and the arms fixed to its anchors; the torso Mac
 // minis, each with its status light. The robot types while its session works, lights a red beacon while the session
@@ -18,11 +21,15 @@ namespace Delta.AgentOffice;
 // This assembly is loaded into a collectible context and replaced while the scene runs, so it keeps no static state.
 public sealed class OfficeModule : IOfficeModule
 {
-    private const float Pitch = 0.38f; // between stations at full size, in metres
-    private const float Left = -1.45f, Right = -0.69f, Front = 0.3f;
-    private const float RowDepth = 0.45f, Deep = 3.3f; // a row of stations; the depth the enclosures may take from the front, to 0.3 m off the bricks
-    private const float PenFront = 0.17f, PenBack = 0.3f, PenSide = 0.2f; // an enclosure's margins round its stations, scaled with them
-    private const float Aisle = 0.17f; // between two enclosures' rails, whatever their scale, while the aisles take half the depth at most
+    // The tower: its axis on the floor, between the bricks and Delta, and the radius of its lowest step, 0.15 m off Delta's
+    // tracks and 0.15 m off the bricks. At full size a slot (a station or a sign) takes Pitch of a ring's circumference at
+    // its desks' centres; a step rises Rise and goes in Step, the depth of a station and its stool; the innermost step
+    // keeps Core of radius. The office's view (key 2) looks at it from the front.
+    internal const float Cx = -1.35f, Cz = -0.15f, Outer = 0.78f;
+    internal const float Pitch = 0.36f, Step = 0.38f, Rise = 0.42f, Inset = 0.125f, Core = 0.06f, Smallest = 0.12f;
+    internal const double Turn = 150; // seconds a ring takes to go round
+    private const float Spread = 1.5f; // pitches between the slots of a ring with room to spare
+    private const float Bearing = 0.207f; // the office's view's eye seen from the axis, in radians from +Z toward +X
     private const double DoneHop = 2.4; // seconds of jumping after a session finishes
     private const int MaxDrawn = 48; // stations drawn at most: about 37 instances each with its enclosure, within the scene's 2048
 
@@ -89,46 +96,130 @@ public sealed class OfficeModule : IOfficeModule
 
         if (hidden > 0)
         {
-            roots.Add(new("more", Plate, Place(-1.07f, 0.02f, Front + 0.12f), Name(more))); // on the floor before the first enclosure
+            roots.Add(new("more", Plate, Place(Cx, 0.02f, Cz + Outer + 0.12f), Name(more))); // on the floor before the tower
         }
 
         if (sessions.Count == 0)
         {
-            roots.Add(new("none", Station, Place(-1.07f, 0f, Front), Name(Say("No session", "Aucune session"))));
+            roots.Add(new("none", Station, Place(Cx, 0f, Cz + Outer - Inset), Name(Say("No session", "Aucune session"))));
             return new(Library, roots);
         }
 
-        // An enclosure per workspace, going back from the robot's front in the order the workspaces' first sessions
-        // started, the sessions outside wmux last; in each, rows of three across, closer and smaller when there are many.
-        var groups = sessions.GroupBy(s => s.WorkspaceId).OrderBy(g => g.Key.Length == 0 ? 1 : 0).ThenBy(g => g.Min(s => s.Started)).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
-        var columns = Math.Max(3, (int)Math.Ceiling(sessions.Count / 4.0));
-        var pitch = Math.Min(Pitch, (Right - Left) / (columns - 1));
-        var rows = groups.Sum(g => (g.Count() + columns - 1) / columns);
-        var aisle = groups.Count > 1 ? Math.Min(Aisle, Deep / 2 / (groups.Count - 1)) : 0f; // 0.17 m up to 10 enclosures, narrower beyond, never none
-        var scale = Math.Min(pitch / Pitch, (Deep - (aisle * (groups.Count - 1))) / (((rows - groups.Count) * RowDepth) + (groups.Count * (PenFront + PenBack)))); // an enclosure's first row lies in its margins
-        pitch = Pitch * scale;
-        var front = Front + (PenFront * scale);
-        foreach (var group in groups)
+        var tower = Tower();
+        for (var k = 0; k < tower.Rings; k++)
         {
-            var members = group.ToList();
-            var first = front - (PenFront * scale);
-            for (var i = 0; i < members.Count; i++)
-            {
-                var at = Place(Right - (i % columns) * pitch, 0f, first - (i / columns) * RowDepth * scale, scale: scale);
-                roots.Add(new(Key(members[i]), Station, at, Name(shown[members[i].Id]), members[i].Id));
-            }
+            var (radius, height) = (Edge(k, tower.Scale), k * Rise * tower.Scale);
+            roots.Add(new($"tier-{k}", Tier, Place(Cx, 0f, Cz), new Dictionary<string, WidgetValue> { ["r"] = radius, ["h"] = Math.Max(0.02f, height) }));
+        }
 
-            var back = first - (((members.Count - 1) / columns) * RowDepth * scale) - (PenBack * scale);
-            var width = ((columns - 1) * pitch) + (2 * PenSide * scale);
-            var title = group.Key.Length == 0 ? Say("No wmux pane", "Sans volet wmux") : group.First().WorkspaceTitle is { Length: > 0 } t ? t : group.Key;
-            roots.Add(new(PenKey(group.Key), Pen, Place(Right - ((columns - 1) * pitch / 2), 0f, (front + back) / 2), new Dictionary<string, WidgetValue>
+        // A tower of storeys has its spire on its axis, a robot's height above its highest step.
+        if (tower.Rings > 1)
+        {
+            roots.Add(new("spire", Tier, Place(Cx, 0f, Cz), new Dictionary<string, WidgetValue>
             {
-                ["w"] = width, ["d"] = front - back, ["s"] = scale, ["title"] = title.Length > 40 ? title[..39] + "…" : title,
+                ["r"] = 0.035f, ["h"] = ((tower.Rings - 1) * Rise * tower.Scale) + (0.95f * tower.Scale),
             }));
-            front = back - aisle;
+        }
+
+        foreach (var slot in tower.Slots)
+        {
+            var at = SlotPlace(slot, tower.Scale);
+            roots.Add(slot.Session is { } s
+                ? new(Key(s), Station, at, Name(shown[s.Id]), s.Id)
+                : new(slot.Path, Sign, at, new Dictionary<string, WidgetValue> { ["title"] = slot.Title!.Length > 40 ? slot.Title[..39] + "…" : slot.Title }));
         }
 
         return new(Library, roots);
+    }
+
+    // A slot of a ring: a session's station, or a workspace's sign (Title) before its stations; at Angle about the axis,
+    // from +Z toward +X, facing out.
+    private sealed record Slot(string Path, int Ring, float Angle, OfficeSession? Session, string? Title);
+
+    private sealed record TowerLayout(float Scale, int Rings, IReadOnlyList<Slot> Slots);
+
+    private TowerLayout? tower;
+    private int towerRevision;
+    private readonly Dictionary<int, double> spins = [];
+    private double spun = double.NaN;
+
+    // The outer edge of step k at scale s, and the radius of its desks' centres.
+    internal static float Edge(int k, float s) => Outer - (k * Step * s);
+
+    private static float Desks(int k, float s) => Edge(k, s) - (Inset * s);
+
+    // How many slots ring k holds at scale s; 0 once its stools would reach the core.
+    internal static int Capacity(int k, float s) =>
+        Edge(k, s) - (Step * s) < Core ? 0 : (int)MathF.Floor(2 * MathF.PI * Desks(k, s) / (Pitch * s));
+
+    private static SN.Matrix4x4 SlotPlace(Slot slot, float s)
+    {
+        var r = Desks(slot.Ring, s);
+        return Place(Cx + (r * MathF.Sin(slot.Angle)), Math.Max(0.02f, slot.Ring * Rise * s), Cz + (r * MathF.Cos(slot.Angle)), slot.Angle * 180f / MathF.PI, s);
+    }
+
+    // The tower for the sessions drawn: the workspaces in the order their first sessions started, the sessions outside
+    // wmux last, each a sign then its stations, filling the rings from the lowest; a workspace going on to the next ring
+    // starts it with its sign again. The largest scale, to Smallest, at which they all fit; the slots of a ring in one
+    // arc centred on the office's view, round the whole ring once it is full enough.
+    private TowerLayout Tower()
+    {
+        if (tower is not null && towerRevision == layoutRevision) return tower;
+        var sessions = Ordered(Kept(state));
+        var groups = sessions.GroupBy(s => s.WorkspaceId).OrderBy(g => g.Key.Length == 0 ? 1 : 0).ThenBy(g => g.Min(s => s.Started)).ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => (Key: g.Key, Title: g.Key.Length == 0 ? Say("No wmux pane", "Sans volet wmux") : g.First().WorkspaceTitle is { Length: > 0 } t ? t : g.Key, Members: g.ToList()))
+            .ToList();
+        List<List<(OfficeSession? Session, string Key, string? Title)>>? rings = null;
+        var scale = 1f;
+        for (; scale > Smallest; scale -= 0.01f)
+        {
+            if ((rings = Pack(groups, scale)) is not null) break;
+        }
+
+        rings ??= Pack(groups, Smallest, force: true)!;
+        var slots = new List<Slot>();
+        for (var k = 0; k < rings.Count; k++)
+        {
+            var ring = rings[k];
+            for (var j = 0; j < ring.Count; j++)
+            {
+                var (session, key, title) = ring[j];
+                // Evenly round the ring, or, for a ring with room to spare, Spread slots' width apart in one arc facing the view.
+                var step = MathF.Min(2 * MathF.PI / ring.Count, Spread * Pitch * scale / Desks(k, scale));
+                var angle = Bearing + ((j - ((ring.Count - 1) / 2f)) * step);
+                var sign = slots.Any(x => x.Path == PenKey(key)) ? $"{PenKey(key)}-{k}" : PenKey(key); // a workspace going on to another ring
+                slots.Add(session is null ? new(sign, k, angle, null, title) : new(Key(session), k, angle, session, null));
+            }
+        }
+
+        (tower, towerRevision) = (new(scale, rings.Count, slots), layoutRevision);
+        return tower;
+    }
+
+    // The groups' slots ring by ring at scale s, or null when they do not all fit; force puts what is left on the last.
+    private static List<List<(OfficeSession? Session, string Key, string? Title)>>? Pack(
+        List<(string Key, string Title, List<OfficeSession> Members)> groups, float s, bool force = false)
+    {
+        var rings = new List<List<(OfficeSession?, string, string?)>> { new() };
+        int Room() => Capacity(rings.Count - 1, s) - rings[^1].Count;
+        foreach (var (key, title, members) in groups)
+        {
+            var next = 0;
+            while (next < members.Count)
+            {
+                if (Room() < 2) // a sign and at least one station
+                {
+                    if (Capacity(rings.Count, s) >= 2) rings.Add([]);
+                    else if (!force) return null;
+                }
+
+                rings[^1].Add((null, key, title));
+                var last = Capacity(rings.Count, s) < 2;
+                while (next < members.Count && (Room() > 0 || (force && last))) rings[^1].Add((members[next++], key, null));
+            }
+        }
+
+        return rings;
     }
 
     public void Pose(double seconds, IDictionary<string, Pose> poses)
@@ -138,6 +229,7 @@ public sealed class OfficeModule : IOfficeModule
         origami.Poll(seconds);
         atelier.Pose(seconds, poses);
         origami.Pose(seconds, poses);
+        if (!state.Flat && state.Sessions.Count > 0) Spin(seconds, poses);
         var t = (float)seconds;
         foreach (var s in Kept(state))
         {
@@ -193,10 +285,37 @@ public sealed class OfficeModule : IOfficeModule
         }
     }
 
+    // Each ring turned about the tower's axis by its own angle, advanced with the time unless the selected robot is on it:
+    // a slot's pose is its placement's turn about the axis, written in its own frame.
+    private void Spin(double seconds, IDictionary<string, Pose> poses)
+    {
+        var layout = Tower();
+        var dt = double.IsNaN(spun) ? 0 : Math.Clamp(seconds - spun, 0, 0.25);
+        spun = seconds;
+        var held = layout.Slots.Where(x => x.Session is { } s && s.Id == state.Selected).Select(x => x.Ring).ToHashSet();
+        for (var k = 0; k < layout.Rings; k++)
+        {
+            var a = spins.GetValueOrDefault(k);
+            spins[k] = held.Contains(k) ? a : (a + (dt * 2 * Math.PI / Turn)) % (2 * Math.PI);
+        }
+
+        var axis = new SN.Vector3(Cx, 0f, Cz);
+        foreach (var slot in layout.Slots)
+        {
+            var a = (float)spins[slot.Ring];
+            var place = SlotPlace(slot, layout.Scale);
+            if (a == 0 || !SN.Matrix4x4.Invert(place, out var inverse)) continue;
+            var about = SN.Matrix4x4.CreateTranslation(-axis) * SN.Matrix4x4.CreateRotationY(a) * SN.Matrix4x4.CreateTranslation(axis);
+            poses[slot.Path] = new(place * about * inverse);
+        }
+    }
+
     public void Dispose()
     {
         initialized = false;
         state = new("en", false, []);
+        tower = null;
+        spins.Clear();
     }
 
     private void Ready()
@@ -250,13 +369,41 @@ public sealed class OfficeModule : IOfficeModule
     // The library. Sizes in metres; materials: 0 matte, 1 enamel, 2 aluminium, 3 steel, 4 rubber, 5 glass.
     private static readonly WidgetId Block = new("block", 1), MacMini = new("mac-mini", 1), Torso = new("torso", 1), Head = new("head", 1),
         Arm = new("arm", 1), Robot = new("robot", 1), Desk = new("desk", 1), Plate = new("plate", 1), Station = new("station", 1),
-        Board = new("board", 1), Row = new("row", 1), Mark = new("mark", 1), Pen = new("pen", 1);
+        Board = new("board", 1), Row = new("row", 1), Mark = new("mark", 1), Tier = new("tier", 1), Sign = new("sign", 1);
 
     private static readonly SN.Vector3 Steel = new(0.16f, 0.165f, 0.17f), Dark = new(0.04f, 0.04f, 0.045f), Aluminium = new(0.6f, 0.61f, 0.64f),
         Shell = new(0.7f, 0.68f, 0.62f), Orange = new(0.78f, 0.27f, 0.05f), Visor = new(0.012f, 0.014f, 0.018f), Wood = new(0.36f, 0.24f, 0.14f),
         Pale = new(0.84f, 0.86f, 0.9f), Unlit = new(0.03f, 0.03f, 0.035f);
 
     private static Dictionary<string, WidgetValue> Size(float w, float h, float d) => new() { ["w"] = w, ["h"] = h, ["d"] = d };
+
+    // A drum about the vertical through its origin, standing on y = 0: its side in two bands (concrete, then steel for
+    // its last Band), its top a disc; each triangle wound counter-clockwise seen from outside.
+    private static List<ModuleTriangle> Drum(float r, float h)
+    {
+        const int Sides = 72;
+        var band = Math.Min(0.015f, h / 3);
+        SN.Vector3 concrete = new(0.15f, 0.15f, 0.155f), top = new(0.24f, 0.235f, 0.23f);
+        var triangles = new List<ModuleTriangle>(Sides * 5);
+        SN.Vector3 At(int i, float y) => new(r * MathF.Sin(2 * MathF.PI * i / Sides), y, r * MathF.Cos(2 * MathF.PI * i / Sides));
+        SN.Vector3 Out(int i) => new(MathF.Sin(2 * MathF.PI * i / Sides), 0f, MathF.Cos(2 * MathF.PI * i / Sides));
+        void Quad(int i, float y0, float y1, SN.Vector3 color)
+        {
+            ModuleVertex V(int j, float y) => new(At(j, y), Out(j), color);
+            triangles.Add(new(V(i, y0), V(i + 1, y0), V(i + 1, y1)));
+            triangles.Add(new(V(i, y0), V(i + 1, y1), V(i, y1)));
+        }
+
+        for (var i = 0; i < Sides; i++)
+        {
+            Quad(i, 0f, h - band, concrete);
+            Quad(i, h - band, h, Steel);
+            ModuleVertex T(SN.Vector3 p) => new(p, SN.Vector3.UnitY, top);
+            triangles.Add(new(T(new(0f, h, 0f)), T(At(i, h)), T(At(i + 1, h))));
+        }
+
+        return triangles;
+    }
     private static UsePiece Lamp(string name, SN.Vector3 at, float w, float h, float d) => new(name, Block, SN.Matrix4x4.CreateTranslation(at), Size(w, h, d));
     private static BoxPiece B(float x, float y, float z, float w, float h, float d, SN.Vector3 color, uint material) => new(new(x, y, z), new(w, h, d), color, material);
     private static WidgetParam Metres(string name, double fallback) => new(name, fallback, 0.001, 2);
@@ -354,23 +501,21 @@ public sealed class OfficeModule : IOfficeModule
                 new UsePiece("b", Block, SN.Matrix4x4.CreateRotationY(MathF.PI / 4), Size(0.026f, 0.026f, 0.026f)),
             ])),
 
-        // A workspace's enclosure, centred: low rails round w by d metres, a dark floor, and its name on a sign at the front.
-        // As small as the layout makes it when many workspaces share the depth (a station's margins at a third of full size
-        // or less), else the scene refuses the whole office and keeps the tree it showed before.
-        // The sign stands just inside the front rail, at the stations' scale s, and never wider than the rails.
-        new(Pen, [new("w", 1.0, 0.02, 4), new("d", 1.0, 0.02, 4), new("s", 1.0, 0.02, 1), Text("title")],
+        // A step of the tower about its axis: a drum r metres in radius and h high, its top lighter than its side, a steel
+        // band round its rim. The rings of stations stand on the steps.
+        new(Tier, [new("r", 0.5, 0.02, 2), new("h", 0.1, 0.005, 3)],
+            a => new([new SurfacePiece(Drum((float)a.Number("r"), (float)a.Number("h")))])),
+
+        // A workspace's sign in its ring, facing out: a dark board on a post, the workspace's name on it, as wide as a desk.
+        new(Sign, [Text("title")],
             a =>
             {
-                var (w, d, s) = ((float)a.Number("w"), (float)a.Number("d"), (float)a.Number("s"));
                 var title = a.Text("title");
-                var wide = Math.Max(0.01f, Math.Min(Math.Min(0.42f, 0.02f * title.Length) * s, w - (0.08f * s) - 0.016f));
-                var (x, y, z) = (-w / 2 + 0.008f + (0.02f * s) + (wide / 2) + (0.02f * s), 0.04f + (0.035f * s), (d / 2) - 0.016f); // its foot above the rail
+                var wide = Math.Min(0.27f, 0.017f * title.Length);
                 return new([
-                    B(0, 0.002f, 0, w, 0.004f, d, new(0.07f, 0.075f, 0.08f), 0),
-                    B(0, 0.02f, d / 2, w, 0.03f, 0.016f, Steel, 3), B(0, 0.02f, -d / 2, w, 0.03f, 0.016f, Steel, 3),
-                    B(-w / 2, 0.02f, 0, 0.016f, 0.03f, d, Steel, 3), B(w / 2, 0.02f, 0, 0.016f, 0.03f, d, Steel, 3),
-                    B(x, y, z, wide + (0.04f * s), 0.07f * s, 0.008f, Dark, 3),
-                    new TextPiece(title, new(x, y, z + 0.006f), wide, Pale),
+                    B(0, 0.12f, 0, 0.025f, 0.24f, 0.025f, Steel, 3), B(0, 0.005f, 0, 0.14f, 0.01f, 0.1f, Steel, 3),
+                    B(0, 0.3f, 0, 0.3f, 0.13f, 0.012f, Dark, 3), B(0, 0.369f, 0, 0.3f, 0.008f, 0.014f, Orange, 1),
+                    new TextPiece(title, new(0f, 0.3f, 0.0075f), Math.Max(0.02f, wide), Pale),
                 ]);
             }),
 

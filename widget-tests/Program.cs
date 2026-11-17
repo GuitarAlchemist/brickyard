@@ -319,10 +319,9 @@ static void Office(Action<bool, string> check, string image)
     check(crowd.Valid && office.Revision != revision, $"24 sessions still fit ({crowd.Instances} instances)");
     office.Update(new("en", false, [.. Enumerable.Range(1, 9).Select(i => S(i, OfficeActivity.Working) with { WorkspaceId = $"ws-{i}", WorkspaceTitle = $"w{i}", Started = i })]));
     var spread = Widgets.Expand(office.Scene());
-    check(spread.Valid, $"9 sessions in 9 workspaces still fit, every enclosure within its widget's sizes{string.Concat(spread.Problems.Take(2).Select(p => "; " + p))}");
-    var back = spread.Roots.Where(r => r.Path.StartsWith("w-")).Min(r => r.Local.Translation.Z + All([r]).SelectMany(i => i.Boxes).Min(b => b.Centre.Z - (b.Size.Z / 2)));
-    var station = spread.Roots.Where(r => r.Path.StartsWith("s-")).Max(r => r.Local.M11);
-    check(back > -3.1f && station > 0.45f, $"they stay 0.2 m clear of the bricks (back at {back:F2} m), their stations near half size, the depth spent on them ({station:F2})");
+    check(spread.Valid, $"9 sessions in 9 workspaces still fit, every step and sign within its widget's sizes{string.Concat(spread.Problems.Take(2).Select(p => "; " + p))}");
+    var station = spread.Roots.Where(r => r.Path.StartsWith("s-")).Max(r => new Vector3(r.Local.M11, r.Local.M12, r.Local.M13).Length());
+    check(Clear(spread) && station > 0.6f, $"the tower stays clear of the bricks and of Delta, its stations near full size ({station:F2})");
     // Many sessions: a bounded office, the selected session and the latest started shown, the rest counted, never refused.
     foreach (var n in new[] { 56, 57, 60, 100 })
     {
@@ -355,34 +354,44 @@ static void Office(Action<bool, string> check, string image)
     check(Widgets.Expand(office.Scene()).Valid, "an office without sessions still shows its empty desk");
 }
 
-// The aisles between enclosures and their signs, from 3 to 48 workspaces with long titles: footprints apart, a useful
-// aisle up to 12, each sign within its rails, the office clear of the bricks.
+// The tower's rings, from 3 to 48 workspaces with long titles and from 1 to 48 sessions in one: a sign per workspace,
+// no two slots of a ring closer than a desk's width at their scale, each ring standing on its step, the tower clear of
+// the bricks and of Delta and never taller than the hall's view of it.
 static void Aisles(Action<bool, string> check, string image)
 {
     using var session = new WidgetModuleSession<IOfficeModule>(image, "AgentOffice.Module", "Delta.AgentOffice.OfficeModule", "agent-office");
     var office = session.Module;
-    foreach (var n in new[] { 3, 6, 9, 12, 24, 48 })
+    foreach (var (n, apart) in new[] { (3, true), (6, true), (9, true), (12, true), (24, true), (48, true), (1, false), (11, false), (24, false), (48, false) })
     {
-        office.Update(new("en", false, [.. Enumerable.Range(1, n).Select(i => new OfficeSession($"{i:x8}-aaaa", $"s{i}", OfficeActivity.Idle, 1, $"ws-{i}", $"Workspace {i} with a long forty-two char name", i))]));
+        office.Update(new("en", false, [.. Enumerable.Range(1, n).Select(i => new OfficeSession($"{i:x8}-aaaa", $"s{i}", OfficeActivity.Idle, 1, apart ? $"ws-{i}" : "ws", $"Workspace {i} with a long forty-two char name", i))]));
         var tree = Widgets.Expand(office.Scene());
-        var rects = new List<(Vector2 Min, Vector2 Max)>();
-        var inside = true;
-        foreach (var pen in tree.Roots.Where(r => r.Path.StartsWith("w-")))
-        {
-            var at = pen.Local.Translation;
-            var boxes = All([pen]).SelectMany(i => i.Boxes).ToList();
-            var half = boxes.First(b => b.Size.Y < 0.005f).Size.X / 2; // the floor
-            inside &= boxes.All(b => MathF.Abs(b.Centre.X) + (b.Size.X / 2) <= half + 0.0085f);
-            rects.Add((new(at.X + boxes.Min(b => b.Centre.X - (b.Size.X / 2)), at.Z + boxes.Min(b => b.Centre.Z - (b.Size.Z / 2))),
-                new(at.X + boxes.Max(b => b.Centre.X + (b.Size.X / 2)), at.Z + boxes.Max(b => b.Centre.Z + (b.Size.Z / 2)))));
-        }
-
-        var gap = rects.SelectMany((a, i) => rects.Skip(i + 1).Select(b => Math.Max(Math.Max(b.Min.X - a.Max.X, a.Min.X - b.Max.X), Math.Max(b.Min.Y - a.Max.Y, a.Min.Y - b.Max.Y)))).Min();
-        var back = rects.Min(r => r.Min.Y);
-        var want = n <= 9 ? 0.15f : n <= 12 ? 0.12f : 0.005f;
-        check(tree.Valid && rects.Count == n && gap >= want && inside && back > -3.1f,
-            $"{n} workspaces: enclosures {gap:F3} m apart (at least {want}), every sign within its rails ({inside}), the back at {back:F2} m");
+        var slots = tree.Roots.Where(r => r.Path.StartsWith("s-") || r.Path.StartsWith("w-")).ToList();
+        var scale = slots.Max(r => new Vector3(r.Local.M11, r.Local.M12, r.Local.M13).Length());
+        var closest = slots.SelectMany((a, i) => slots.Skip(i + 1).Where(b => MathF.Abs(a.Local.M42 - b.Local.M42) < 0.01f)
+            .Select(b => Vector2.Distance(new(a.Local.M41, a.Local.M43), new(b.Local.M41, b.Local.M43)))).DefaultIfEmpty(9f).Min();
+        var signs = tree.Roots.Count(r => r.Path.StartsWith("w-"));
+        var steps = tree.Roots.Where(r => r.Path.StartsWith("tier-")).Select(r => All([r]).SelectMany(i => i.Surfaces).SelectMany(s => s.Triangles).Max(t => t.A.Position.Y)).ToList();
+        var standing = slots.All(r => steps.Any(h => MathF.Abs(MathF.Max(0.02f, h) - r.Local.M42) < 0.005f || (r.Local.M42 < 0.025f && h < 0.025f)));
+        var top = slots.Max(r => r.Local.M42) + (0.8f * scale);
+        var sparse = n > 1 || closest < 0.6f; // one session and its sign: side by side in an arc, not across the ring
+        check(tree.Valid && signs >= (apart ? n : 1) && closest >= 0.3f * scale && standing && Clear(tree) && top < 2.0f && sparse,
+            $"{n} sessions in {(apart ? "a workspace each" : "one workspace")}: {signs} signs, slots {closest:F3} m apart at scale {scale:F2}, {steps.Count} steps, each ring on its own ({standing}), the top at {top:F2} m");
     }
+}
+
+// The tower's footprint on the floor, its axis at (-1.35, -0.15) and 0.78 m in radius at most: clear of the bricks'
+// pallet and of Delta's tracks (scene/FreeCamera.cs's obstacles).
+static bool Clear(WidgetTree tree)
+{
+    var points = tree.Roots.Where(i => i.Path.StartsWith("s-") || i.Path.StartsWith("w-")).Select(i => new Vector2(i.Local.M41, i.Local.M43)).ToList();
+    var radius = tree.Roots.Where(r => r.Path.StartsWith("tier-")).SelectMany(r => All([r]).SelectMany(i => i.Surfaces).SelectMany(s => s.Triangles))
+        .Max(t => new Vector2(t.A.Position.X, t.A.Position.Z).Length());
+    var axis = new Vector2(-1.35f, -0.15f);
+    bool Out(Vector2 p, Vector2 centre, Vector2 half) => MathF.Abs(p.X - centre.X) > half.X || MathF.Abs(p.Y - centre.Y) > half.Y;
+    // The drum's edge, sampled: outside the pallet (-2.1, -1.5) ± (0.5, 0.4) and Delta (0, 0) ± (0.42, 0.3).
+    var edge = Enumerable.Range(0, 72).Select(i => axis + (radius * new Vector2(MathF.Sin(i * MathF.PI / 36), MathF.Cos(i * MathF.PI / 36))));
+    return radius <= 0.781f && points.All(p => Vector2.Distance(p, axis) <= radius)
+        && edge.All(p => Out(p, new(-2.1f, -1.5f), new(0.5f, 0.4f)) && Out(p, Vector2.Zero, new(0.42f, 0.3f)));
 }
 
 // Readable names, an enclosure per workspace, stable identities and the selection's mark, on the real module.
@@ -404,28 +413,37 @@ static void Enclosures(Action<bool, string> check, string image)
     check(Plate("aaaa1111") != Plate("bbbb2222") && Plate("aaaa1111").StartsWith("ix") && Plate("bbbb2222").StartsWith("ix") && Plate("cccc3333") == "gaia",
         $"two sessions with one name keep distinct plates ({Plate("aaaa1111")}, {Plate("bbbb2222")}); a unique name stays as it is");
 
-    // An enclosure per workspace, the sessions outside wmux in one of their own; each station inside its own, none overlapping.
-    var pens = tree.Roots.Where(r => r.Path.StartsWith("w-")).ToList();
-    (Vector2 Min, Vector2 Max) Rect(WidgetInstance pen)
-    {
-        var at = pen.Local.Translation;
-        var boxes = All([pen]).SelectMany(i => i.Boxes).ToList();
-        var min = new Vector2(at.X + boxes.Min(b => b.Centre.X - (b.Size.X / 2)), at.Z + boxes.Min(b => b.Centre.Z - (b.Size.Z / 2)));
-        var max = new Vector2(at.X + boxes.Max(b => b.Centre.X + (b.Size.X / 2)), at.Z + boxes.Max(b => b.Centre.Z + (b.Size.Z / 2)));
-        return (min, max);
-    }
-
-    bool Inside(Vector3 p, (Vector2 Min, Vector2 Max) r) => p.X > r.Min.X && p.X < r.Max.X && p.Z > r.Min.Y && p.Z < r.Max.Y;
-    bool Apart((Vector2 Min, Vector2 Max) a, (Vector2 Min, Vector2 Max) b) => a.Max.X <= b.Min.X || b.Max.X <= a.Min.X || a.Max.Y <= b.Min.Y || b.Max.Y <= a.Min.Y;
-    var rects = pens.ToDictionary(p => p.Path, Rect);
+    // A sign per workspace, the sessions outside wmux after one of their own; round the ring from the first slot, each
+    // workspace's sign then its stations, the workspaces in the order their sessions started, outside wmux last.
+    var axis = new Vector2(-1.35f, -0.15f);
+    float Turned(WidgetInstance r) => ((MathF.Atan2(r.Local.M41 - axis.X, r.Local.M43 - axis.Y) - MathF.Atan2(0.4f, 1.9f)) + (5 * MathF.PI)) % (2 * MathF.PI) - MathF.PI; // from the view's side, -π to π
+    var round = tree.Roots.Where(r => r.Path.StartsWith("s-") || r.Path.StartsWith("w-")).OrderBy(Turned).Select(r => r.Path.Replace("s-", "")).ToList();
+    List<string> expected = ["w-ws1", "aaaa1111", "bbbb2222", "cccc3333", "w-ws2", "dddd4444", "eeee5555", "w-outside", "ffff6666"];
+    check(round.SequenceEqual(expected), $"round the ring, each workspace's sign then its stations, outside wmux last ({string.Join(" ", round)})");
+    var arc = tree.Roots.Where(r => r.Path.StartsWith("s-") || r.Path.StartsWith("w-")).Select(Turned).ToList();
+    check(MathF.Abs(arc.Max() + arc.Min()) < 0.01f, $"the ring's slots are centred on the view's side ({arc.Min():F2} to {arc.Max():F2} rad)");
+    var signs = tree.Roots.Where(r => r.Path.StartsWith("w-")).ToList();
+    check(signs.All(p => All([p]).Any(i => i.Text.Count > 0)), "each sign carries its workspace's name");
     var homes = new Dictionary<string, string> { ["aaaa1111"] = "w-ws1", ["bbbb2222"] = "w-ws1", ["cccc3333"] = "w-ws1", ["dddd4444"] = "w-ws2", ["eeee5555"] = "w-ws2", ["ffff6666"] = "w-outside" };
-    var housed = homes.All(h => rects.ContainsKey(h.Value) && tree.Roots.FirstOrDefault(r => r.Path == "s-" + h.Key) is { } st && Inside(st.Local.Translation, rects[h.Value]));
-    var list = rects.Values.ToList();
-    var apart = list.SelectMany((a, i) => list.Skip(i + 1).Select(b => Apart(a, b))).All(x => x);
-    check(pens.Count == 3 && housed && apart, $"an enclosure per workspace and one for the sessions outside wmux, each station in its own, none overlapping ({pens.Count})");
-    var gap = list.SelectMany((a, i) => list.Skip(i + 1).Select(b => Math.Max(Math.Max(b.Min.X - a.Max.X, a.Min.X - b.Max.X), Math.Max(b.Min.Y - a.Max.Y, a.Min.Y - b.Max.Y)))).Min();
-    check(gap >= 0.15f, $"the enclosures stand a little apart, 0.15 m at least between their rails and signs ({gap:F3} m)");
-    check(pens.All(p => All([p]).Any(i => i.Text.Count > 0)), "each enclosure carries its workspace's name");
+
+    // The rings turn: a slot's pose turns it about the axis, keeping its distance; the selected robot's ring holds still.
+    var spun = new Dictionary<string, Pose>();
+    office.Pose(10.0, spun);
+    spun.Clear();
+    office.Pose(40.0, spun); // never more than a quarter second at a time: two frames 30 s apart turn by a frame's worth
+    for (var t = 40.0; t < 70.0; t += 0.1) { spun.Clear(); office.Pose(t, spun); }
+    var slot = tree.Roots.First(r => r.Path == "s-aaaa1111");
+    var moved = (spun.TryGetValue(slot.Path, out var p1) ? p1.Transform : Matrix4x4.Identity) * slot.Local;
+    var turned = MathF.Abs(Turned(slot) - (((MathF.Atan2(moved.M41 - axis.X, moved.M43 - axis.Y) - MathF.Atan2(0.4f, 1.9f) + (5 * MathF.PI)) % (2 * MathF.PI)) - MathF.PI));
+    var kept = MathF.Abs(Vector2.Distance(new(moved.M41, moved.M43), axis) - Vector2.Distance(new(slot.Local.M41, slot.Local.M43), axis));
+    check(turned is > 1.1f and < 1.4f && kept < 1e-4f, $"in 30 s a ring turns a fifth of a turn about the tower's axis ({turned:F3} rad), each slot at its distance");
+    office.Update(new("fr", false, sessions, "aaaa1111"));
+    spun.Clear();
+    office.Pose(70.1, spun);
+    var held = spun[slot.Path].Transform;
+    for (var t = 70.2; t < 75.0; t += 0.1) { spun.Clear(); office.Pose(t, spun); }
+    check(spun[slot.Path].Transform == held, "the ring of the selected robot holds still, so that a second click finds it where it was");
+    office.Update(new("fr", false, sessions));
 
     // A refresh in another order, a workspace renamed: the same paths, the stations where they were.
     var before = tree.Roots.ToDictionary(r => r.Path, r => r.Local.Translation);

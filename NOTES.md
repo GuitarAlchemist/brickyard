@@ -2031,6 +2031,25 @@ be read: `LearnHost` reads only spareilleux.github.io/learn (HTTPS, no cookie, a
   « reload 1 », same pid, the F# course still open on the book after the reload (peeks before and after).
   `LearnLectern.SelfTest` covers the reader's extraction and pages, the host's limits, and a missing mod falling back.
 
+## The agents' office as a round tower (2026-11-16)
+
+The author asked: « peut-on avoir une meilleure topologie pour les petits robots (Tour circulaire, etc..) au lieu d'une
+ligne ». The office module (`modules/AgentOffice/OfficeModule.cs`) places the stations in rings about an axis at
+(-1.35, -0.15), between the bricks and Delta, 0.78 m in radius at most. Each robot faces out, and each wmux workspace's
+sign comes before its stations (the sessions outside wmux last). A ring that is full goes on to the next, a step
+higher (0.42 m at full size) and a station's depth further in. When the steps run out before the core, everything
+shrinks, down to 0.12 of full size, so the tower grows a storey as sessions come. A ring with room to spare keeps its
+slots in one arc facing the office's view (key 2). Each ring turns once in 150 s, and a ring holding the selected
+robot stops, so a double click finds it where it was. The steps are drums made of module triangles; a tower of more
+than one storey has a spire on its axis. Flat quality keeps the board.
+
+- Checks (`check-widgets.ps1`, widget-tests `Aisles`/`Enclosures`): 3 to 48 workspaces and 1 to 48 sessions in one.
+  Each case gets a sign per workspace and slots a desk's width apart at their scale. Each ring stands on its step, and
+  the drum stays clear of the pallet and of Delta's tracks, never above 2 m. The ring order is checked, along with
+  30 s of turning (a fifth of a turn, each slot at its distance) and a held ring under a selection.
+- Hidden renders, `--demo` (6 sessions, 2 workspaces) give one ring. A throwaway build with 16 demo sessions in 4
+  workspaces gives two storeys and the spire.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
