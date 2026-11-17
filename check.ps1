@@ -62,7 +62,26 @@ Step 'widgets and office' { & (Join-Path $root 'check-widgets.ps1') }
 # made-up command lines, in the Windows PowerShell 5.1 users run it in.
 Step 'ears flag check' { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'check-ears-flag.ps1') -SelfTest }
 
+# The telemetry panel's producer (Go) and its page logic that needs no browser (contract, history, feed). The browser
+# check, tools/telemetry/web/browser/check.mjs, needs a Chromium and is run by hand.
+Push-Location (Join-Path $root 'tools\telemetry')
+try {
+    Step 'telemetry gofmt' {
+        $unformatted = gofmt -l .
+        if ($unformatted) {
+            "gofmt lists: $unformatted"
+            $global:LASTEXITCODE = 1
+        }
+    }
+    Step 'telemetry go vet' { go vet ./... }
+    Step 'telemetry go test' { go test ./... }
+    Push-Location web
+    try { Step 'telemetry page logic' { node --test } }
+    finally { Pop-Location }
+}
+finally { Pop-Location }
+
 # dev-deploy.ps1 keeps the live window where it runs unless asked to move it, on made-up configs, building nothing.
 Step 'deploy guard' { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'check-deploy-guard.ps1') }
 
-'CHECK ok: plugin, brain, remote, scene, widgets, the ears flag check and the deploy guard'
+'CHECK ok: plugin, brain, remote, scene, widgets, telemetry, the ears flag check and the deploy guard'

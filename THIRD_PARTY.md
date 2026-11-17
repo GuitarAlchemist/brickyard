@@ -67,6 +67,13 @@ NASA's endorsement. `tools/textures` (`-globes only` for the globe alone) downlo
 two halves, into `%LOCALAPPDATA%\delta\materials\globes\earth`, with `globe.json` holding its source, its credit and
 the download's SHA-256; neither this repository nor the release holds it.
 
+## In this repository, outside the release
+
+The telemetry panel (`tools/telemetry`) bundles Lit 3.3.3 (BSD-3-Clause, Google LLC) into
+`tools/telemetry/web/build/panel.js`, with Lit's licence comments kept at the end of that file. esbuild 0.28.2 (MIT)
+builds the bundle and is not part of it. Both are pinned in `tools/telemetry/web/package-lock.json`; neither is in the
+release.
+
 ## Ideas, not code
 
 The agents' office (`modules/AgentOffice`) takes its idea from

@@ -1985,6 +1985,85 @@ and tags, at most `--dlss-g-frames` (1 by default, twice the frames; up to 3 on 
   *To verify*: Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show, and the
   cards over generated frames.
 
+## A read-only telemetry panel (2026-11-17)
+
+The request was Gaïa's mandate DELTA-BRICKYARD-TELEMETRY-R1, passed on by the author: « a small, useful observability
+panel for Delta and its BRUTAL scene, using Lit … Vega-Lite … if justified ».
+
+`tools/telemetry` (README there) has two parts:
+
+- a Go command, run by hand, that writes a snapshot of Delta from its own files;
+- a Lit page, opened as a file, that shows it.
+
+### What was examined
+
+- Brickyard at origin/main 2908914.
+- IX at origin/main dd6155bb, read with `git show`; the local checkout is 772 commits behind.
+- IX's `delta@1` probe (`go/ixctl/probe_delta.go`) tails the brain's journal into the ixctl hub. That hub is read
+  through `/v1`, behind a bearer that must not be read or handed to a page, and IX has no UI that consumes the probe.
+- IxForge is a vanilla JavaScript PWA owned by another writer, with no Lit and no Vega-Lite.
+- The brain's port refuses web pages on purpose (`localOnly`).
+- There were no open brickyard PRs, and no IX PR touches telemetry.
+
+### The path chosen
+
+The smallest authorised path is the journal the probe itself reads, plus `brain.pid` and `scene.log`:
+
+- read-only, and the same contract as `delta@1`, field for field;
+- no new port, server, service, credential or permission;
+- a snapshot file the page loads as a script.
+
+### Measured
+
+| Run | Measurement | Result |
+|---|---|---|
+| Producer on the live Delta | the brain | running, pid 50732, dev-v0.6.0-132-gbdf097b, since 08:39:24 |
+| | the scene's memory | 3718 MB working set, 4541 MB private, at 0 s of its run |
+| | the 50 latest utterances | 49 routed *ignored* by the triage; one kept, at 46 ms |
+| | their dates | 2026-11-10 |
+| | the cost of one snapshot | 11–18 ms, 1036 KiB read, 4 MB of heap |
+| Producer, 1 s period, over 40 s | CPU | 23 ms per second |
+| | memory | 15 MB working set, 22 MB private |
+| Snapshot of the live Delta | heard text, utterance id or pairing URL | none in it |
+| Page in headless Chromium 1243, 2 s period, over 60 s | update rate | 30 snapshots a minute |
+| | JS heap | 1.06 → 1.08 MB |
+| | DOM nodes | 675 → 636 |
+| | script time | 16–17 ms a minute |
+| | task time | 170–180 ms a minute |
+| | scripts left in `<head>` | none |
+| `browser/check.mjs`, three runs | its 14 checks | 14 passed each time |
+| Go tests and `node --test` | tests | all passed: 9 Go, 11 Node |
+
+The browser checks covered:
+
+- live, then stale after 4.9 s once the snapshots stopped;
+- disconnected once `snapshot.js` was gone;
+- live again 3.5 s after it came back;
+- a snapshot of another schema refused;
+- the connection history at 20;
+- no timer, script or global left after removal, and live again when added back;
+- no sideways scroll at 1280 × 800, nor at 390 × 844 in Chromium's device emulation.
+
+### Findings
+
+- In the last 256 KiB of the live journal, 2886 of the last 4000 lines were `pairing` events. Hence the reading
+  further back, up to 4 MiB.
+- Whether `pairing` should be written that often is the Remote's question, not changed here.
+- Most `heard` events in the window are ignored sounds at 40–57 ms of recognition. The median is therefore taken
+  over the kept utterances only, with the ignored ones counted apart.
+
+### Not done
+
+- **Vega-Lite.** A latency chart over 50 points, mostly from one day, adds nothing yet.
+- **Frame rate and GPU memory.** They stay *unavailable*: the live scene writes its frame rate only when it closes, and
+  nothing records GPU memory.
+- **Scene liveness.** It is not claimed: the log carries no wall clock.
+
+*To verify*:
+
+- the panel on a real phone; only emulation was used;
+- a long run of the producer beside the live Delta.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

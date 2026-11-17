@@ -1,0 +1,16 @@
+{
+  "name": "delta-telemetry-panel",
+  "private": true,
+  "type": "module",
+  "description": "Delta's read-only observability panel: a Lit element that shows the snapshots tools/telemetry writes.",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --format=iife --target=es2022 --minify --legal-comments=eof --outfile=build/panel.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "lit": "3.3.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

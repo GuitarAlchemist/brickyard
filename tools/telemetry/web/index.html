@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Delta — télémétrie</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; padding: 16px; background: #f6f4ef; }
+    @media (prefers-color-scheme: dark) { body { background: #171614; } }
+    main { max-width: 1100px; margin: 0 auto; }
+    noscript { font: 15px system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <main>
+    <delta-telemetry src="snapshot.js" every="2000"></delta-telemetry>
+    <noscript>Ce panneau a besoin de JavaScript.</noscript>
+  </main>
+  <script src="panel.js"></script>
+</body>
+</html>
