@@ -2190,6 +2190,32 @@ autres matériaux)". These were added to the Low shader, analytic and with no te
 *To verify*: the shader's cost on a quiet GPU. Steel's brushing reads best under a grazing light, and the counter's
 front faces away from the key light.
 
+## The hall under path tracing: shell and gallery traced (2026-11-17)
+
+The author's screenshot, with Max out (path tracing on), showed the globes and the lectern's book floating over a grey
+void: « des choses s'affichent mal ». Under path tracing, the composite covers everything the tracer did not see, and
+the tracer sees only what was drawn with `Draw` the frame before (RayScene). The hall's shell (walls, ceiling, windows,
+bulbs) and the whole gallery were drawn with `DrawUntraced`, so they vanished; only the glass and the book, drawn after
+the composite, were left.
+
+- The gallery is drawn with `Draw` now, so it is traced.
+- The shell is drawn with `DrawLetThrough`: it is traced with instance mask 0x02, while shadow rays and the path
+  tracer's bounces trace with mask 0x01 (`RayScene.ShadowMask`). The eye sees the walls, while the key light and the sky
+  still come in through them as they did when the shell was not traced. The Low shader's ambient occlusion still uses
+  0xFF, so the walls darken the corners.
+- The path tracer's `beam()` had only the pool around the robot, which fades out by 6 m; the gallery, at x ≈ -6, was
+  left in near-black. It now has the Low shader's pools as well: the pendant lamps, the knots' floor, the gallery and
+  the catalogue.
+- A gallery picture (Material.Pictured) glows from within under path tracing as under Low.
+- Checked in hidden 4K `--view 8 --path-tracing --dlss` renders: walls, shelves, globes and courses shown and lit;
+  path tracing GPU 9.1 ms p50 at 1920x1027 through Ray Reconstruction.
+
+The RTX panel's « offered, unused » rows (ray-traced shadows replaced by path tracing, SER, opacity micromaps, present
+wait, MSAA) are information, not errors.
+
+*To verify*: the globes under path tracing show each picture's mean colour, because the path tracer does not read the
+picture maps yet.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

@@ -130,7 +130,7 @@ internal sealed unsafe class RayScene : IDisposable
 
             var (p0, p1, p2) = before.TryGetValue((mesh, turn), out var was) ? was : (r0, r1, r2);
             infos[n] = new InstanceInfo(blas.Vertices, (uint)mesh.Count, glow, p0, p1, p2);
-            instances[n++] = new Instance(r0, r1, r2, blas.Address);
+            instances[n++] = new Instance(r0, r1, r2, blas.Address) { IndexAndMask = (unshadowing.Contains(mesh) ? 0x02u : 0xFFu) << 24 };
         }
 
         Instances = n;
@@ -160,13 +160,24 @@ internal sealed unsafe class RayScene : IDisposable
     public VkPipelineStageFlags ReadBy { get; set; } = VkPipelineStageFlags.FragmentShaderBit | VkPipelineStageFlags.ComputeShaderBit;
 
     // What a draw remembers for the next frame's structure: the mesh, its world rows and its glow.
-    public void Remember(Mesh mesh, in Push push)
+    // shadows false: the mesh is seen by every ray but the key light's shadow rays, which pass through it (mask 0x02,
+    // they trace 0x01): the hall's shell, which the key light comes in through.
+    public void Remember(Mesh mesh, in Push push, bool shadows = true)
     {
         if (Drawn.Count < MaxInstances)
         {
             Drawn.Add((mesh, push.Row0, push.Row1, push.Row2, push.Glow));
+            if (!shadows)
+            {
+                unshadowing.Add(mesh);
+            }
         }
     }
+
+    private readonly HashSet<Mesh> unshadowing = [];
+
+    // The mask a shadow ray traces: every instance but the shell's.
+    public const uint ShadowMask = 0x01u;
 
     public void Dispose()
     {

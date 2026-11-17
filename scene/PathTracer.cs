@@ -834,10 +834,26 @@ internal sealed unsafe class PathTracer : IDisposable
 
         // The lamps' reach: the Low lighting's pool around the robot and its dark above, here the shape of the key
         // and the fill's beams.
+        // The same pools as the Low shader's (Program.LowFragmentShader): the pendant lamps, the knots' floor, the
+        // gallery and the catalogue, which a path traced without them leaves in the dark.
+        float beamBox(vec2 p, vec2 extent) { vec2 q = abs(p) - extent; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
+
         float beam(vec3 p)
         {
             float pool = 1.0 - smoothstep(0.8, 6.0, length(p.xz - vec2(0.0, -0.3)));
-            float high = 1.0 - 0.6 * smoothstep(1.6, 4.5, p.y);
+            vec2 lamps[4] = vec2[](vec2(-3.2, -0.6), vec2(0.0, 1.6), vec2(3.0, -0.6), vec2(-3.2, 3.4));
+            for (int i = 0; i < 4; i++)
+            {
+                pool = max(pool, 0.7 * (1.0 - smoothstep(0.4, 3.4, length(p.xz - lamps[i]))) * (1.0 - smoothstep(3.6, 4.4, p.y)));
+            }
+
+            float knots = (1.0 - smoothstep(0.0, 0.8, beamBox(p.xz - vec2(5.075, -1.2), vec2(1.17, 2.1)))) * smoothstep(1.8, 2.0, p.y);
+            pool = max(pool, 0.9 * knots);
+            float gallery = (1.0 - smoothstep(0.0, 1.2, beamBox(p.xz - vec2(-5.7, 1.25), vec2(0.55, 4.65)))) * (1.0 - smoothstep(2.6, 3.4, p.y));
+            pool = max(pool, 0.8 * gallery);
+            float catalogue = (1.0 - smoothstep(0.0, 1.0, beamBox(p.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, p.y));
+            pool = max(pool, 0.8 * catalogue);
+            float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, p.y), knots);
             return (0.1 + 0.9 * pool) * high;
         }
 
@@ -857,14 +873,17 @@ internal sealed unsafe class PathTracer : IDisposable
         layout(location = 0) hitObjectAttributeNV vec2 hitBarycentrics;
         #endif
 
+        // A bounce (sort) passes the hall's shell as the shadow rays do (RayScene.ShadowMask): the eye sees the walls,
+        // while the sky still lights the hall as it did when the shell was not traced at all.
         bool hit(vec3 o, vec3 d, float tmax, float spread, bool sort, out Surface s)
         {
+            uint mask = sort ? 0x01u : 0xFFu;
             #ifdef SER
             // Traced into a hit object; a bounce's invocations are then sorted by the instance they hit, so that those
             // reading the same mesh, scans and material run together (the eye's rays are coherent already, and sorting
             // them cost more than it gave). No hit shader runs.
             hitObjectNV q;
-            hitObjectTraceRayNV(q, hallRays, gl_RayFlagsOpaqueEXT, 0xFFu, 0u, 0u, 0u, o, 0.0, d, tmax, 0);
+            hitObjectTraceRayNV(q, hallRays, gl_RayFlagsOpaqueEXT, mask, 0u, 0u, 0u, o, 0.0, d, tmax, 0);
             if (sort)
             {
                 uint hint = hitObjectIsHitNV(q) ? uint(hitObjectGetInstanceIdNV(q)) + 1u : 0u;
@@ -884,7 +903,7 @@ internal sealed unsafe class PathTracer : IDisposable
             mat4x3 toObject = hitObjectGetWorldToObjectNV(q);
             #else
             rayQueryEXT q;
-            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT, 0xFFu, o, 0.0, d, tmax);
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT, mask, o, 0.0, d, tmax);
             while (rayQueryProceedEXT(q))
             {
             }
@@ -940,6 +959,7 @@ internal sealed unsafe class PathTracer : IDisposable
                 // theirs, oiled.
                 s.alpha = material == 17u ? 0.5 : 0.3;
                 s.n = shading;
+                s.glow += material == 17u ? colour * 0.5 : vec3(0.0); // its light from within, as the Low shader's
             }
             else if (material >= 8u && t.options.x > 0.5)
             {
@@ -978,7 +998,7 @@ internal sealed unsafe class PathTracer : IDisposable
         bool blocked(vec3 o, vec3 d, float tmax)
         {
             rayQueryEXT q;
-            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, o, 0.0, d, tmax);
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, o, 0.0, d, tmax); // the lights come in through the shell (RayScene.ShadowMask)
             while (rayQueryProceedEXT(q))
             {
             }

@@ -249,7 +249,7 @@ internal static unsafe class Stage
         float reach(vec3 origin, vec3 dir, float tmax, bool any)
         {
             rayQueryEXT q;
-            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | (any ? gl_RayFlagsTerminateOnFirstHitEXT : 0u), 0xFFu, origin, 0.0, dir, tmax);
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | (any ? gl_RayFlagsTerminateOnFirstHitEXT : 0u), any ? 0x01u : 0xFFu, origin, 0.0, dir, tmax); // a shadow ray passes the shell (RayScene.ShadowMask)
             while (rayQueryProceedEXT(q))
             {
             }
@@ -3934,10 +3934,11 @@ internal static unsafe class Stage
                 // their fragments hidden behind it are never shaded (nor their rays traced).
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 // The shell after it, out of the traced structure: the key light still reaches the hall through it.
-                DrawUntraced(cb, layout, shell, new Push(SN.Matrix4x4.Identity, viewProj, default));
-                DrawUntraced(cb, layout, shellGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
-                DrawUntraced(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
-                hallGallery.Draw((mesh, glow) => DrawUntraced(cb, layout, mesh, new Push(SN.Matrix4x4.Identity, viewProj, glow)), viewProj, Words.Language == "fr");
+                DrawLetThrough(cb, layout, shell, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                DrawLetThrough(cb, layout, shellGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
+                DrawLetThrough(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
+                // The gallery is traced too: under path tracing, what the structure lacks the picture lacks.
+                hallGallery.Draw((mesh, glow) => Draw(cb, layout, mesh, new Push(SN.Matrix4x4.Identity, viewProj, glow)), viewProj, Words.Language == "fr");
 
                 // Path traced, the picture goes over what the meshes drew, whose depth stays for the screens after.
                 if (tracer is not null && pathTracing) tracer.Composite(cb, splashPipeline, splashLayout);
@@ -4777,7 +4778,15 @@ internal static unsafe class Stage
         DrawUntraced(cb, layout, mesh, push);
     }
 
-    // Drawn, but left out of the next frame's traced structure: it casts no traced shadow nor occlusion (HallShell).
+    // Drawn and traced, but passed by shadow rays: the hall's shell (HallShell) is seen by the path tracer and by the
+    // occlusion's rays, while the key light still comes in through it.
+    private static void DrawLetThrough(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
+    {
+        Rays?.Remember(mesh, push, shadows: false);
+        DrawUntraced(cb, layout, mesh, push);
+    }
+
+    // Drawn, but left out of the next frame's traced structure: it casts no traced shadow nor occlusion.
     private static void DrawUntraced(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
     {
         cb.PushConstants(layout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(Push)));
