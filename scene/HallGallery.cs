@@ -3,7 +3,9 @@ using System.Text.Json;
 using SN = System.Numerics;
 
 // The hall's gallery on its left wall: the learn site's courses face out on a bookcase, its demos on a wall of screens,
-// its artifacts in frames, each a click away from its page in the browser. Lego describes the furniture and where each
+// its artifacts in frames; on the back wall Streeling University's card catalogue, a drawer a department; and a lectern
+// whose open book reads a course or a department in the hall (LearnReader). A click on a course's book or on a drawer
+// opens it on the lectern; one on a demo or an artifact opens its page in the browser. Lego describes the furniture and where each
 // title goes (gallery/Blocks.fs, generated then validated); this draws it, letters the titles, colours the covers by
 // their group and answers clicks. What is shown comes from gallery.json: %LOCALAPPDATA%\delta\gallery.json when there
 // is one, else the copy beside the scene (gallery/gallery.json, the site's on 2026-11-16). Saving the file redraws the
@@ -13,24 +15,39 @@ internal sealed class HallGallery : IDisposable
 {
     internal sealed record Entry(string Title, string Url, string Group);
 
-    internal sealed record Content(Entry[] Courses, Entry[] Demos, Entry[] Artifacts, string From);
+    internal sealed record Content(Entry[] Courses, Entry[] Demos, Entry[] Artifacts, Entry[] Streeling, string From)
+    {
+        // Streeling's departments, in the catalogue's order, each with its modules (an entry's group is its department).
+        public List<(string Name, Entry[] Modules)> Departments { get; } =
+            [.. Streeling.GroupBy(e => e.Group).Select(g => (g.Key, g.ToArray()))];
+    }
 
     // What one gallery draws, made apart from the frame: the furniture in its materials, the glowing parts by their glow
     // (Push.Glow), the titles in English and in French (only the headings differ), and the slots a click opens.
     internal sealed record Built(Vertex[] Furniture, (SN.Vector4 Glow, Vertex[] Vertices)[] Glowing, Vertex[] English, Vertex[] French,
-        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, int Boxes, string From);
+        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, int Boxes, string From, Content Content, SN.Matrix4x4 Book);
+
+    // The lectern's book, in its own frame: the open pages' rectangle (left, top, right, bottom) at z 0, as the
+    // reader's picture is drawn (ScreenGpuRenderer), and how the desk slopes toward the reader.
+    internal static readonly SN.Vector4 BookRect = new(-0.36f, 0.234f, 0.36f, -0.234f);
+    private const float Slope = -MathF.PI / 6f;
 
     // The most a gallery.json may hold: its size, and what Lego's blocks take (gallery/Blocks.fs, galerie's bounds).
-    internal const int MaxBytes = 256 * 1024;
-    internal const int MaxCourses = 120, MaxDemos = 60, MaxArtifacts = 60;
+    internal const int MaxBytes = 512 * 1024;
+    internal const int MaxCourses = 120, MaxDemos = 60, MaxArtifacts = 60, MaxStreeling = 1000;
 
     // The picture lights' warm wash on the wall, which the Low shader adds (Stage.LowFragmentShader): along the wall at
     // this x and height, from the back of the gallery to its front.
     internal const string Wash = "vec3(-5.5, 2.45, clamp(vWorld.z, -3.3, 5.9))";
+    internal const string BackWash = "vec3(clamp(vWorld.x, -5.7, -3.8), 2.4, -2.85)";
 
     // What a walker cannot step into: the bookcase and the demos' counter stand on the floor along the wall
     // (FreeCamera.Obstacles), x from the wall to 0.38 m out and z from the back to the counter's end.
     internal static readonly (SN.Vector2 Centre, SN.Vector2 Half) Footprint = (new(-6.06f, 0.29f), new(0.19f, 3.64f));
+
+    // The card catalogue against the back wall, from 0.42 m off the left wall to x -3.69, and the lectern with its desk.
+    internal static readonly (SN.Vector2 Centre, SN.Vector2 Half) CatalogueFootprint = (new(-4.76f, -3.22f), new(1.08f, 0.24f));
+    internal static readonly (SN.Vector2 Centre, SN.Vector2 Half) LecternFootprint = (new(-4.75f, -1.0f), new(0.22f, 0.41f));
 
     public static string UserPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "gallery.json");
 
@@ -46,7 +63,12 @@ internal sealed class HallGallery : IDisposable
     private Shown? shown;
 
     private sealed record Shown(Mesh Furniture, (SN.Vector4 Glow, Mesh Mesh)[] Glowing, Mesh English, Mesh French,
-        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, (SN.Vector3 Min, SN.Vector3 Max) Box);
+        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, (SN.Vector3 Min, SN.Vector3 Max) Box, Content Content, SN.Matrix4x4 Book);
+
+    // What the gallery shows, and where the lectern's book lies (its frame, BookRect in it); none before the first build.
+    public Content? Shelved => shown?.Content;
+
+    public SN.Matrix4x4? Book => shown?.Book;
 
     public HallGallery(Func<Vertex[], Mesh> upload, int framesInFlight, string? path)
     {
@@ -153,7 +175,7 @@ internal sealed class HallGallery : IDisposable
         }
 
         shown = new Shown(meshes.Furniture, meshes.Glowing, meshes.English, meshes.French, built.Hits,
-            KnotFloor.Box([built.Furniture, built.English, built.French, .. built.Glowing.Select(g => g.Vertices)]));
+            KnotFloor.Box([built.Furniture, built.English, built.French, .. built.Glowing.Select(g => g.Vertices)]), built.Content, built.Book);
         Summary = $"{built.Hits.Length} slots, {built.Boxes} Lego boxes, {built.Furniture.Length + built.English.Length + built.Glowing.Sum(g => g.Vertices.Length)} vertices";
     }
 
@@ -173,14 +195,14 @@ internal sealed class HallGallery : IDisposable
         }
     }
 
-    // The page of the slot a click at x, y falls on, opened in the browser; false when it falls on none.
-    public bool Click(SN.Matrix4x4 viewProj, int width, int height, double x, double y)
-    {
-        if (shown is not { } s || WidgetPicking.Pick(s.Hits, viewProj, width, height, x, y) is not { } url)
-        {
-            return false;
-        }
+    // What the slot a click at x, y falls on does: "course:N" (the Nth course, read on the lectern), "department:N"
+    // (Streeling's Nth department, likewise) or "open:URL" (a page for the browser); null when it falls on none.
+    public string? Pick(SN.Matrix4x4 viewProj, int width, int height, double x, double y) =>
+        shown is { } s ? WidgetPicking.Pick(s.Hits, viewProj, width, height, x, y) : null;
 
+    // Opens url in the browser.
+    public static void Browse(string url)
+    {
         Console.WriteLine($"GALLERY opens {url}");
         try
         {
@@ -190,8 +212,35 @@ internal sealed class HallGallery : IDisposable
         {
             Console.Error.WriteLine($"scene: cannot open {url}: {e.Message}");
         }
+    }
 
-        return true;
+    // Where a click at x, y in the window falls on a rectangle (left, top, right, bottom) lying at z 0 in frame: u and v
+    // from its top left, 0 to 1 each, or null when it misses it or lies behind the eye.
+    internal static (float U, float V)? OnRect(SN.Matrix4x4 viewProj, SN.Matrix4x4 frame, SN.Vector4 rect, int width, int height, double x, double y)
+    {
+        if (width <= 0 || height <= 0 || !SN.Matrix4x4.Invert(viewProj, out var unproject) || !SN.Matrix4x4.Invert(frame, out var into))
+        {
+            return null;
+        }
+
+        var (nx, ny) = ((float)((2 * x / width) - 1), (float)((2 * y / height) - 1));
+        SN.Vector3 At(float z)
+        {
+            var p = SN.Vector4.Transform(new SN.Vector4(nx, ny, z, 1f), unproject);
+            return SN.Vector3.Transform(new SN.Vector3(p.X, p.Y, p.Z) / p.W, into);
+        }
+
+        var (near, far) = (At(0f), At(1f));
+        var dz = far.Z - near.Z;
+        if (MathF.Abs(dz) < 1e-7f)
+        {
+            return null;
+        }
+
+        var t = -near.Z / dz;
+        var q = near + ((far - near) * t);
+        var (u, v) = ((q.X - rect.X) / (rect.Z - rect.X), (q.Y - rect.Y) / (rect.W - rect.Y));
+        return t >= 0f && u is >= 0f and <= 1f && v is >= 0f and <= 1f ? (u, v) : null;
     }
 
     public void Dispose()
@@ -264,7 +313,7 @@ internal sealed class HallGallery : IDisposable
                 return [.. list.EnumerateArray().Select((e, i) => Checked(e, $"{name}[{i}]"))];
             }
 
-            return new Content(List("courses", MaxCourses), List("demos", MaxDemos), List("artifacts", MaxArtifacts), path);
+            return new Content(List("courses", MaxCourses), List("demos", MaxDemos), List("artifacts", MaxArtifacts), List("streeling", MaxStreeling), path);
         }
         catch (JsonException e)
         {
@@ -294,7 +343,8 @@ internal sealed class HallGallery : IDisposable
     // and on each slot's anchor its title, lettered and coloured, with the box a click on it hits.
     internal static Built Build(Content content)
     {
-        var described = Gallery.Blocks.describe(content.Courses.Length, content.Demos.Length, content.Artifacts.Length);
+        var departments = content.Departments;
+        var described = Gallery.Blocks.describe(content.Courses.Length, content.Demos.Length, content.Artifacts.Length, departments.Count);
         if (!described.Valid)
         {
             throw new InvalidDataException("Lego refused the gallery: " + string.Join("; ", described.Problems.Select(p => p.Message)));
@@ -334,8 +384,16 @@ internal sealed class HallGallery : IDisposable
         var french = new List<Vertex>();
         var hits = new List<(string, SN.Vector3, SN.Vector3)>();
         var groups = new List<string>();
-        var lists = new Dictionary<string, Entry[]> { ["cours"] = content.Courses, ["demos"] = content.Demos, ["artifacts"] = content.Artifacts };
-        var headings = new Dictionary<string, (string En, string Fr)> { ["cours"] = ("COURSES", "COURS"), ["demos"] = ("DEMOS", "DÉMOS"), ["artifacts"] = ("ARTIFACTS", "ARTIFACTS") };
+        var lists = new Dictionary<string, Entry[]>
+        {
+            ["cours"] = content.Courses, ["demos"] = content.Demos, ["artifacts"] = content.Artifacts,
+            ["streeling"] = [.. departments.Select(d => new Entry(d.Name, "", d.Modules.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)))],
+        };
+        var headings = new Dictionary<string, (string En, string Fr)>
+        {
+            ["cours"] = ("COURSES", "COURS"), ["demos"] = ("DEMOS", "DÉMOS"), ["artifacts"] = ("ARTIFACTS", "ARTIFACTS"),
+            ["streeling"] = ("STREELING UNIVERSITY", "UNIVERSITÉ STREELING"),
+        };
         foreach (var section in Gallery.Blocks.sections)
         {
             var entries = lists[section.Name];
@@ -360,7 +418,7 @@ internal sealed class HallGallery : IDisposable
                     (lo, hi) = (SN.Vector3.Min(lo, p), SN.Vector3.Max(hi, p));
                 }
 
-                hits.Add((entries[i].Url, lo, hi));
+                hits.Add((section.Name switch { "cours" => $"course:{i}", "streeling" => $"department:{i}", _ => $"open:{entries[i].Url}" }, lo, hi));
             }
 
             var title = anchors["titre"];
@@ -373,7 +431,21 @@ internal sealed class HallGallery : IDisposable
             }
         }
 
-        return new Built([.. furniture], [.. glowing.Select(g => (g.Key, g.Value.ToArray()))], [.. english], [.. french], [.. hits], scene.Boxes.Count, content.From);
+        // The lectern's sloping desk and the book's boards, under the pages the reader draws (LearnReader).
+        var book = SN.Matrix4x4.Identity;
+        if (nodes.TryGetValue("lutrin", out var lectern) && lectern.Anchors.FirstOrDefault(a => a.Item1 == "pupitre") is { Item2: var cap })
+        {
+            var desk = SN.Matrix4x4.CreateRotationX(Slope) * SN.Matrix4x4.CreateTranslation(0f, 0.24f, 0f) * cap;
+            local.Clear();
+            Boxes.Add(local, new SN.Vector3(0f, 0f, -0.012f), new SN.Vector3(0.8f, 0.54f, 0.024f), new Finish(new(0.11f, 0.07f, 0.04f), Material.Matte));
+            Boxes.Add(local, new SN.Vector3(0f, -0.285f, 0.01f), new SN.Vector3(0.8f, 0.03f, 0.03f), new Finish(new(0.11f, 0.07f, 0.04f), Material.Matte)); // the ledge the book rests on
+            Boxes.Add(local, new SN.Vector3(0f, 0f, 0.006f), new SN.Vector3(0.76f, 0.5f, 0.012f), new Finish(new(0.16f, 0.05f, 0.04f), Material.Enamel)); // the book's boards
+            Boxes.Add(local, new SN.Vector3(0f, 0f, 0.015f), new SN.Vector3(0.73f, 0.475f, 0.006f), new Finish(new(0.7f, 0.66f, 0.58f), Material.Matte)); // its page block
+            Place(local, desk, furniture);
+            book = SN.Matrix4x4.CreateTranslation(0f, 0f, 0.0185f) * desk;
+        }
+
+        return new Built([.. furniture], [.. glowing.Select(g => (g.Key, g.Value.ToArray()))], [.. english], [.. french], [.. hits], scene.Boxes.Count, content.From, content, book);
     }
 
     // The colours of the courses' covers and the artifacts' groups, in the order the groups come.
@@ -402,6 +474,13 @@ internal sealed class HallGallery : IDisposable
                 Boxes.Add(o, new SN.Vector3(0f, (h / 2f) - 0.03f, 0.0032f), new SN.Vector3(w - 0.06f, 0.003f, 0.0005f), new Finish(new(0.7f, 0.55f, 0.25f), Material.Steel));
                 Lines(o, entry.Title, 16, 4, 0.03f, 0.04f, 0.02f, w - 0.04f, 0.0035f, new SN.Vector3(0.92f, 0.88f, 0.78f));
                 Text(o, entry.Group, new SN.Vector3(0f, (-h / 2f) + 0.03f, 0.0035f), 0.017f, w - 0.05f, new SN.Vector3(0.72f, 0.66f, 0.55f), 28);
+                break;
+            case "streeling":
+                // A drawer's card in its brass holder: the department, and how many modules it files (the entry's group).
+                Boxes.Add(o, new SN.Vector3(0f, 0.025f, 0.001f), new SN.Vector3(0.25f, 0.115f, 0.002f), new Finish(new(0.5f, 0.37f, 0.16f), Material.Steel));
+                Boxes.Add(o, new SN.Vector3(0f, 0.025f, 0.0025f), new SN.Vector3(0.235f, 0.1f, 0.001f), new Finish(new(0.78f, 0.74f, 0.64f), Material.Matte));
+                Lines(o, entry.Title, 20, 2, 0.022f, 0.03f, 0.04f, 0.22f, 0.0031f, new SN.Vector3(0.1f, 0.08f, 0.06f));
+                Text(o, $"{entry.Group} modules", new SN.Vector3(0f, -0.005f, 0.0031f), 0.016f, 0.2f, new SN.Vector3(0.35f, 0.2f, 0.1f), 28);
                 break;
             case "demos":
                 Lines(o, entry.Title, 22, 3, 0.042f, 0.054f, 0f, w - 0.06f, 0.0015f, new SN.Vector3(0.92f, 0.96f, 1f));
@@ -527,26 +606,47 @@ internal sealed class HallGallery : IDisposable
     internal static void SelfTest(Action<bool, string> check, string lowShader)
     {
         var content = Load(ShippedPath);
-        check(content is { Courses.Length: 41, Demos.Length: 11, Artifacts.Length: 7 } && content.Courses.All(c => c.Url.StartsWith("https://spareilleux.github.io/learn/", StringComparison.Ordinal)),
-            "the shipped gallery holds the site's 41 courses, 11 demos and 7 artifacts, each course on the site");
+        check(content is { Courses.Length: 41, Demos.Length: 11, Artifacts.Length: 7, Streeling.Length: 482, Departments.Count: 22 }
+            && content.Courses.Concat(content.Streeling).All(c => c.Url.StartsWith(LearnReader.Site, StringComparison.Ordinal)),
+            "the shipped gallery holds the site's 41 courses, 11 demos, 7 artifacts and Streeling's 482 modules in 22 departments, each course and module on the site");
         var built = Build(content);
         var all = built.Furniture.Concat(built.English).Concat(built.French).Concat(built.Glowing.SelectMany(g => g.Vertices)).ToArray();
         check(all.All(v => float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z) && MathF.Abs(v.Normal.Length() - 1f) < 1e-3f), "the gallery's vertices are finite and its normals unit");
-        check(built.Hits.Length == 59 && built.Hits.All(h => h.Min.X >= HallShell.Left - 0.01f && h.Max.X <= HallShell.Left + 0.5f && h.Min.Z >= HallShell.Back && h.Max.Z <= HallShell.Front && h.Max.Y < 2.6f)
-            && built.Hits.Select(h => h.Click).Distinct().Count() == 59,
-            "each course, demo and artifact is a slot on the left wall, below the clerestory, each with its own link");
-        var (lo, hi) = (Footprint.Centre - Footprint.Half, Footprint.Centre + Footprint.Half);
-        check(built.Furniture.Where(v => v.Pos.Y < 1f).All(v => v.Pos.X >= lo.X - 0.01f && v.Pos.X <= hi.X + 0.01f && v.Pos.Z >= lo.Y - 0.01f && v.Pos.Z <= hi.Y + 0.01f)
-            && FreeCamera.Obstacles.Any(o => o.Centre == Footprint.Centre && o.Half == Footprint.Half),
-            "what stands on the floor lies within the gallery's footprint, which the walker keeps out of");
-        check(built.Glowing.Length == 2 && built.Glowing.Any(g => g.Glow.W >= 1f) && built.Glowing.Any(g => g.Glow.W < 1f) && lowShader.Contains(Wash, StringComparison.Ordinal),
+        var onLeft = built.Hits.Where(h => !h.Click.StartsWith("department:", StringComparison.Ordinal)).ToArray();
+        var drawers = built.Hits.Where(h => h.Click.StartsWith("department:", StringComparison.Ordinal)).ToArray();
+        check(onLeft.Length == 59 && onLeft.All(h => h.Min.X >= HallShell.Left - 0.01f && h.Max.X <= HallShell.Left + 0.5f && h.Min.Z >= HallShell.Back && h.Max.Z <= HallShell.Front && h.Max.Y < 2.6f)
+            && built.Hits.Select(h => h.Click).Distinct().Count() == 81 && onLeft.Count(h => h.Click.StartsWith("course:", StringComparison.Ordinal)) == 41,
+            "each course, demo and artifact is a slot on the left wall, below the clerestory, each its own; a course is read on the lectern");
+        check(drawers.Length == 22 && drawers.All(h => h.Min.Z >= HallShell.Back && h.Max.Z <= HallShell.Back + 0.5f && h.Min.X > HallShell.Left + 0.4f && h.Max.X < -3.65f && h.Max.Y < 2f),
+            "each Streeling department is a drawer of the catalogue on the back wall, clear of the bookcase and the pillar");
+        bool Within((SN.Vector2 Centre, SN.Vector2 Half) f, SN.Vector3 p) =>
+            p.X >= f.Centre.X - f.Half.X - 0.01f && p.X <= f.Centre.X + f.Half.X + 0.01f && p.Z >= f.Centre.Y - f.Half.Y - 0.01f && p.Z <= f.Centre.Y + f.Half.Y + 0.01f;
+        var footprints = new[] { Footprint, CatalogueFootprint, LecternFootprint };
+        check(built.Furniture.Where(v => v.Pos.Y < 1f).All(v => footprints.Any(f => Within(f, v.Pos)))
+            && footprints.All(f => FreeCamera.Obstacles.Any(o => o.Centre == f.Centre && o.Half == f.Half)),
+            "what stands on the floor lies within the gallery's footprints, which the walker keeps out of");
+        var bookCentre = SN.Vector3.Transform(SN.Vector3.Zero, built.Book);
+        var facing = SN.Vector3.Normalize(SN.Vector3.TransformNormal(SN.Vector3.UnitZ, built.Book));
+        var (eye, target) = FreeCamera.Views[^1];
+        check(Within(LecternFootprint, bookCentre) && bookCentre.Y is > 0.9f and < 1.25f && facing.X > 0.8f && facing.Y > 0.4f
+            && SN.Vector3.Distance(target, bookCentre) < 0.05f && SN.Vector3.Dot(SN.Vector3.Normalize(eye - bookCentre), facing) > 0.85f,
+            "the lectern's book lies over its foot, sloping toward the room, and the last view looks straight at it");
+        var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(0.75f, 16f / 9f, 0.1f, 40f);
+        var vp = SN.Matrix4x4.CreateLookAt(eye, target, SN.Vector3.UnitY) * projection;
+        var corner = SN.Vector3.Transform(new SN.Vector3(BookRect.X + (0.25f * (BookRect.Z - BookRect.X)), BookRect.Y + (0.75f * (BookRect.W - BookRect.Y)), 0f), built.Book);
+        var clip = SN.Vector4.Transform(new SN.Vector4(corner, 1f), vp);
+        var hitAt = OnRect(vp, built.Book, BookRect, 1600, 900, (clip.X / clip.W + 1f) * 800f, (clip.Y / clip.W + 1f) * 450f);
+        check(hitAt is { } uv && MathF.Abs(uv.U - 0.25f) < 0.01f && MathF.Abs(uv.V - 0.75f) < 0.01f && OnRect(vp, built.Book, BookRect, 1600, 900, 2, 2) is null,
+            "a click on the book is found on its pages, where it was drawn; one beside it misses");
+        check(built.Glowing.Length == 2 && built.Glowing.Any(g => g.Glow.W >= 1f) && built.Glowing.Any(g => g.Glow.W < 1f) && lowShader.Contains(Wash, StringComparison.Ordinal) && lowShader.Contains(BackWash, StringComparison.Ordinal),
             "the picture lights and the screens glow, and the Low shader washes the wall from the lights");
         check(built.English.Length > 50_000 && built.English.Length < 3_000_000 && built.French.Length != built.English.Length,
             $"the titles are lettered in a bounded number of vertices ({built.English.Length}), the headings in each language");
         check(Wrap("Spring Boot, Spring Cloud and Reactor for C# developers", 16, 4) is ["Spring Boot,", "Spring Cloud and", "Reactor for C#", "developers"]
             && Wrap("one two three four five six seven", 7, 2) is ["one two", "three…"], "titles wrap by words, and a long one ends in an ellipsis");
-        check(Gallery.Blocks.describe(41, 11, 60).Problems.Any(p => p.Kind == "build-failed") && Gallery.Blocks.describe(80, 11, 7).Problems.Any(p => p.Kind == "build-failed")
-            && Gallery.Blocks.describe(55, 16, 7).Valid, "Lego refuses a gallery longer than the wall or taller than its sill, and takes one that fits");
+        check(Gallery.Blocks.describe(41, 11, 60, 22).Problems.Any(p => p.Kind == "build-failed") && Gallery.Blocks.describe(80, 11, 7, 22).Problems.Any(p => p.Kind == "build-failed")
+            && Gallery.Blocks.describe(55, 16, 7, 40).Valid,
+            "Lego refuses a gallery longer than the wall or taller than its sill, and takes one that fits");
 
         var dir = Directory.CreateTempSubdirectory("delta-gallery-");
         try

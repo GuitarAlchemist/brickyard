@@ -630,6 +630,7 @@ internal sealed class Link(Func<double> clock)
         KnotFloor.SelfTest(Check);
         HallShell.SelfTest(Check, Stage.LowFragmentShader);
         HallGallery.SelfTest(Check, Stage.LowFragmentShader);
+        LearnReader.SelfTest(Check);
         Streamline.SelfTest(Check);
         Cinematic.SelfTest(Check);
         ToolWheel.SelfTest(Check);

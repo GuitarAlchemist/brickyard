@@ -494,6 +494,11 @@ internal static unsafe class Stage
             vec3 toWash = washAt - vWorld;
             float washD = max(length(toWash), 0.05);
             light += vec3(1.0, 0.86, 0.66) * 0.75 * max(dot(n, toWash / washD), 0.0) / (1.0 + 0.8 * washD * washD) * (1.0 - smoothstep(-5.4, -4.2, vWorld.x)) * ao;
+            // And Streeling's card catalogue on the back wall, from its own light 0.6 m out (HallGallery.BackWash).
+            vec3 backAt = vec3(clamp(vWorld.x, -5.7, -3.8), 2.4, -2.85);
+            vec3 toBack = backAt - vWorld;
+            float backD = max(length(toBack), 0.05);
+            light += vec3(1.0, 0.86, 0.66) * 0.75 * max(dot(n, toBack / backD), 0.0) / (1.0 + 0.8 * backD * backD) * (1.0 - smoothstep(-2.7, -1.8, vWorld.z)) * (1.0 - smoothstep(-3.6, -3.0, vWorld.x)) * ao;
 
             // Blinn-Phong highlights of both lights, roughly normalised so that a tighter one is brighter, and the hall
             // reflected, both weighed by Schlick's Fresnel.
@@ -519,6 +524,8 @@ internal static unsafe class Stage
             // The gallery along the left wall is in its picture lights' light, up to their height (HallGallery).
             float gallery = (1.0 - smoothstep(0.0, 1.2, box(vWorld.xz - vec2(-5.7, 1.25), vec2(0.55, 4.65)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
             pool = max(pool, 0.8 * gallery);
+            float catalogue = (1.0 - smoothstep(0.0, 1.0, box(vWorld.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
+            pool = max(pool, 0.8 * catalogue);
             float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
             outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
         }
@@ -1802,6 +1809,15 @@ internal static unsafe class Stage
         var (wallW, wallH) = (WallSource.Width / 2f, WallSource.Height / 2f);
         var sessionWall = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
             WallCard.Render([], ""), WallCard.Width, WallCard.Height, 1, new(-wallW, wallH, wallW, -wallH), 0f, 0f);
+        // The lectern's open book (LearnReader): a course or a Streeling department read in the hall, its pages a picture.
+        var reader = new LearnReader { Open = HallGallery.Browse };
+        var readerBook = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
+            reader.Pixels, LearnReader.Width, LearnReader.Height, reader.Revision, HallGallery.BookRect, 0f, 0f);
+        // --read course:N or department:N opens that book on the lectern from the start, for captures (with --view 9).
+        if (Option(args, "--read") is { } toRead)
+        {
+            ReadOnLectern(toRead);
+        }
         var pongWall = arcade is { Frame: { Stride: var stride, Width: var pw, Height: var ph } pong } && stride == pw * 4
             ? new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight, pong.Rgba.ToArray(), pw, ph,
                 pong.Revision, new(-wallW, wallW * ph / pw, wallW, -wallW * ph / pw), 0f, 0.2f)
@@ -2518,9 +2534,55 @@ internal static unsafe class Stage
             return true;
         }
 
-        // A click on a course, a demo or an artifact in the gallery opens its page in the browser.
-        bool TryGalleryClick(double x, double y) =>
-            !shelf.Open && !pairingShown && !invitationShown && !notesShown && officeView is { } view && hallGallery.Click(view, extent.Width, extent.Height, x, y);
+        // A click on the lectern's book: its outline, its arrows or its links (LearnReader).
+        bool TryReaderClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view || hallGallery.Book is not { } book) return false;
+            if (HallGallery.OnRect(view, book, HallGallery.BookRect, extent.Width, extent.Height, x, y) is not { } at) return false;
+            reader.Click(at.U, at.V);
+            return true;
+        }
+
+        // A click on a course's book or a Streeling drawer opens it on the lectern, and the camera goes to read it; one on
+        // a demo or an artifact opens its page in the browser.
+        bool TryGalleryClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view) return false;
+            if (hallGallery.Pick(view, extent.Width, extent.Height, x, y) is not { } action) return false;
+            if (action.StartsWith("open:", StringComparison.Ordinal))
+            {
+                HallGallery.Browse(action[5..]);
+            }
+            else if (ReadOnLectern(action))
+            {
+                camera.GoTo(FreeCamera.Views.Length + 1);
+            }
+
+            return true;
+        }
+
+        // Opens "course:N" or "department:N" of the gallery on the lectern; false for anything else.
+        bool ReadOnLectern(string action)
+        {
+            if (hallGallery.Shelved is not { } content) return false;
+            var (kind, what) = action.IndexOf(':') is var colon and > 0 ? (action[..colon], action[(colon + 1)..]) : (action, "");
+            if (kind == "course" && int.TryParse(what, out var c) && c >= 0 && c < content.Courses.Length)
+            {
+                Console.WriteLine($"GALLERY reads {content.Courses[c].Url} on the lectern");
+                reader.OpenCourse(content.Courses[c].Title, content.Courses[c].Url);
+                return true;
+            }
+
+            if (kind == "department" && int.TryParse(what, out var d) && d >= 0 && d < content.Departments.Count)
+            {
+                var (name, modules) = content.Departments[d];
+                Console.WriteLine($"GALLERY reads Streeling's {name} on the lectern");
+                reader.OpenDepartment(name, [.. modules.Select(m => new LearnReader.Item(m.Title, m.Url))]);
+                return true;
+            }
+
+            return false;
+        }
 
         // A click on a session's robot, picked by the office.
         void OfficeClicked(string session)
@@ -2620,7 +2682,7 @@ internal static unsafe class Stage
         // the cabinet that it falls on takes it.
         void Click(double x, double y, bool simulated = false)
         {
-            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y) && !TryGalleryClick(x, y)) TryCabinetClick(x, y, simulated);
+            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y) && !TryReaderClick(x, y) && !TryGalleryClick(x, y)) TryCabinetClick(x, y, simulated);
         }
 
         // --wall-real, once a frame after the splash: once the office's reading names the session and its robot is drawn
@@ -3645,6 +3707,8 @@ internal static unsafe class Stage
                 sessionWall.UploadAfterFence(cb, slot, wallPixels, wallCardRevision);
             }
             cabinet.UploadAfterFence(cb, slot);
+            var (bookPixels, bookRevision) = reader.Picture;
+            readerBook.UploadAfterFence(cb, slot, bookPixels, bookRevision);
             clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
             var splitCards = hudless && Streamline.Generating && !splashing; // the hall, then the cards, in two passes
@@ -3724,6 +3788,7 @@ internal static unsafe class Stage
                 cabinet.DrawScreens(cb, slot, viewProj);
                 if (wall.Showing == WallSource.Kind.Pong) pongWall?.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
                 else if (wall.Showing == WallSource.Kind.Session) sessionWall.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
+                if (hallGallery.Book is { } bookFrame) readerBook.Draw(cb, slot, bookFrame * viewProj);
 
                 if (splitCards)
                 {
@@ -4366,6 +4431,7 @@ internal static unsafe class Stage
         arcadeGpu?.Dispose();
         pongWall?.Dispose();
         sessionWall.Dispose();
+        readerBook.Dispose();
         cabinet.Dispose();
         arcade?.Dispose();
         Console.WriteLine($"ARCADE shutdown: uploads {arcadeGpu?.Uploads ?? 0}; native texture images remaining {Texture.LiveCount}; pid {Environment.ProcessId}");

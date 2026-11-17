@@ -218,6 +218,65 @@ let applique: Block =
                 :: [ Clad(Glow 1.2, place (at 0.0 -0.045 reach) (box (length - 0.04) 0.015 0.04 warm)) ]
               Anchors = [] } }
 
+/// A library's card catalogue in oak: a carcass, count drawers cols a row, each width by height with a brass knob, the
+/// lowest drawer's bottom metres up, and a cornice whose face carries the heading. Anchors tiroir-0 and on (the drawers'
+/// faces, top row first) and titre (the cornice's face).
+let fichier: Block =
+    { Id = id "fichier"
+      Params =
+        [ whole "count" 22 1 40
+          whole "cols" 6 1 12
+          real "width" 0.3 0.1 1.0
+          real "height" 0.2 0.08 0.6
+          real "gap" 0.04 0.0 0.3
+          real "bottom" 0.55 0.0 2.0
+          real "depth" 0.42 0.2 1.0 ]
+      Build =
+        fun args context ->
+            let count, cols = args.Whole "count", args.Whole "cols"
+            let w, h, g, bottom, depth = args.Real "width", args.Real "height", args.Real "gap", args.Real "bottom", args.Real "depth"
+            let lines = rows count cols
+            let width = float cols * (w + g) + g + 2.0 * board
+            let top = bottom + float lines * (h + g) + 0.02
+            let wood = oak * float32 (1.0 + context.Random.Between(-0.05, 0.05))
+
+            let slotAt i =
+                let r, c = i / cols, i % cols
+                -width / 2.0 + board + g + (float c + 0.5) * w + float c * g, bottom + float (lines - 1 - r) * (h + g)
+
+            { Parts =
+                [ place (at 0.0 0.0 (depth / 2.0)) (box width top depth darkOak)
+                  place (at 0.0 top (depth / 2.0 + 0.01)) (box (width + 0.04) cornice (depth + 0.02) darkOak)
+                  for i in 0 .. count - 1 do
+                      let x, y = slotAt i
+                      place (at x y (depth + 0.01)) (box w h 0.02 (wood * 1.25f))
+                      Clad(Metal, place (at x (y + 0.035) (depth + 0.03)) (box 0.05 0.022 0.022 brass)) ]
+              Anchors =
+                [ "titre", at 0.0 (top + cornice / 2.0) (depth + 0.02)
+                  for i in 0 .. count - 1 do
+                      let x, y = slotAt i
+                      $"tiroir-{i}", at x (y + h / 2.0) (depth + 0.02) ] } }
+
+/// The catalogue's width for count drawers at its defaults.
+let fichierWidth count =
+    let cols = min count 6
+    float cols * 0.34 + 0.04 + 2.0 * board
+
+/// A lectern: a foot, a turned post and a cap height metres up. Anchor pupitre: the cap's top, where the scene sets its
+/// sloping desk and the open book (Lego's frames only turn about the vertical).
+let lutrin: Block =
+    { Id = id "lutrin"
+      Params = [ real "height" 0.85 0.5 1.5 ]
+      Build =
+        fun args _ ->
+            let h = args.Real "height"
+
+            { Parts =
+                [ box 0.5 0.04 0.42 darkOak
+                  place (at 0.0 0.04 0.0) (box 0.09 (h - 0.07) 0.09 oak)
+                  place (at 0.0 (h - 0.03) 0.0) (box 0.32 0.03 0.22 darkOak) ]
+              Anchors = [ "pupitre", at 0.0 h 0.0 ] } }
+
 // The default slots, the learn site's on 2026-11-16 (scene/gallery.json).
 let private bookcase count = bookcaseSize count 11 0.4 0.42 0.3
 let private screens count = wallSize count 4 0.56 0.33 0.06 0.95
@@ -234,22 +293,30 @@ let lightReach = 0.75
 /// The highest a section may stand: below the left wall's clerestory windows (scene/HallShell.cs).
 let ceiling = 2.75
 
+/// Where the lectern stands: this far out from the left wall, at this z, facing the room.
+let lecternOut = 1.5
+let lecternZ = -1.0
+
 /// The gallery along a wall whose inner face is at x wall, running from z back to z front: from the back, the
-/// courses' bookcase, the demos' screens and the artifacts' frames, each facing +X, under a picture light. A section
-/// with nothing in it is left out. The wall too short for them all, or a section taller than the ceiling (too many rows),
-/// fails, and Lego refuses the scene.
+/// courses' bookcase, the demos' screens and the artifacts' frames, each facing +X, under a picture light; Streeling
+/// University's card catalogue on the back wall, from the corner to x reach at most; and the lectern in front of the
+/// bookcase. A section with nothing in it is left out. The wall too short for them all, a section taller than the
+/// ceiling (too many rows) or a catalogue past reach fails, and Lego refuses the scene.
 let galerie: Block =
     { Id = id "galerie"
       Params =
         [ whole "courses" 41 0 120
           whole "demos" 11 0 60
           whole "artifacts" 7 0 60
+          whole "departments" 22 0 40
           real "wall" -6.25 -50.0 50.0
           real "back" -3.45 -50.0 50.0
-          real "front" 6.0 -50.0 50.0 ]
+          real "front" 6.0 -50.0 50.0
+          real "reach" -3.66 -50.0 50.0 ]
       Build =
         fun args _ ->
-            let wall, back, front = args.Real "wall", args.Real "back", args.Real "front"
+            let wall, back, front, reach = args.Real "wall", args.Real "back", args.Real "front", args.Real "reach"
+            let departments = args.Whole "departments"
 
             let sections =
                 [ "cours", args.Whole "courses", bookcase, id "bibliotheque"
@@ -269,6 +336,16 @@ let galerie: Block =
                 if height > ceiling then
                     failwith $"the {name} would stand {height:F2} m tall, above the clerestory's sill at {ceiling:F2} m"
 
+            // The catalogue starts past the bookcase's depth and the corner's margin.
+            let catalogueStart = wall + 0.42
+            let catalogueWidth = fichierWidth departments
+
+            if departments > 0 && catalogueStart + catalogueWidth > reach then
+                failwith $"the catalogue would reach x {catalogueStart + catalogueWidth:F2}, past {reach:F2}"
+
+            if departments > 0 && 0.55 + float (rows departments 6) * 0.24 + 0.02 + cornice > ceiling then
+                failwith $"the catalogue's {departments} drawers would stand above {ceiling:F2} m"
+
             // On the wall facing +X: the block's +Z turns to +X and its +X to -Z, so a viewer facing the wall reads it
             // from front to back. The sections start at the back.
             let onWall z = at wall 0.0 z |> turned 90.0
@@ -281,12 +358,18 @@ let galerie: Block =
                       place (onWall centre) (Use(name, block, [ "count", Whole count ]))
                       let _, height = size count
                       let y = max lightHeight (height + 0.25)
-                      place (at wall y centre |> turned 90.0) (Use($"lampe-{name}", id "applique", [ "length", Real(min 2.4 (width - 0.2)); "reach", Real lightReach ])) ]
+                      place (at wall y centre |> turned 90.0) (Use($"lampe-{name}", id "applique", [ "length", Real(min 2.4 (width - 0.2)); "reach", Real lightReach ]))
+                  if departments > 0 then
+                      // On the back wall, facing +Z as the block does.
+                      place (at (catalogueStart + catalogueWidth / 2.0) 0.0 back) (Use("streeling", id "fichier", [ "count", Whole departments ]))
+                      place (at (catalogueStart + catalogueWidth / 2.0) lightHeight back) (Use("lampe-streeling", id "applique", [ "length", Real(catalogueWidth - 0.2); "reach", Real 0.6 ]))
+                  if args.Whole "courses" > 0 || departments > 0 then
+                      place (at (wall + lecternOut) 0.0 lecternZ |> turned 90.0) (Use("lutrin", id "lutrin", [])) ]
               Anchors = [] } }
 
 /// A section of the gallery: its instance's name under the root, its slots' anchors (name-0 and on), and the face each
-/// slot carries a title on, width by height (a book's cover, a screen, a frame's mat), as the blocks make them by
-/// default.
+/// slot carries a title on, width by height (a book's cover, a screen, a frame's mat, a drawer's front), as the blocks
+/// make them by default.
 type Section =
     { Name: string
       Anchor: string
@@ -296,12 +379,19 @@ type Section =
 let sections =
     [| { Name = "cours"; Anchor = "livre"; Width = 0.32; Height = 0.28 }
        { Name = "demos"; Anchor = "ecran"; Width = 0.56; Height = 0.33 }
-       { Name = "artifacts"; Anchor = "cadre"; Width = 0.34; Height = 0.26 } |]
+       { Name = "artifacts"; Anchor = "cadre"; Width = 0.34; Height = 0.26 }
+       { Name = "streeling"; Anchor = "tiroir"; Width = 0.3; Height = 0.2 } |]
 
 /// Every block the gallery names.
 let library =
-    Library.Of [ livre; bibliotheque; ecrans; cadres; applique; galerie ]
+    Library.Of [ livre; bibliotheque; ecrans; cadres; fichier; applique; lutrin; galerie ]
 
-/// The gallery for that many courses, demos and artifacts, generated and validated.
-let describe (courses: int) (demos: int) (artifacts: int) =
-    Api.Describe(library, "galerie", 1UL, [ $"courses={courses}"; $"demos={demos}"; $"artifacts={artifacts}" ], Limits.Standard)
+/// The gallery for that many courses, demos, artifacts and Streeling departments, generated and validated.
+let describe (courses: int) (demos: int) (artifacts: int) (departments: int) =
+    Api.Describe(
+        library,
+        "galerie",
+        1UL,
+        [ $"courses={courses}"; $"demos={demos}"; $"artifacts={artifacts}"; $"departments={departments}" ],
+        Limits.Standard
+    )
