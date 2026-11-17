@@ -14,7 +14,15 @@ public sealed record OfficeSession(string Id, string Name, OfficeActivity Activi
     string WorkspaceTitle = "", long Started = 0);
 
 // Selected is the session the user picked in the scene, which only the module's poses show; null for none.
-public sealed record OfficeState(string Language, bool Flat, IReadOnlyList<OfficeSession> Sessions, string? Selected = null);
+// Turns: how far, in radians about the module's own axis, the user has turned each session's place by dragging its
+// robot with the mouse, summed over the run; Turning: the session being dragged now, whose ring stands still meanwhile.
+// Both are init properties, not constructor parameters, so that module images built before keep their constructor.
+public sealed record OfficeState(string Language, bool Flat, IReadOnlyList<OfficeSession> Sessions, string? Selected = null)
+{
+    public IReadOnlyDictionary<string, double>? Turns { get; init; }
+
+    public string? Turning { get; init; }
+}
 
 public interface IOfficeModule : IWidgetModule
 {

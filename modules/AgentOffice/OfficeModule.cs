@@ -11,8 +11,8 @@ namespace Delta.AgentOffice;
 // a ring with the selected robot on it holds still, so that a robot clicked stays under the pointer.
 // Everything is widgets nested in widgets: a station holds a desk, a name plate, a robot fixed to the desk's seat and
 // the selection's mark above it; the robot a torso, with the head and the arms fixed to its anchors; the torso Mac
-// minis, each with its status light. The robot types while its session works, lights a red beacon while the session
-// waits for an answer and jumps, arms up, when the session has finished; a stopped session's robot bows its head, dark,
+// minis, each with its status light. The robot types while its session works, lights a red beacon and turns a question
+// mark above its head while the session waits for an answer, and jumps, arms up, when the session has finished; a stopped session's robot bows its head, dark,
 // a stale one glows amber and an unknown one grey: poses on the instances' paths, no mesh rebuilt, as is the mark over
 // the selected robot. Paths come from the sessions' and workspaces' IDs and places from the sessions' starts, so a
 // refresh in any order keeps both. Two sessions with one name show their IDs' first letters. In flat quality it is a
@@ -31,7 +31,7 @@ public sealed class OfficeModule : IOfficeModule
     private const float Spread = 1.5f; // pitches between the slots of a ring with room to spare
     private const float Bearing = 0.207f; // the office's view's eye seen from the axis, in radians from +Z toward +X
     private const double DoneHop = 2.4; // seconds of jumping after a session finishes
-    private const int MaxDrawn = 48; // stations drawn at most: about 37 instances each with its enclosure, within the scene's 2048
+    private const int MaxDrawn = 48; // stations drawn at most: about 40 instances each with its question mark, within the scene's 2048
 
     private OfficeState state = new("en", false, []);
     private bool initialized;
@@ -240,6 +240,15 @@ public sealed class OfficeModule : IOfficeModule
             poses[Key(s) + "/mark"] = s.Id == state.Selected
                 ? new(SN.Matrix4x4.CreateRotationY(t * 1.6f) * SN.Matrix4x4.CreateTranslation(0f, 0.012f * MathF.Sin(t * 2.4f), 0f), new(1f, 0.85f, 0.35f, 1.4f))
                 : SceneModules.Pose.Off;
+            // A question mark over a robot whose session waits for an answer, rocking about its post and bobbing; its back
+            // carries one too, for the robots facing away.
+            if (!state.Flat)
+            {
+                poses[Key(s) + "/ask"] = s.Activity == OfficeActivity.Waiting
+                    ? new(SN.Matrix4x4.CreateRotationY(0.6f * MathF.Sin(t * 0.9f)) * SN.Matrix4x4.CreateTranslation(0f, 0.018f * MathF.Sin(t * 2.2f), 0f),
+                        new(1f, 0.16f, 0.1f, blink ? 1.5f : 0.9f))
+                    : SceneModules.Pose.Off;
+            }
             if (state.Flat)
             {
                 var lamp = s.Activity switch
@@ -285,14 +294,21 @@ public sealed class OfficeModule : IOfficeModule
         }
     }
 
-    // Each ring turned about the tower's axis by its own angle, advanced with the time unless the selected robot is on it:
-    // a slot's pose is its placement's turn about the axis, written in its own frame.
+    // Each ring turned about the tower's axis by its own angle, advanced with the time unless the selected robot or the
+    // one the mouse drags is on it, plus however far the user has turned its robots by hand (OfficeState.Turns): a slot's
+    // pose is its placement's turn about the axis, written in its own frame.
     private void Spin(double seconds, IDictionary<string, Pose> poses)
     {
         var layout = Tower();
         var dt = double.IsNaN(spun) ? 0 : Math.Clamp(seconds - spun, 0, 0.25);
         spun = seconds;
-        var held = layout.Slots.Where(x => x.Session is { } s && s.Id == state.Selected).Select(x => x.Ring).ToHashSet();
+        var held = layout.Slots.Where(x => x.Session is { } s && (s.Id == state.Selected || s.Id == state.Turning)).Select(x => x.Ring).ToHashSet();
+        var byHand = new double[layout.Rings];
+        foreach (var slot in layout.Slots)
+        {
+            if (slot.Session is { } s && state.Turns?.TryGetValue(s.Id, out var turned) == true) byHand[slot.Ring] += turned;
+        }
+
         for (var k = 0; k < layout.Rings; k++)
         {
             var a = spins.GetValueOrDefault(k);
@@ -302,7 +318,7 @@ public sealed class OfficeModule : IOfficeModule
         var axis = new SN.Vector3(Cx, 0f, Cz);
         foreach (var slot in layout.Slots)
         {
-            var a = (float)spins[slot.Ring];
+            var a = (float)(spins[slot.Ring] + byHand[slot.Ring]);
             var place = SlotPlace(slot, layout.Scale);
             if (a == 0 || !SN.Matrix4x4.Invert(place, out var inverse)) continue;
             var about = SN.Matrix4x4.CreateTranslation(-axis) * SN.Matrix4x4.CreateRotationY(a) * SN.Matrix4x4.CreateTranslation(axis);
@@ -369,7 +385,8 @@ public sealed class OfficeModule : IOfficeModule
     // The library. Sizes in metres; materials: 0 matte, 1 enamel, 2 aluminium, 3 steel, 4 rubber, 5 glass.
     private static readonly WidgetId Block = new("block", 1), MacMini = new("mac-mini", 1), Torso = new("torso", 1), Head = new("head", 1),
         Arm = new("arm", 1), Robot = new("robot", 1), Desk = new("desk", 1), Plate = new("plate", 1), Station = new("station", 1),
-        Board = new("board", 1), Row = new("row", 1), Mark = new("mark", 1), Tier = new("tier", 1), Sign = new("sign", 1);
+        Board = new("board", 1), Row = new("row", 1), Mark = new("mark", 1), Tier = new("tier", 1), Sign = new("sign", 1),
+        Ask = new("ask", 1), Glyph = new("glyph", 1);
 
     private static readonly SN.Vector3 Steel = new(0.16f, 0.165f, 0.17f), Dark = new(0.04f, 0.04f, 0.045f), Aluminium = new(0.6f, 0.61f, 0.64f),
         Shell = new(0.7f, 0.68f, 0.62f), Orange = new(0.78f, 0.27f, 0.05f), Visor = new(0.012f, 0.014f, 0.018f), Wood = new(0.36f, 0.24f, 0.14f),
@@ -492,7 +509,19 @@ public sealed class OfficeModule : IOfficeModule
                 new UsePiece("plate", Plate, Place(0f, 0.2f, 0.0905f), new Dictionary<string, WidgetValue> { ["name"] = a.Text("name") }),
                 new AttachPiece("desk", "seat", new("robot", Robot, SN.Matrix4x4.Identity)),
                 new UsePiece("mark", Mark, Place(0f, 0.76f, -0.14f)),
+                new UsePiece("ask", Ask, Place(0f, 0.84f, -0.14f)),
             ])),
+
+        // A question mark on each face of a glass disc, hidden until posed: the session waits for an answer. The disc is
+        // the widget's own mesh, which the pose's glow lights; the marks are its children, which it leaves pale.
+        new(Ask, [],
+            _ => new([
+                new BoxPiece(SN.Vector3.Zero, new(0.12f, 0.12f, 0.006f), Unlit, 5),
+                new UsePiece("front", Glyph, SN.Matrix4x4.CreateTranslation(0f, 0f, 0.0045f)),
+                new UsePiece("back", Glyph, SN.Matrix4x4.CreateRotationY(MathF.PI) * SN.Matrix4x4.CreateTranslation(0f, 0f, -0.0045f)),
+            ])),
+        new(Glyph, [],
+            _ => new([new TextPiece("?", SN.Vector3.Zero, 0.075f, Pale)])),
 
         // The selection's mark: a small gem of two lit blocks turned on each other, hidden until posed.
         new(Mark, [],

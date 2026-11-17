@@ -1770,6 +1770,13 @@ internal static unsafe class Stage
         WidgetStage<Mesh>? officeStage = null;
         OfficeFeed? officeFeed = null;
         var officeSelection = new OfficeSelection();
+        // A robot held with the left button turns its ring as the mouse moves sideways (OfficeState.Turns), half a turn
+        // across the window's width; one let go within DragSlop pixels of where it was pressed is a click.
+        var officeTurns = new Dictionary<string, double>(StringComparer.Ordinal);
+        string? officeDrag = null;
+        (double X, double Y) officeDragFrom = default, officeDragAt = default;
+        var officeDragMoved = 0.0;
+        const double DragSlop = 6, TurnPerWidth = Math.PI;
         SN.Matrix4x4? officeView = null; // the frame's camera for clicks; none during the splash
         SN.Matrix4x4? chestView = null; // the last frame's torso transform and camera, for a click on Delta's chest screen
         var wallTestStep = 0; // --wall-test: the checks made
@@ -2681,6 +2688,14 @@ internal static unsafe class Stage
             return true;
         }
 
+        // The session whose robot is under (x, y), when a press there may start turning its ring; null in the flat view,
+        // whose rows do not turn, and whenever a click on the office would not reach it.
+        string? OfficeRobotAt(double x, double y) =>
+            shelf.Open || pairingShown || invitationShown || notesShown || officeFailed || quality == Quality.Flat
+            || officeStage is null || officeFeed is null || officeView is not { } view
+                ? null
+                : WidgetPicking.Pick(officeStage.Hits, view, extent.Width, extent.Height, x, y);
+
         // A click on the lectern's book: its outline, its arrows or its links (LearnReader).
         bool TryReaderClick(double x, double y)
         {
@@ -3000,6 +3015,15 @@ internal static unsafe class Stage
                 return;
             }
 
+            // A robot let go: a click if the mouse hardly moved, else the end of turning its ring.
+            if (action == GlfwButtonAction.Release && button == 0 && officeDrag is { } dragged)
+            {
+                officeDrag = null;
+                if (officeDragMoved < DragSlop) Click(officeDragFrom.X, officeDragFrom.Y);
+                else Console.WriteLine($"WIDGETS agent-office turned by hand: session {dragged}, {officeTurns.GetValueOrDefault(dragged):F2} rad in all");
+                return;
+            }
+
             // In the game, a left click away from the cabinet leaves it, as Esc does; one on it is the game's.
             if (cabinet.Playing && action == GlfwButtonAction.Press && button == 0 && !locked)
             {
@@ -3093,7 +3117,15 @@ internal static unsafe class Stage
             else if (action == GlfwButtonAction.Press && button == 0)
             {
                 var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
-                Click(cx, cy);
+                if (OfficeRobotAt(cx, cy) is { } robot)
+                {
+                    // Held: the release decides between a click and a turn (the frame loop turns it meanwhile).
+                    (officeDrag, officeDragFrom, officeDragAt, officeDragMoved) = (robot, (cx, cy), (cx, cy), 0);
+                }
+                else
+                {
+                    Click(cx, cy);
+                }
             }
         });
         window.OnScroll += (w, offset) => Guard("a scroll", () =>
@@ -3477,6 +3509,22 @@ internal static unsafe class Stage
                     (float)((window.CursorY * extent.Height / Math.Max(1, window.Height)) - (extent.Height / 2.0)), inner);
             }
 
+            // A robot held: its ring follows the mouse sideways once it has moved past the slop. A window that loses
+            // focus with the button held lets the robot go, as it gives the cursor back.
+            if (officeDrag is { } turning)
+            {
+                var (dx, dy) = (window.CursorX * extent.Width / Math.Max(1, window.Width), window.CursorY * extent.Height / Math.Max(1, window.Height));
+                officeDragMoved = Math.Max(officeDragMoved, Math.Abs(dx - officeDragFrom.X) + Math.Abs(dy - officeDragFrom.Y));
+                if (officeDragMoved >= DragSlop && dx != officeDragAt.X)
+                {
+                    officeTurns[turning] = officeTurns.GetValueOrDefault(turning) + ((dx - officeDragAt.X) / Math.Max(1, extent.Width) * TurnPerWidth);
+                    tour.Touch(now);
+                }
+
+                officeDragAt = (dx, dy);
+                if (!window.IsFocused || wheel.Open || shelf.Open) officeDrag = null;
+            }
+
             if (!shelf.Open && !film.Playing && !cabinet.Playing && (window.IsFocused || walkHeld.Count > 0))
             {
                 bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press || walkHeld.Contains(key);
@@ -3768,7 +3816,11 @@ internal static unsafe class Stage
                         Console.WriteLine("WIDGETS agent-office selection let go: its session went or runs again");
                         wall.Released(picked);
                     }
-                    office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions, officeSelection.Selected));
+                    office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions, officeSelection.Selected)
+                    {
+                        Turns = officeTurns,
+                        Turning = officeDrag,
+                    });
                     if (officeStage.Sync(office.Module)) Console.WriteLine($"WIDGETS agent-office tree: {officeStage.Instances} instances, {officeStage.Meshes} meshes ({officeStage.Changes}); native mesh buffers live {Mesh.LiveCount}");
                     else if (officeStage.Problems.Count > 0 && officeLogged != officeStage.Revision)
                     {

@@ -311,6 +311,32 @@ static void Office(Action<bool, string> check, string image)
     var tree3d = Widgets.Expand(office.Scene());
     check(tree3d.Meshes < tree3d.Instances / 4, $"the stations share their meshes: only the name plates differ ({tree3d.Meshes} meshes for {tree3d.Instances} instances)");
     check(Find(tree3d.Roots, "s-00000002aaaa/desk/robot/torso/head/beacon/light") is not null, "the beacon is on the head, fixed through the robot's anchors");
+    var asked = new Dictionary<string, Pose>();
+    office.Pose(1.0, asked);
+    var waiting = sessions.Where(s => s.Activity == OfficeActivity.Waiting).Select(s => "s-" + new string(s.Id.Where(char.IsAsciiLetterOrDigit).Take(12).ToArray()) + "/ask").ToHashSet();
+    var marks = asked.Where(p => p.Key.EndsWith("/ask", StringComparison.Ordinal)).ToList();
+    check(Find(tree3d.Roots, "s-00000002aaaa/ask/front") is not null && Find(tree3d.Roots, "s-00000002aaaa/ask/back") is not null
+        && marks.Count == sessions.Count && marks.All(p => p.Value.Hidden != waiting.Contains(p.Key)) && marks.Where(p => !p.Value.Hidden).All(p => p.Value.Glow.W > 0),
+        $"a question mark, lit, turns over the waiting session's robot alone ({marks.Count(p => !p.Value.Hidden)} shown of {marks.Count})");
+    // Turned by hand (OfficeState.Turns): the ring of the robot dragged turns by that much, and stands still while held.
+    string Path(OfficeSession s) => "s-" + new string(s.Id.Where(char.IsAsciiLetterOrDigit).Take(12).ToArray());
+    var first = Path(sessions[0]);
+    var plain = new Dictionary<string, Pose>();
+    office.Pose(10.0, plain);
+    office.Pose(10.0, plain);
+    office.Update(new("en", false, sessions) { Turns = new Dictionary<string, double> { [sessions[0].Id] = 0.5 } });
+    var byHand = new Dictionary<string, Pose>();
+    office.Pose(10.0, byHand);
+    var origin = Vector3.Transform(Vector3.Zero, plain[first].Transform);
+    var moved = Vector3.Transform(Vector3.Zero, byHand[first].Transform);
+    office.Update(new("en", false, sessions) { Turns = new Dictionary<string, double> { [sessions[0].Id] = 0.5 }, Turning = sessions[0].Id });
+    var held1 = new Dictionary<string, Pose>();
+    var held2 = new Dictionary<string, Pose>();
+    office.Pose(10.1, held1);
+    office.Pose(10.2, held2);
+    check(Vector3.Distance(origin, moved) > 0.01f && held1[first].Transform == held2[first].Transform && held1[first].Transform == byHand[first].Transform,
+        $"a robot dragged turns its ring by hand ({Vector3.Distance(origin, moved):F3} m), which stands still while held");
+    office.Update(new("en", false, sessions));
     var revision = office.Revision;
     office.Update(new("en", false, [.. sessions.Select(s => s with { Activity = OfficeActivity.Idle })]));
     check(office.Revision == revision, "an activity change poses, it does not change the tree");

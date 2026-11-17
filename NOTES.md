@@ -2216,6 +2216,49 @@ wait, MSAA) are information, not errors.
 *To verify*: the globes under path tracing show each picture's mean colour, because the path tracer does not read the
 picture maps yet.
 
+## The office: a question mark over a waiting robot, rings turned by hand (2026-11-17)
+
+The author asked for two things:
+
+- « quand une session claude pose une question je veux voir un symbole "?" au dessus du robot dans la scene et pouvoir
+  repondre a la question »;
+- « je veux pourvoir faire tourner la roue des plateaux des robots a la souris ».
+
+**The question mark.** While wmux says a session's pane is blocked (OfficeActivity.Waiting), a red glass disc with a
+« ? » on each face floats over its robot. It rocks 35° either side and bobs; the robot's red beacon lights as before.
+
+- The disc is the Ask widget's own mesh, so the pose's glow lights it. The marks are child Glyph widgets, left pale:
+  a pose's glow lights only its instance's own mesh.
+- Hidden otherwise.
+- Not drawn in the flat view, whose row lamp already blinks.
+- At 48 stations the tree holds 1916 instances, within the scene's 2048.
+
+**Turning by hand.** A left press on a robot no longer clicks at once.
+
+- Moving the mouse sideways turns that robot's ring, half a turn across the window's width.
+- Letting go within 6 px of the press is the click as before: it selects, and a second click shows the pane.
+- The host sums each session's turns, and passes them and the session held in OfficeState: `Turns` and `Turning`,
+  init properties, so that older images keep their constructor.
+- The module adds a ring's turns to its own slow spin, and holds the ring while one of its robots is held.
+- The flat view, whose rows do not turn, clicks on press as before.
+- A window that loses focus, the tool wheel or the shelf opening let the robot go.
+
+*Not done*: answering from the scene. The host knows that a pane is blocked, not what it asks. Showing the question
+needs its session's transcript, and answering means typing into another session's pane through wmux. That is to be
+agreed with the author before it is built; the click that shows the pane stays the way to answer.
+
+**Checked:**
+
+- Widget tests: the « ? » shown over the waiting session's robot alone, lit; a ring turned by 0.5 rad moves its robot
+  0.32 m and stands still while held; 48 stations within the budget.
+- The scene's selftest.
+- Hidden `--demo --view 2` renders with the module at v0.4.0: the « ? » legible from the front and three-quarters.
+
+*To verify*:
+
+- the drag by hand in the live window;
+- a real blocked session's « ? ».
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
