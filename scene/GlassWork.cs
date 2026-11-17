@@ -60,13 +60,19 @@ internal sealed unsafe class GlassWork : IDisposable
             float ior = pc.eye.w;
             float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
             float fresnel = f0 + (1.0 - f0) * pow(1.0 - ndv, 5.0);
-            // Bent at the near face, carried across the ball (2 r ndv) and projected back onto the picture behind.
+            // Bent at the near face, carried across the ball (2 r ndv) and projected back onto the picture behind; red
+            // bent a little less than blue (crown glass's dispersion, made visible), so that the rim's edges fringe.
             float through = 2.0 * pc.tint.w * ndv;
-            vec3 far = world + refract(-v, n, 1.0 / ior) * through * pc.screen.z;
-            vec4 clip = pc.viewProj * vec4(far, 1.0);
-            vec2 uv = clamp(clip.xy / clip.w * 0.5 + 0.5, vec2(0.001), vec2(0.999));
-            vec3 keep = pow(clamp(pc.tint.rgb, vec3(0.001), vec3(1.0)), vec3(through / 0.1));
-            vec3 seen = texture(behind, uv).rgb * keep;
+            vec3 seen;
+            for (int c = 0; c < 3; c++)
+            {
+                float spread = ior + 0.018 * float(c - 1);
+                vec3 far = world + refract(-v, n, 1.0 / spread) * through * pc.screen.z;
+                vec4 clip = pc.viewProj * vec4(far, 1.0);
+                vec2 uv = clamp(clip.xy / clip.w * 0.5 + 0.5, vec2(0.001), vec2(0.999));
+                seen[c] = texture(behind, uv)[c];
+            }
+            seen *= pow(clamp(pc.tint.rgb, vec3(0.001), vec3(1.0)), vec3(through / 0.1));
             color = vec4(seen * (1.0 - fresnel) + hall(reflect(-v, n)) * fresnel + vec3(shine(n, v)), 1.0);
         }
         """;

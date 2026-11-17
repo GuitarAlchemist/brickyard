@@ -934,10 +934,11 @@ internal sealed unsafe class PathTracer : IDisposable
                 s.f0 = 0.02;
                 s.n = shading;
             }
-            else if (material == 17u)
+            else if (material == 17u || material == 18u)
             {
-                // A gallery picture (Material.Pictured), in its mean colour: matte paper.
-                s.alpha = 0.5;
+                // A gallery picture (Material.Pictured) in its mean colour, matte paper; oak boards (Material.Oak) in
+                // theirs, oiled.
+                s.alpha = material == 17u ? 0.5 : 0.3;
                 s.n = shading;
             }
             else if (material >= 8u && t.options.x > 0.5)

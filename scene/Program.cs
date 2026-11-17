@@ -331,6 +331,42 @@ internal static unsafe class Stage
             return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
         }
 
+        // Value noise, smooth between whole points, 0 to 1.
+        float hash(vec3 p)
+        {
+            p = fract(p * 0.3183099 + 0.1) * 17.0;
+            return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+        }
+
+        float noise(vec3 x)
+        {
+            vec3 i = floor(x);
+            vec3 f = fract(x);
+            f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+                       mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+        }
+
+        // A highlight's lobe about the half-vector h: Blinn-Phong of exponent e; on brushed metal (aniso above 0)
+        // stretched along the brush t, as Ashikhmin and Shirley's is, wide along the grooves and sharp across them,
+        // its energy kept.
+        float lobe(vec3 n, vec3 h, float e, vec3 t, float aniso)
+        {
+            float nh = max(dot(n, h), 0.0);
+            if (aniso <= 0.0)
+            {
+                return pow(nh, e);
+            }
+
+            vec3 b = normalize(cross(n, t));
+            t = cross(b, n);
+            float eu = e * (1.0 - aniso);
+            float ev = e / (1.0 - aniso);
+            float ht = dot(h, t);
+            float hb = dot(h, b);
+            return sqrt((eu + 1.0) * (ev + 1.0)) / (e + 1.0) * pow(nh, (eu * ht * ht + ev * hb * hb) / max(1.0 - nh * nh, 1e-4));
+        }
+
         // What the hall shows a glossy surface in direction r: the lit floor below, the brick around, the dark roof
         // above, and less of all of it behind the camera, where nothing is built.
         vec3 hall(vec3 r)
@@ -389,7 +425,7 @@ internal static unsafe class Stage
                 n = face;
                 m = vec4(0.03, 30.0, 0.0, 0.35);
             }
-            else if (vMaterial >= 8u && frame.options.x > 0.5)
+            else if (vMaterial >= 8u && vMaterial < 16u && frame.options.x > 0.5)
             {
                 // A photographed material: its scan, its relief, its normals and its roughness; no rounded edges.
                 vec4 s = scans[min(vMaterial - 8u, 5u)];
@@ -452,6 +488,36 @@ internal static unsafe class Stage
                 vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(vEdge.xy);
                 n = normalize(face + lean.x * across + lean.y * cross(face, across));
                 m = materials[vMaterial >= 8u ? 0u : min(vMaterial, 7u)];
+                if (vMaterial == 18u)
+                {
+                    // Oak boards (Material.Oak): flat-sawn grain along the face's longer side (Edge: where on the
+                    // face, its half sizes), the late wood darker, the pores in fine dark streaks, and the figure's
+                    // sheen sliding as the eye moves (chatoyance); oiled, under the clear coat further on. Each line
+                    // fades to its tone where it would be under a pixel.
+                    bool longU = vEdge.z >= vEdge.w;
+                    vec2 q = longU ? vEdge.xy * vEdge.zw : vEdge.yx * vEdge.wz; // metres along the grain, across it
+                    vec3 grain = longU ? across : cross(face, across);
+                    float seed = fract(dot(vEdge.zw, vec2(91.7, 37.3)));
+                    float ring = q.y / 0.005 + 6.0 * noise(vec3(q.x * 1.5, q.y * 12.0, seed * 50.0)) + 1.5 * sin(q.x * 9.0 + q.y * 30.0 + seed * 40.0);
+                    float rings = 1.0 - smoothstep(0.5, 1.5, fwidth(ring));
+                    float late = smoothstep(0.35, 0.95, 0.5 + 0.5 * sin(ring * 6.2831853)) * mix(0.5, 1.0, noise(vec3(q.x * 4.0, ring * 0.5, seed * 7.0)));
+                    float pore = smoothstep(0.62, 0.8, noise(vec3(q.x * 30.0, q.y * 1400.0, seed * 9.0)));
+                    float pores = 1.0 - smoothstep(0.5, 1.5, fwidth(q.y * 1400.0));
+                    float sheen = 1.0 - smoothstep(0.5, 1.5, fwidth(q.y * 260.0));
+                    float figure = 1.0 + 0.1 * sin(q.y * 260.0 + 7.0 * dot(v, grain) + seed * 20.0) * sheen;
+                    float board = 0.88 + 0.24 * noise(vec3(q.x * 0.8, q.y * 3.0, seed * 31.0)); // a board's tone, not even
+                    base = vColor * board * figure * mix(1.0, mix(1.06, 0.78, late), rings) * mix(1.0, 0.8, pore * pores);
+                    m = vec4(0.04, 28.0, 0.0, 0.4);
+                }
+                else if (vMaterial == 2u || vMaterial == 3u)
+                {
+                    // Worn metal: its polish varies over centimetres and over millimetres, duller where hands have
+                    // been, darker with it; the fine wear fades where it would be under a pixel.
+                    float fine = 1.0 - smoothstep(0.3, 1.0, length(fwidth(vWorld)) * 160.0);
+                    float wear = 0.6 * noise(vWorld * 23.0) + 0.4 * mix(0.5, noise(vWorld * 160.0), fine);
+                    m.y *= mix(0.45, 1.5, wear);
+                    base *= mix(0.85, 1.06, wear);
+                }
             }
 
             vec3 keyDir = normalize(vec3(-0.45, 0.8, 0.55));
@@ -515,9 +581,22 @@ internal static unsafe class Stage
             vec3 f0 = mix(vec3(m.x), base, m.z);
             vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0) * m.w;
             float norm = (m.y + 8.0) / 25.0;
-            vec3 highlight = keyColor * pow(max(dot(n, normalize(keyDir + v)), 0.0), m.y) * key * shade
-                + fillColor * pow(max(dot(n, normalize(fillDir + v)), 0.0), m.y) * fill;
+            // Brushed metal stretches its highlights along the brush, a box's face's first axis: aluminium most, steel
+            // less, brass (redder than it is blue) a little.
+            float aniso = vMaterial == 2u ? 0.85 : vMaterial == 3u ? (base.r > 1.8 * base.b ? 0.2 : 0.6) : 0.0;
+            vec3 brush = vTangent - n * dot(vTangent, n);
+            brush = dot(brush, brush) > 1e-8 ? normalize(brush) : vec3(1.0, 0.0, 0.0);
+            vec3 highlight = keyColor * lobe(n, normalize(keyDir + v), m.y, brush, aniso) * key * shade
+                + fillColor * lobe(n, normalize(fillDir + v), m.y, brush, aniso) * fill;
             vec3 lit = base * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
+            // A thin clear coat over oiled wood (Material.Wood, Material.Oak): its own sharp highlight and reflection,
+            // off the face's smooth normal rather than the grain's, weighed by a dielectric's Fresnel.
+            if (vMaterial == 7u || vMaterial == 18u)
+            {
+                float fc = 0.04 + 0.96 * pow(1.0 - max(dot(face, v), 0.0), 5.0);
+                float coat = pow(max(dot(face, normalize(keyDir + v)), 0.0), 400.0) * key * shade * 16.0;
+                lit = lit * (1.0 - fc) + (keyColor * coat + hall(reflect(-v, face)) * ao) * fc;
+            }
             lit += vMaterial == 17u ? base * 0.5 : vec3(0.0); // a gallery picture's light from within
 
             // A pool of light around the robot; the hall falls into the dark beyond it and above it. The knots' floor

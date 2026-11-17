@@ -134,6 +134,10 @@ internal enum Material : uint
     // A gallery picture inside a demo's or an artifact's glass (GalleryPictures, HallGallery.Picture): Edge carries its
     // place on the picture, from its top left, and its layer. Flat lighting and the path tracer draw its mean colour.
     Pictured = 17,
+
+    // Oak boards, drawn by the Low shader from a box's Edge: flat-sawn grain along the face's longer side, its pores, a
+    // sheen that moves with the eye, under a clear coat. The path tracer and Flat draw them in their colour.
+    Oak = 18,
 }
 
 // A surface's colour and what it is made of.

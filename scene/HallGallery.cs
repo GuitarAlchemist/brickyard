@@ -48,6 +48,10 @@ internal sealed class HallGallery : IDisposable
     // A glass's plinth under it, as gallery/Blocks.fs's tablettes builds it: its height, and its side in radii.
     private const float Plinth = 0.05f, PlinthSide = 1.7f;
 
+    // Whether a plain box of Lego's is oak, by its colour: Lego has no wood surface, so Blocks.fs's oak and dark oak
+    // (0.2, 0.12, 0.065 and 0.11, 0.07, 0.04) come as matte, warm browns. They are drawn as boards (Material.Oak).
+    internal static bool Oaken(SN.Vector3 c) => c.X is > 0.08f and < 0.35f && c.X > 2.3f * c.Z && c.Y > 1.4f * c.Z && c.Y < 0.75f * c.X;
+
     // The picture lights' warm wash on the wall, which the Low shader adds (Stage.LowFragmentShader): along the wall at
     // this x and height, from the back of the gallery to its front.
     internal const string Wash = "vec3(-5.5, 2.45, clamp(vWorld.z, -3.3, 5.9))";
@@ -381,7 +385,7 @@ internal sealed class HallGallery : IDisposable
                 1 => new Finish(box.Color, Material.Steel),
                 2 => new Finish(box.Color, Material.Glass),
                 4 => new Finish(box.Color, Material.Enamel),
-                _ => new Finish(box.Color, Material.Matte),
+                _ => new Finish(box.Color, Oaken(box.Color) ? Material.Oak : Material.Matte),
             };
             Boxes.Add(local, new SN.Vector3(0f, box.Size.Y / 2f, 0f), box.Size, finish);
             var into = furniture;
@@ -466,8 +470,8 @@ internal sealed class HallGallery : IDisposable
         {
             var desk = SN.Matrix4x4.CreateRotationX(Slope) * SN.Matrix4x4.CreateTranslation(0f, 0.24f, 0f) * cap;
             local.Clear();
-            Boxes.Add(local, new SN.Vector3(0f, 0f, -0.012f), new SN.Vector3(0.8f, 0.54f, 0.024f), new Finish(new(0.11f, 0.07f, 0.04f), Material.Matte));
-            Boxes.Add(local, new SN.Vector3(0f, -0.285f, 0.01f), new SN.Vector3(0.8f, 0.03f, 0.03f), new Finish(new(0.11f, 0.07f, 0.04f), Material.Matte)); // the ledge the book rests on
+            Boxes.Add(local, new SN.Vector3(0f, 0f, -0.012f), new SN.Vector3(0.8f, 0.54f, 0.024f), new Finish(new(0.11f, 0.07f, 0.04f), Material.Oak));
+            Boxes.Add(local, new SN.Vector3(0f, -0.285f, 0.01f), new SN.Vector3(0.8f, 0.03f, 0.03f), new Finish(new(0.11f, 0.07f, 0.04f), Material.Oak)); // the ledge the book rests on
             Boxes.Add(local, new SN.Vector3(0f, 0f, 0.006f), new SN.Vector3(0.76f, 0.5f, 0.012f), new Finish(new(0.16f, 0.05f, 0.04f), Material.Enamel)); // the book's boards
             Boxes.Add(local, new SN.Vector3(0f, 0f, 0.015f), new SN.Vector3(0.73f, 0.475f, 0.006f), new Finish(new(0.7f, 0.66f, 0.58f), Material.Matte)); // its page block
             Place(local, desk, furniture);
@@ -743,6 +747,9 @@ internal sealed class HallGallery : IDisposable
     // Part of --selftest: the shipped gallery as Lego makes it, against the hall it stands in and the shader that lights it.
     internal static void SelfTest(Action<bool, string> check, string lowShader)
     {
+        check(Oaken(new(0.2f, 0.12f, 0.065f)) && Oaken(new(0.11f, 0.07f, 0.04f))
+            && !Oaken(new(0.5f, 0.36f, 0.16f)) && !Oaken(new(0.16f, 0.17f, 0.18f)) && !Oaken(new(0.66f, 0.61f, 0.52f)) && !Oaken(new(0.30f, 0.07f, 0.06f)),
+            "the gallery's oak and dark oak are drawn as boards; brass, steel, ivory and a red cover are not");
         var content = Load(ShippedPath);
         check(content is { Courses.Length: 41, Demos.Length: 11, Artifacts.Length: 7, Streeling.Length: 482, Departments.Count: 22 }
             && content.Courses.Concat(content.Streeling).All(c => c.Url.StartsWith(LearnHost.Site, StringComparison.Ordinal)),

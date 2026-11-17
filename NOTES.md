@@ -2164,6 +2164,32 @@ The author asked: "Les boules a eau devraient montrer la scène (exemple: démo,
 - Measured in hidden 3840x2054 runs (`--view 8 --dlss`): the log reads `SCENE gallery pictures: 18`. All 11 globes and
   the paperweights show their pages.
 
+### Optical effects for metal, wood and glass (2026-11-16)
+
+The author asked: "Tu regarderas si on ne peut ajouter d'autres effets optiques intéressants (pour métal, bois, et
+autres matériaux)". These were added to the Low shader, analytic and with no texture.
+
+- **Oak** (`Material.Oak`, 18). Lego has no wood surface, so the gallery's plain boxes in Blocks.fs's oak and dark oak
+  colours (`HallGallery.Oaken`) and the lectern's desk are drawn as boards.
+  - Flat-sawn grain runs along each face's longer side. The rings wander and the late wood is darker; pores show as
+    fine dark streaks, and each board has its own tone.
+  - The figure's sheen slides as the eye moves (chatoyance).
+  - Each line fades to its tone where it would fall under a pixel.
+- **A clear coat over wood** (oak boards and turned oak, `Material.Wood`). A second, sharp highlight and the hall's
+  reflection come off the face's smooth normal, not the grain's, weighed by a dielectric's Fresnel.
+- **Brushed metal.** Highlights stretch along the brush, which is a box face's first axis (an Ashikhmin–Shirley lobe
+  with its energy kept): aluminium 0.85, steel 0.6, brass 0.2.
+- **Worn metal** (steel and brass). The polish varies over centimetres and over millimetres, duller and darker where
+  hands have been. The fine wear fades at a distance.
+- **Glass dispersion** (GlassWork). Red, green and blue are bent with indices 0.018 apart, so a globe's edges and the
+  glitter seen through it fringe as through a prism.
+- The path tracer draws oak in its colour, oiled; Flat draws it in its colour.
+- Checked by eye in hidden 4K close-ups of the demos' counter: the grain reads as oak, not as stripes, after one round
+  (the first rings were too even), and the flakes fringe.
+
+*To verify*: the shader's cost on a quiet GPU. Steel's brushing reads best under a grazing light, and the counter's
+front faces away from the key light.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
