@@ -1811,7 +1811,7 @@ internal static unsafe class Stage
             WallCard.Render([], ""), WallCard.Width, WallCard.Height, 1, new(-wallW, wallH, wallW, -wallH), 0f, 0f);
         // The lectern's open book (LearnLectern): a course or a Streeling department read in the hall, its pages a picture
         // laid out by the reader's mod, reloaded when a build replaces modules\reader\LearnReader.Module.dll.
-        var reader = new LearnLectern(new LearnHost(HallGallery.Browse), Option(args, "--reader-module") ?? Installed(Path.Combine("reader", "LearnReader.Module.dll")));
+        var reader = new LearnLectern(new LearnHost(HallGallery.Browse), Option(args, "--reader-module") ?? Path.Combine(AppContext.BaseDirectory, "modules", "reader", "LearnReader.Module.dll"));
         var firstPage = reader.Picture;
         var readerBook = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
             firstPage.Rgba, Delta.SceneModules.ReaderPicture.Width, Delta.SceneModules.ReaderPicture.Height, firstPage.Revision, HallGallery.BookRect, 0f, 0f);

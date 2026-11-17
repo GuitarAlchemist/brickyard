@@ -2021,7 +2021,8 @@ be read: `LearnHost` reads only spareilleux.github.io/learn (HTTPS, no cookie, a
 `%LOCALAPPDATA%\delta\learn-cache`), draws the text with the scene's rasterizer and opens learn pages only.
 
 - The same source is compiled into the scene as the fallback. The mod in `modules\reader\LearnReader.Module.dll` beside
-  scene.exe (or `--reader-module <dll>`) replaces it at start. The generalised `ModuleSession` reloads it, as it does
+  scene.exe (or `--reader-module <dll>`) replaces it, at start or once put there (the file looked at once a second;
+  proved hidden: copied 15 s in, « the mod reads », the open course reopened). The generalised `ModuleSession` reloads it, as it does
   the office's widgets (`WidgetModuleSession` is now that session for widget modules), and the book reopens at what was
   open. If the mod throws, or its picture is not 2000×1300 RGBA, the built-in reader takes over until a new image comes.
 - Work on it live: `dotnet build modules/LearnReader/LearnReader.Module.csproj -c Release -p:Version=<next> -o

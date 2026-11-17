@@ -6,13 +6,18 @@ using System.Text;
 
 // The lectern's book as the scene runs it. The reader that lays out its pages is a mod (modules/LearnReader): the image
 // in modules\reader\LearnReader.Module.dll beside scene.exe, or --reader-module's, is loaded when there is one and
-// reloaded when a build replaces it, the book then reopened at what was open; else, or once the mod throws or draws a
+// reloaded when a build replaces it, the book then reopened at what was open; an image put there while the scene runs is
+// loaded too, the file looked at once a second. Without one, or once the mod throws or draws a
 // picture of the wrong size, the same code built into the scene reads, until a new image comes. The host keeps what may
 // be read (LearnHost): the learn site's pages only, the text drawn by the scene, links opened in the browser.
 internal sealed class LearnLectern : IDisposable
 {
     private readonly ReaderModule builtIn = new();
-    private readonly ModuleSession<IReaderModule>? session;
+    private readonly IReaderHost host;
+    private readonly string? path;
+    private ModuleSession<IReaderModule>? session;
+    private (long Length, DateTime Written) tried;
+    private double nextTry;
     private bool failed;
     private Action<IReaderModule>? last;
     private (object? Source, ulong Revision) seen;
@@ -20,17 +25,33 @@ internal sealed class LearnLectern : IDisposable
 
     public LearnLectern(IReaderHost host, string? path)
     {
+        (this.host, this.path) = (host, path is null ? null : Path.GetFullPath(path));
         builtIn.Initialize(host);
-        if (path is null) return;
+        if (!Start()) Console.WriteLine($"READER learn-reader: no mod at {this.path ?? "(none)"}, the built-in reader reads");
+    }
+
+    // Loads the mod's image when there is one not tried yet; true when it now reads.
+    private bool Start()
+    {
+        if (path is null || Stamp(path) is var stamp && (stamp.Length == 0 || stamp == tried)) return false;
+        tried = stamp;
         try
         {
             session = new(path, "LearnReader.Module", "Delta.LearnReader.ReaderModule", "learn-reader", m => m.Id, m => m.Initialize(host), "READER");
             Console.WriteLine($"READER learn-reader v{session.Version} sha256 {session.CodeHash}: the mod reads the lectern's book");
+            return true;
         }
         catch (Exception e)
         {
             Console.Error.WriteLine($"READER learn-reader mod refused ({e.GetType().Name}: {e.Message}); the built-in reader reads");
+            return false;
         }
+    }
+
+    private static (long Length, DateTime Written) Stamp(string file)
+    {
+        try { return new FileInfo(file) is { Exists: true } info ? (info.Length, info.LastWriteTimeUtc) : (0, default); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return (0, default); }
     }
 
     // Which reader lays out the book: the mod and its version, or the built-in one.
@@ -43,7 +64,17 @@ internal sealed class LearnLectern : IDisposable
     // Once a frame on the render thread: a new image of the mod replaces the running one, and the book is reopened.
     public void Poll(double now)
     {
-        if (session is null || !session.Poll(now)) return;
+        if (session is null)
+        {
+            if (now < nextTry) return;
+            nextTry = now + 1;
+            if (!Start()) return;
+        }
+        else if (!session.Poll(now))
+        {
+            return;
+        }
+
         failed = false;
         Use(last);
     }
