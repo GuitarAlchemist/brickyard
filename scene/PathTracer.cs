@@ -934,6 +934,12 @@ internal sealed unsafe class PathTracer : IDisposable
                 s.f0 = 0.02;
                 s.n = shading;
             }
+            else if (material == 17u)
+            {
+                // A gallery picture (Material.Pictured), in its mean colour: matte paper.
+                s.alpha = 0.5;
+                s.n = shading;
+            }
             else if (material >= 8u && t.options.x > 0.5)
             {
                 vec4 scan = scans[min(material - 8u, 5u)];

@@ -130,6 +130,10 @@ internal enum Material : uint
     // A module's triangle painted with one of the host's globe images (SceneModuleGeometry.Images, GlobeImages): Edge
     // carries its place on the image and the image's first layer. The Flat lighting draws it in its colour.
     Imaged = 16,
+
+    // A gallery picture inside a demo's or an artifact's glass (GalleryPictures, HallGallery.Picture): Edge carries its
+    // place on the picture, from its top left, and its layer. Flat lighting and the path tracer draw its mean colour.
+    Pictured = 17,
 }
 
 // A surface's colour and what it is made of.

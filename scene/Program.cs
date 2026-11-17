@@ -175,6 +175,7 @@ internal static unsafe class Stage
         layout(set = 0, binding = 2) uniform sampler2DArray normalMaps; // tangent space, green up
         layout(set = 0, binding = 3) uniform sampler2DArray armMaps;    // occlusion, roughness, metalness
         layout(set = 0, binding = 5) uniform sampler2DArray globeMaps;  // GlobeImages: a globe's west and east halves
+        layout(set = 0, binding = 6) uniform sampler2DArray pictureMaps; // GalleryPictures: what the gallery's glasses show
         layout(location = 0) out vec4 outColor;
 
         // Per photographed material (Material.BrickWall = 8 and on): its layer, its tile in metres (tools/textures), the
@@ -379,6 +380,15 @@ internal static unsafe class Stage
                 float water = smoothstep(0.02, 0.08, base.b - base.r);
                 m = mix(materials[0], vec4(0.02, 70.0, 0.0, 0.7), water);
             }
+            else if (vMaterial == 17u)
+            {
+                // A gallery picture (Material.Pictured): Edge holds its place on it and its layer, printed on satin
+                // paper and lit a little from within, as a diorama's backdrop is.
+                vec2 uv = vEdge.xy;
+                base = textureGrad(pictureMaps, vec3(uv, vEdge.z), dFdx(uv), dFdy(uv)).rgb;
+                n = face;
+                m = vec4(0.03, 30.0, 0.0, 0.35);
+            }
             else if (vMaterial >= 8u && frame.options.x > 0.5)
             {
                 // A photographed material: its scan, its relief, its normals and its roughness; no rounded edges.
@@ -508,6 +518,7 @@ internal static unsafe class Stage
             vec3 highlight = keyColor * pow(max(dot(n, normalize(keyDir + v)), 0.0), m.y) * key * shade
                 + fillColor * pow(max(dot(n, normalize(fillDir + v)), 0.0), m.y) * fill;
             vec3 lit = base * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
+            lit += vMaterial == 17u ? base * 0.5 : vec3(0.0); // a gallery picture's light from within
 
             // A pool of light around the robot; the hall falls into the dark beyond it and above it. The knots' floor
             // has its own light over its tables (KnotFloor), its edge fading over 80 cm.
@@ -1563,6 +1574,7 @@ internal static unsafe class Stage
                 new VkDescriptorSetLayoutBinding { Binding = 2, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 3, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 5, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 6, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 .. (rayTraced
                     ? new[] { new VkDescriptorSetLayoutBinding { Binding = 4, DescriptorType = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit } }
                     : []),
@@ -1574,7 +1586,7 @@ internal static unsafe class Stage
             PoolSizes =
             [
                 new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight },
-                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 4 * FramesInFlight },
+                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 5 * FramesInFlight },
                 .. (rayTraced ? new[] { new VkDescriptorPoolSize { Type = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = FramesInFlight } } : []),
             ],
         }, null);
@@ -1616,6 +1628,11 @@ internal static unsafe class Stage
         var (shell, shellGlass, shellBulbs) = (new Mesh(device, physical, shellVertices), new Mesh(device, physical, glassVertices), new Mesh(device, physical, bulbVertices));
         // The gallery on the left wall (HallGallery): the learn site's courses, demos and artifacts, from gallery.json
         // (--gallery FILE), drawn from Lego's blocks and redrawn when the file changes; a click on one opens its page.
+        // What the demos and artifacts show inside their glasses (GalleryPictures, --pictures DIR), read first.
+        var picturesDir = quality == Quality.Low && !args.Contains("--no-textures") ? GalleryPictures.Find(Option(args, "--pictures")) : null;
+        GalleryPictures.Pixels? picturePixels = GalleryPictures.Read(picturesDir);
+        HallGallery.Pictures = picturePixels.Held;
+        Console.WriteLine($"SCENE gallery pictures: {picturePixels.Held.Count}{(picturesDir is null ? " (the Flat lighting or --no-textures)" : $" from {picturesDir}")}");
         var hallGallery = new HallGallery(vertices => new Mesh(device, physical, vertices), FramesInFlight, Option(args, "--gallery"));
         Console.WriteLine($"SCENE gallery: {hallGallery.Summary}");
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
@@ -1781,6 +1798,8 @@ internal static unsafe class Stage
         var materials = new MaterialTextures(device, physical, upload, materialDir);
         var globes = new GlobeImages(device, physical, upload, globePixels!);
         globePixels = null;
+        var pictures = new GalleryPictures(device, physical, upload, picturePixels!);
+        picturePixels = null;
         // A globe's halves meet at the edges: clamped there, they never blend with the far side of their own half.
         var globeSampler = device.CreateSampler(new VkSamplerCreateInfo
         {
@@ -1857,6 +1876,7 @@ internal static unsafe class Stage
         device.WaitIdle();
         materials.FreeStaging();
         globes.FreeStaging();
+        pictures.FreeStaging();
         // Path tracing (F9, --path-tracing), with the ray scene: the hall drawn by following light through it.
         if (rays is not null && rtPipeline)
         {
@@ -1889,19 +1909,21 @@ internal static unsafe class Stage
             upscaler.Mode = srMode;
             Console.WriteLine($"SCENE raster pass through DLSS Super Resolution, {Streamline.Modes[upscaler.Mode]}, textures' mip bias {lodBias:F2}; F7 or --no-dlss-sr");
         }
-        var maps = stackalloc VkDescriptorImageInfo[4];
+        var maps = stackalloc VkDescriptorImageInfo[5];
         foreach (var frameSet in frameSets)
         {
             maps[0] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Albedo, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[1] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Normal, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[2] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Arm, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[3] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = globes.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            maps[4] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = pictures.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             device.UpdateDescriptorSets(
             [
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 1, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[0] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 2, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[1] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 3, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[2] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 5, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[3] },
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 6, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[4] },
             ], []);
         }
         var splashSets = new VkDescriptorSet[splashTextures.Length];
@@ -4553,6 +4575,7 @@ internal static unsafe class Stage
         materials.Dispose();
         device.DestroySampler(globeSampler, null);
         globes.Dispose();
+        pictures.Dispose();
         if (tracer is { GpuMilliseconds.Count: > 0 })
         {
             Console.WriteLine($"SCENE path tracing {tracer.Measured()} at {tracer.Width}x{tracer.Height}");

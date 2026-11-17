@@ -2140,6 +2140,30 @@ does the same in Delta.
 *To verify*: the cost of the copy at 4K on a quiet GPU, and tracing the globes' contents so path tracing does not show
 them empty.
 
+### What each glass shows (2026-11-16)
+
+The author asked: "Les boules a eau devraient montrer la scène (exemple: démo, artifact) si possible".
+
+- **Inside a water globe**, the demo's picture stands at the back, curved like a diorama's backdrop: 110° of a cylinder
+  0.7 r round, 4:3. Glitter hangs in front of it. **Under a paperweight's dome**, the artifact's picture is set in the
+  enamel plate. In both, the title moves to an ivory label on the plinth's front. A demo or an artifact without a
+  picture keeps its title inside, as before.
+- **Where the pictures come from.**
+  - `GalleryPictures` loads 512 x 512 PNGs from `%LOCALAPPDATA%\delta\gallery\pictures` into one array image, read
+    once at start. Each file is named by the first 16 hex digits of the SHA-1 of its URL as the gallery reads it
+    (`Uri.AbsoluteUri`, so `château` is keyed as `ch%C3%A2teau`).
+  - The Low shader draws them as `Material.Pictured` (17), lit as satin paper plus half its colour from within, since
+    they are screens. Flat lighting and the path tracer draw each picture's mean colour.
+  - The pictures never enter the repository, because the artifacts are private.
+- **Demos.** `tools/gallery-pictures/pictures.ps1` screenshots each page in a throwaway headless Chromium, through CDP
+  on a local port. The browser is muted, refuses every permission, has its own profile, and is stopped afterwards.
+  Documentation pages are cropped to their video, image or canvas.
+- **Artifacts.** claude.ai answers a headless browser with a bot check, which is not to be got round. Each artifact's
+  files were therefore read with the Artifact tool and rendered locally: a page saved to disk, or a small local server
+  for the multi-file Atlas, and the Slides deck's cover. They were shot, then saved with `-From … -Url …`.
+- Measured in hidden 3840x2054 runs (`--view 8 --dlss`): the log reads `SCENE gallery pictures: 18`. All 11 globes and
+  the paperweights show their pages.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

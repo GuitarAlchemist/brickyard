@@ -632,6 +632,7 @@ internal sealed class Link(Func<double> clock)
         HallGallery.SelfTest(Check, Stage.LowFragmentShader);
         LearnLectern.SelfTest(Check);
         GlassWork.SelfTest(Check);
+        GalleryPictures.SelfTest(Check);
         Streamline.SelfTest(Check);
         Cinematic.SelfTest(Check);
         ToolWheel.SelfTest(Check);

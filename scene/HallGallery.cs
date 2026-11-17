@@ -41,6 +41,13 @@ internal sealed class HallGallery : IDisposable
     // 10 cm of it.
     internal readonly record struct Globe(SN.Matrix4x4 World, float Radius, bool Dome, SN.Vector3 Tint);
 
+    // The pictures held (GalleryPictures), by their URL's key: each one's layer and mean colour. Set before the first
+    // gallery is built; a demo or an artifact without one keeps its title inside its glass.
+    internal static IReadOnlyDictionary<string, (int Layer, SN.Vector3 Mean)> Pictures { get; set; } = new Dictionary<string, (int, SN.Vector3)>();
+
+    // A glass's plinth under it, as gallery/Blocks.fs's tablettes builds it: its height, and its side in radii.
+    private const float Plinth = 0.05f, PlinthSide = 1.7f;
+
     // The picture lights' warm wash on the wall, which the Low shader adds (Stage.LowFragmentShader): along the wall at
     // this x and height, from the back of the gallery to its front.
     internal const string Wash = "vec3(-5.5, 2.45, clamp(vWorld.z, -3.3, 5.9))";
@@ -513,22 +520,41 @@ internal sealed class HallGallery : IDisposable
         }
     }
 
-    // Inside a demo's water globe, r round, centred at the origin: a slate disc on its floor, the demo's title on a
-    // small card of slate standing on it, and glitter hanging in the water about it, gold and silver, the same each time
-    // for the same title.
+    // Inside a demo's water globe, r round, centred at the origin: a slate disc on its floor and glitter hanging in the
+    // water, gold and silver, the same each time for the same title. When the demo's picture is held, it stands at the
+    // back as a diorama's curved backdrop, and the title is lettered on a label on the plinth's front; else the title
+    // stands on an ivory card on a brass post in the middle of the water.
     private static void WaterGlobe(List<Vertex> o, Entry entry, float r)
     {
         var slate = new Finish(new(0.025f, 0.03f, 0.035f), Material.Enamel);
         var floor = -r * 0.62f;
-        Boxes.Add(o, new SN.Vector3(0f, floor, 0f), new SN.Vector3(r * 1.5f, 0.012f, r * 1.2f), slate);
-        // An ivory card on a brass post, its title in ink, held up in the middle of the water.
-        Boxes.Add(o, new SN.Vector3(0f, (floor - (r * 0.35f)) / 2f, -0.007f), new SN.Vector3(0.004f, -floor - (r * 0.35f), 0.004f), new Finish(new(0.5f, 0.36f, 0.16f), Material.Steel));
-        Boxes.Add(o, new SN.Vector3(0f, r * 0.02f, -0.004f), new SN.Vector3(r * 1.3f, r * 0.74f, 0.004f), new Finish(new(0.66f, 0.61f, 0.52f), Material.Matte));
-        Lines(o, entry.Title, 14, 3, r * 0.15f, r * 0.2f, r * 0.02f, r * 1.2f, -0.0015f, new SN.Vector3(0.07f, 0.06f, 0.05f));
+        Boxes.Add(o, new SN.Vector3(0f, floor, 0f), new SN.Vector3(r * 1.1f, 0.012f, r * 0.8f), slate);
+        var pictured = Pictures.TryGetValue(GalleryPictures.Key(entry.Url), out var picture);
+        if (pictured)
+        {
+            // A cylinder's face 0.7 r round the globe's axis, 110° of it, as tall as its arc is wide by 3 to 4.
+            const float half = 0.96f;
+            var rc = r * 0.7f;
+            var (bottom, top) = (floor + 0.006f, floor + 0.006f + (rc * 2f * half * 0.75f));
+            Picture(o, picture, 16, (u, v) =>
+            {
+                var a = (u - 0.5f) * 2f * half;
+                return (new SN.Vector3(rc * MathF.Sin(a), top - (v * (top - bottom)), -rc * MathF.Cos(a)), new SN.Vector3(-MathF.Sin(a), 0f, MathF.Cos(a)));
+            });
+            Label(o, entry.Title, r, -(r * 0.96f) - (Plinth / 2f));
+        }
+        else
+        {
+            // An ivory card on a brass post, its title in ink, held up in the middle of the water.
+            Boxes.Add(o, new SN.Vector3(0f, (floor - (r * 0.35f)) / 2f, -0.007f), new SN.Vector3(0.004f, -floor - (r * 0.35f), 0.004f), new Finish(new(0.5f, 0.36f, 0.16f), Material.Steel));
+            Boxes.Add(o, new SN.Vector3(0f, r * 0.02f, -0.004f), new SN.Vector3(r * 1.3f, r * 0.74f, 0.004f), new Finish(new(0.66f, 0.61f, 0.52f), Material.Matte));
+            Lines(o, entry.Title, 14, 3, r * 0.15f, r * 0.2f, r * 0.02f, r * 1.2f, -0.0015f, new SN.Vector3(0.07f, 0.06f, 0.05f));
+        }
+
         var random = new Random(StableSeed(entry.Title));
         var gold = new Finish(new(0.62f, 0.45f, 0.16f), Material.Steel);
         var silver = new Finish(new(0.7f, 0.72f, 0.74f), Material.Steel);
-        for (var i = 0; i < 70; i++)
+        for (var i = 0; i < (pictured ? 40 : 70); i++)
         {
             // Within 0.82 of the radius, none in front of the card's face.
             SN.Vector3 p;
@@ -536,7 +562,8 @@ internal sealed class HallGallery : IDisposable
             {
                 p = new SN.Vector3((float)random.NextDouble() * 2f - 1f, (float)random.NextDouble() * 2f - 1f, (float)random.NextDouble() * 2f - 1f) * (r * 0.82f);
             }
-            while (p.Length() > r * 0.82f || p.Y < floor + 0.01f || (MathF.Abs(p.X) < r * 0.7f && MathF.Abs(p.Y) < r * 0.42f && p.Z > -0.01f && p.Z < 0.012f));
+            while (p.Length() > r * 0.82f || p.Y < floor + 0.01f
+                || (pictured ? p.Z < -r * 0.36f : MathF.Abs(p.X) < r * 0.7f && MathF.Abs(p.Y) < r * 0.42f && p.Z > -0.01f && p.Z < 0.012f));
 
             var s = 0.0025f + ((float)random.NextDouble() * 0.002f);
             Boxes.Add(o, p, new SN.Vector3(s, s * 0.3f, s), i % 3 == 0 ? silver : gold);
@@ -544,15 +571,53 @@ internal sealed class HallGallery : IDisposable
     }
 
     // Inside an artifact's paperweight, a dome r round standing at the origin: a plate in its group's colour lying
-    // tilted toward the viewer, the artifact's title lettered on it and its group under it.
+    // tilted toward the viewer. When the artifact's picture is held it is set in the plate, framed by the colour, and
+    // the title is lettered on a label on the plinth's front; else the plate carries the title and the group.
     private static void Paperweight(List<Vertex> o, Entry entry, float r, SN.Vector3 colour)
     {
         var plate = new List<Vertex>();
         Boxes.Add(plate, new SN.Vector3(0f, 0f, -0.002f), new SN.Vector3(r * 1.3f, r * 0.9f, 0.004f), new Finish(colour, Material.Enamel));
-        Boxes.Add(plate, new SN.Vector3(0f, (-r * 0.45f) + 0.006f, 0.0002f), new SN.Vector3(r * 1.2f, 0.002f, 0.0006f), new Finish(new(0.7f, 0.55f, 0.25f), Material.Steel));
-        Lines(plate, entry.Title, 14, 3, r * 0.13f, r * 0.17f, r * 0.06f, r * 1.2f, 0.0006f, new SN.Vector3(0.93f, 0.9f, 0.82f));
-        Text(plate, entry.Group, new SN.Vector3(0f, -r * 0.33f, 0.0006f), r * 0.09f, r * 1.1f, new SN.Vector3(0.8f, 0.72f, 0.55f), 28);
+        if (Pictures.TryGetValue(GalleryPictures.Key(entry.Url), out var picture))
+        {
+            var (w, h) = (r * 1.12f, r * 0.84f);
+            Picture(plate, picture, 1, (u, v) => (new SN.Vector3((u - 0.5f) * w, (0.5f - v) * h, 0.0004f), SN.Vector3.UnitZ));
+            Label(o, entry.Title, r, -Plinth / 2f);
+        }
+        else
+        {
+            Boxes.Add(plate, new SN.Vector3(0f, (-r * 0.45f) + 0.006f, 0.0002f), new SN.Vector3(r * 1.2f, 0.002f, 0.0006f), new Finish(new(0.7f, 0.55f, 0.25f), Material.Steel));
+            Lines(plate, entry.Title, 14, 3, r * 0.13f, r * 0.17f, r * 0.06f, r * 1.2f, 0.0006f, new SN.Vector3(0.93f, 0.9f, 0.82f));
+            Text(plate, entry.Group, new SN.Vector3(0f, -r * 0.33f, 0.0006f), r * 0.09f, r * 1.1f, new SN.Vector3(0.8f, 0.72f, 0.55f), 28);
+        }
+
         Place(plate, SN.Matrix4x4.CreateRotationX(-0.95f) * SN.Matrix4x4.CreateTranslation(0f, r * 0.36f, 0f), o);
+    }
+
+    // A picture (Material.Pictured) on a surface at(u, v) gives, from the picture's top left (0, 0) to its bottom right
+    // (1, 1), with its normal there: columns strips across, wound as Boxes winds a face seen from its front.
+    private static void Picture(List<Vertex> o, (int Layer, SN.Vector3 Mean) picture, int columns, Func<float, float, (SN.Vector3 P, SN.Vector3 N)> at)
+    {
+        for (var i = 0; i < columns; i++)
+        {
+            var (u0, u1) = ((float)i / columns, (float)(i + 1) / columns);
+            Vertex Corner(float u, float v)
+            {
+                var (p, n) = at(u, v);
+                var along = at(MathF.Min(u + 0.01f, 1f), v).P - at(MathF.Max(u - 0.01f, 0f), v).P;
+                return new Vertex(p, n, picture.Mean, Material.Pictured, SN.Vector3.Normalize(along), new(u, v, picture.Layer, 0f));
+            }
+
+            var (p00, p10, p11, p01) = (Corner(u0, 1f), Corner(u1, 1f), Corner(u1, 0f), Corner(u0, 0f));
+            o.AddRange([p00, p10, p11, p00, p11, p01]);
+        }
+    }
+
+    // A glass's title on an ivory label across its plinth's front, r the glass's radius, y the label's middle.
+    private static void Label(List<Vertex> o, string title, float r, float y)
+    {
+        var front = PlinthSide * r / 2f;
+        Boxes.Add(o, new SN.Vector3(0f, y, front + 0.001f), new SN.Vector3(PlinthSide * r * 0.92f, Plinth * 0.78f, 0.002f), new Finish(new(0.66f, 0.61f, 0.52f), Material.Matte));
+        Lines(o, title, 24, 2, 0.0105f, 0.0145f, y, PlinthSide * r * 0.86f, front + 0.0021f, new SN.Vector3(0.07f, 0.06f, 0.05f));
     }
 
     private static int StableSeed(string text)
