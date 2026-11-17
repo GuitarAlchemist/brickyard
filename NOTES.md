@@ -2100,6 +2100,12 @@ Measured in hidden runs (3840x2054, port 8899):
   the same command gave 9 to 52 fps from one run to the next. Still to measure on a quiet GPU, or live by F7 on the
   RTX card.
 
+Live, with frame generation, the first window failed after about ten seconds and turned DLSS off: `slSetConstants:
+missing constants`. Streamline logged "Setting different 'common' constants multiple times within the same frame is
+NOT allowed!". One frame was recorded twice on one `BeginFrame` token, after a 272 ms frame. `Evaluate` now skips a
+second evaluation on the same token (`Streamline.Skipped`); the last upscaled picture stays. The upscaler turns DLSS
+off only after 120 failures in a row.
+
 Shutting down still logs `dlssEntry.cpp destroyKernel(mvecKernel) failed 6`. It comes from the kernel that computes
 the camera's motion, and changes nothing on screen.
 

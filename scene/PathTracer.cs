@@ -411,7 +411,7 @@ internal sealed unsafe class PathTracer : IDisposable
                 tags[i] = Streamline.Tag(&resources[i], types[i], target.Width, target.Height);
             }
 
-            if (Streamline.EvaluateRayReconstruction(cb.VkHandle, frameIndex, ref constants, ref options, tags) is { } failed)
+            if (Streamline.EvaluateRayReconstruction(cb.VkHandle, frameIndex, ref constants, ref options, tags) is { } failed && failed != Streamline.Skipped)
             {
                 if (UpscaleError is null)
                 {

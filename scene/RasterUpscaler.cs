@@ -120,6 +120,12 @@ internal sealed unsafe class RasterUpscaler : IDisposable
 
     public long Evaluations { get; private set; }
 
+    // Frames whose evaluation waited for the next one (Streamline.Skipped).
+    public long Skips { get; private set; }
+
+    private const int GivesUp = 120;
+    private int failing;
+
     // The last failure, from DLSS's size or its evaluation; the window then draws as before.
     public string? Error { get; private set; }
 
@@ -144,6 +150,7 @@ internal sealed unsafe class RasterUpscaler : IDisposable
         }
 
         Error = null;
+        failing = 0;
         (Width, Height, OutputWidth, OutputHeight) = (size.Width, size.Height, width, height);
         colour = new Picture(device, physical, colourFormat, Width, Height, VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.SampledBit, VkImageAspectFlags.ColorBit);
         depth = new Picture(device, physical, depthFormat, Width, Height, VkImageUsageFlags.DepthStencilAttachmentBit | VkImageUsageFlags.SampledBit, VkImageAspectFlags.DepthBit);
@@ -261,13 +268,28 @@ internal sealed unsafe class RasterUpscaler : IDisposable
             tags[i] = Streamline.Tag(&resources[i], types[i], tagged[i].Width, tagged[i].Height);
         }
 
-        if (Streamline.EvaluateSuperResolution(cb.VkHandle, frame, ref constants, ref options, tags) is { } failed)
+        // A frame skipped or failed shows the last picture upscaled; only failures that last turn DLSS off.
+        var failed = Streamline.EvaluateSuperResolution(cb.VkHandle, frame, ref constants, ref options, tags);
+        if (failed == Streamline.Skipped)
         {
-            Console.WriteLine($"SCENE super resolution failed: {failed}; drawn without it");
-            Error = failed;
+            Skips++;
+        }
+        else if (failed is not null)
+        {
+            if (failing++ == 0)
+            {
+                Console.WriteLine($"SCENE super resolution failed: {failed}; the last picture kept");
+            }
+
+            if (failing >= GivesUp)
+            {
+                Console.WriteLine($"SCENE super resolution failed {failing} frames in a row: {failed}; drawn without it");
+                Error = failed;
+            }
         }
         else
         {
+            failing = 0;
             Evaluations++;
         }
 
@@ -288,7 +310,7 @@ internal sealed unsafe class RasterUpscaler : IDisposable
 
     public string Measured() => Width == 0
         ? $"DLSS Super Resolution off ({Error ?? "not sized"})"
-        : $"DLSS Super Resolution ({Streamline.Modes[Mode]}) drawn at {Width}x{Height} to {OutputWidth}x{OutputHeight}, {Evaluations} evaluations{(Error is { } e ? $", last error: {e}" : "")}";
+        : $"DLSS Super Resolution ({Streamline.Modes[Mode]}) drawn at {Width}x{Height} to {OutputWidth}x{OutputHeight}, {Evaluations} evaluations, {Skips} skipped{(Error is { } e ? $", last error: {e}" : "")}";
 
     public void Dispose()
     {

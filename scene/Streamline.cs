@@ -342,6 +342,11 @@ internal static unsafe class Streamline
         }
     }
 
+    // An evaluation left for the next frame, as this frame's token already has its constants (Evaluate).
+    public const string Skipped = "skipped: this frame's constants are already set";
+
+    private static uint constantsFrame;
+
     private delegate string? SetOptions(ViewportHandle* viewport);
 
     private static string? Failed(int r, string call) => r == 0 ? null : $"{call}: {ResultName(r)}";
@@ -362,6 +367,14 @@ internal static unsafe class Streamline
             return $"slGetNewFrameToken: {ResultName(r)}";
         }
 
+        // A frame recorded twice on one BeginFrame's token (a redraw while the window is dragged): Streamline refuses
+        // other constants on it ("Setting different 'common' constants multiple times within the same frame"), so the
+        // second evaluation waits for the next frame.
+        if (frameToken != 0 && constantsFrame == frameNumber)
+        {
+            return Skipped;
+        }
+
         constants.Base = new BaseStructure(ConstantsType, 2);
         fixed (Constants* c = &constants)
         {
@@ -373,6 +386,7 @@ internal static unsafe class Streamline
             return $"slSetConstants: {ResultName(r)}";
         }
 
+        constantsFrame = frameToken != 0 ? frameNumber : 0;
         if (setOptions(&viewport) is { } refused)
         {
             return refused;
