@@ -2030,6 +2030,12 @@ be read: `LearnHost` reads only spareilleux.github.io/learn (HTTPS, no cookie, a
 - Proof, hidden, `--view 9 --read course:2 --reader-module <dll>`: v0.1.0 then v0.1.1 copied over it 18 s in,
   « reload 1 », same pid, the F# course still open on the book after the reload (peeks before and after).
   `LearnLectern.SelfTest` covers the reader's extraction and pages, the host's limits, and a missing mod falling back.
+- Delta's user manual (asked for « un manuel d'utilisateur pour Delta (en 3D dans Delta) ») is the book the lectern
+  starts with. It is in `modules/LearnReader/manual.fr.md` and `manual.en.md`, in the window's language, with a chapter
+  per `## `. Both files are embedded in the mod and in the scene's built-in copy. A course or a department shows
+  « Manuel de Delta » at the bottom left to come back to it. The facts come from README.md, README.fr.md and the F1
+  keys card (Panel.Keys). Editing the manual is a mod build, reloaded live. Trap: MSBuild takes `manual.fr.md` for a
+  French culture resource and puts it in a satellite assembly, so the items carry `WithCulture="false"`.
 
 ## The agents' office as a round tower (2026-11-16)
 

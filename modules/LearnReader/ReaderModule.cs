@@ -39,12 +39,65 @@ public sealed partial class ReaderModule : IReaderModule
 
     public string Id => "learn-reader";
 
+    // The book the lectern starts with: Delta's own manual, in the window's language.
     public void Initialize(IReaderHost host)
     {
         this.host = host;
-        status = Say("Click a course's book or a Streeling drawer to read it here.", "Clique sur le livre d'un cours ou sur un tiroir de Streeling pour le lire ici.");
-        readingTitle = Say("The reading desk", "Le lutrin");
-        Publish();
+        OpenManual();
+    }
+
+    // Delta's user manual (manual.fr.md, manual.en.md, embedded beside this code): a chapter per "## " heading, read
+    // without the network; its chapters on the left, a chapter's text on the right.
+    public void OpenManual()
+    {
+        Interlocked.Increment(ref request); // a page still being read is not shown over it
+        lock (gate)
+        {
+            var (name, chapters) = Manual(host.Language);
+            manual = chapters;
+            (title, link, outline, outlinePage, readingPage) = (name, "", [.. chapters.Select((c, i) => new ReaderItem(c.Title, $"{ManualScheme}{i}"))], 0, 0);
+            (reading, readingTitle, readingLink, body) = chapters.Count > 0 ? (0, chapters[0].Title, "", chapters[0].Blocks) : (-1, name, "", []);
+            status = chapters.Count > 0 ? "" : Say("The manual is missing from this build.", "Le manuel manque à cette version.");
+            Publish();
+        }
+    }
+
+    private const string ManualScheme = "manual:";
+    private List<Chapter> manual = [];
+
+    private sealed record Chapter(string Title, List<Block> Blocks);
+
+    private static (string Title, List<Chapter> Chapters) Manual(string language)
+    {
+        var code = typeof(ReaderModule).Assembly;
+        using var stream = code.GetManifestResourceStream($"LearnReader.manual.{language}.md") ?? code.GetManifestResourceStream("LearnReader.manual.en.md");
+        return stream is null ? ("Delta", []) : ParseManual(new StreamReader(stream).ReadToEnd());
+    }
+
+    // The manual's Markdown, plainly: "# " its title, "## " a chapter, "### " a heading, "- " a bullet, and paragraphs
+    // of lines between blank ones; backticks and stars are dropped.
+    private static (string Title, List<Chapter> Chapters) ParseManual(string text)
+    {
+        var (title, chapters, paragraph) = ("Delta", new List<Chapter>(), new List<string>());
+        void Flush()
+        {
+            if (paragraph.Count > 0 && chapters.Count > 0) chapters[^1].Blocks.Add(new(0, string.Join(' ', paragraph)));
+            paragraph.Clear();
+        }
+
+        foreach (var raw in text.Replace("\r", "").Split('\n'))
+        {
+            var line = raw.Replace("`", "").Replace("**", "").Trim();
+            if (line.StartsWith("# ", StringComparison.Ordinal)) { Flush(); title = line[2..].Trim(); }
+            else if (line.StartsWith("## ", StringComparison.Ordinal)) { Flush(); chapters.Add(new(line[3..].Trim(), [])); }
+            else if (line.StartsWith("### ", StringComparison.Ordinal)) { Flush(); if (chapters.Count > 0) chapters[^1].Blocks.Add(new(3, line[4..].Trim())); }
+            else if (line.StartsWith("- ", StringComparison.Ordinal)) { Flush(); if (chapters.Count > 0) chapters[^1].Blocks.Add(new(1, line[2..].Trim())); }
+            else if (line.Length == 0) Flush();
+            else paragraph.Add(line);
+        }
+
+        Flush();
+        return (title, chapters);
     }
 
     public void Dispose() => Interlocked.Increment(ref request); // a page still being read is not shown
@@ -53,7 +106,9 @@ public sealed partial class ReaderModule : IReaderModule
 
     public string Title => title;
 
-    private string Say(string english, string french) => host.Language == "fr" ? french : english;
+    private string Say(string english, string french) => Say(host, english, french);
+
+    private static string Say(IReaderHost host, string english, string french) => host.Language == "fr" ? french : english;
 
     // A course: its lessons from the site's sidebar, its own page on the right.
     public void OpenCourse(string name, string url)
@@ -110,6 +165,15 @@ public sealed partial class ReaderModule : IReaderModule
         {
             if (index < 0 || index >= outline.Count) return;
             (reading, item) = (index, outline[index]);
+            if (item.Url.StartsWith(ManualScheme, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref request);
+                var chapter = int.TryParse(item.Url[ManualScheme.Length..], out var c) && c >= 0 && c < manual.Count ? manual[c] : new(item.Title, []);
+                (readingTitle, readingLink, body, readingPage, status) = (chapter.Title, "", chapter.Blocks, 0, "");
+                Publish();
+                return;
+            }
+
             (readingTitle, readingLink, body, readingPage) = (item.Title, item.Url, [], 0);
             status = Say("Loading…", "Chargement…");
             Publish();
@@ -190,7 +254,17 @@ public sealed partial class ReaderModule : IReaderModule
             Arrows(rgba, regions, 0, $"{outlinePage + 1} / {outlinePages}", r => r.Turn(ref r.outlinePage, -1, outlinePages), r => r.Turn(ref r.outlinePage, 1, outlinePages));
         }
 
-        Link(rgba, regions, Margin, Say("Open on the site ↗", "Ouvrir sur le site ↗"), link);
+        if (link.StartsWith(Site, StringComparison.Ordinal))
+        {
+            var site = link;
+            Link(rgba, regions, Margin, Say("Open on the site ↗", "Ouvrir sur le site ↗"), r => r.host.Browse(site));
+        }
+
+        if (!outline.Any(i => i.Url.StartsWith(ManualScheme, StringComparison.Ordinal)))
+        {
+            var label = Say("Delta's manual", "Manuel de Delta");
+            Link(rgba, regions, Page - Margin - Measure(label, 23, true), label, r => r.OpenManual());
+        }
 
         // The right page: what is read, its text a page at a time.
         var right = Page + Margin;
@@ -222,7 +296,8 @@ public sealed partial class ReaderModule : IReaderModule
 
         if (readingLink.Length > 0)
         {
-            Link(rgba, regions, right, Say("Open this page on the site ↗", "Ouvrir cette page sur le site ↗"), readingLink);
+            var page = readingLink;
+            Link(rgba, regions, right, Say("Open this page on the site ↗", "Ouvrir cette page sur le site ↗"), r => r.host.Browse(page));
         }
 
         var previous = Volatile.Read(ref shown);
@@ -285,10 +360,10 @@ public sealed partial class ReaderModule : IReaderModule
         regions.Add(new Region(left + Page - 200, y - 30, left + Page - 20, y + 50, on));
     }
 
-    private void Link(byte[] rgba, List<Region> regions, int x, string label, string url)
+    private void Link(byte[] rgba, List<Region> regions, int x, string label, Action<ReaderModule> act)
     {
         var h = Write(rgba, label, 23, true, x, Footer, (30, 70, 140));
-        regions.Add(new Region(x - 10, Footer - 8, x + Page - (2 * Margin), Footer + h + 8, r => r.host.Browse(url)));
+        regions.Add(new Region(x - 10, Footer - 8, x + Measure(label, 23, true) + 10, Footer + h + 8, act));
     }
 
     // Warm paper, darker toward the gutter and the edges.
@@ -542,8 +617,22 @@ public sealed partial class ReaderModule : IReaderModule
         check(lessons is [{ Title: "1. Hello", Url: "https://spareilleux.github.io/learn/csharp-beginner/01-hello/" }, { Title: "2. Variables" }],
             "a course's lessons are the sidebar's links under its path, in order, the course page and other courses left out");
 
+        var (name, chapters) = ParseManual("# Book\r\n\r\n## One\r\nA first\r\nparagraph with `code`.\r\n\r\n- a **bullet**\r\n### Sub\r\n## Two\r\nText.");
+        check(name == "Book" && chapters is [{ Title: "One", Blocks: [{ Kind: 0, Text: "A first paragraph with code." }, { Kind: 1, Text: "a bullet" }, { Kind: 3, Text: "Sub" }] }, { Title: "Two", Blocks: [{ Text: "Text." }] }],
+            "the manual's Markdown reads as chapters of paragraphs, bullets and headings");
+        foreach (var language in new[] { "fr", "en" })
+        {
+            var (book, parts) = Manual(language);
+            check(parts.Count >= 8 && parts.All(p => p.Blocks.Count > 0) && book.Contains("Delta"), $"Delta's manual in {language} is built in, {parts.Count} chapters, none empty");
+        }
+
         var reader = new ReaderModule();
         reader.Initialize(host);
+        var manualTitle = reader.Title;
+        check(reader.outline.Count >= 8 && reader.outline.All(i => i.Url.StartsWith(ManualScheme, StringComparison.Ordinal)) && reader.body.Count > 0,
+            "the lectern starts with Delta's manual open at its first chapter");
+        reader.Read(3);
+        check(reader.reading == 3 && reader.readingTitle == reader.manual[3].Title && reader.body == reader.manual[3].Blocks, "a chapter of the manual reads without the network");
         check(reader.Wrap("one two three four five six seven eight nine ten", 25, false, 200) is { Count: > 1 } wrapped && wrapped.All(l => reader.Measure(l, 25, false) <= 200),
             "the reader's lines fit the page");
         var modules = Enumerable.Range(1, 60).Select(i => new ReaderItem($"MOD-{i:000} · A module", $"https://spareilleux.github.io/learn/streeling/dept/mod-{i:000}/")).ToList();
@@ -554,5 +643,8 @@ public sealed partial class ReaderModule : IReaderModule
         var page = reader.outlinePage;
         reader.Click((Page - 100f) / Width, (Footer - 40f) / Height);
         check(reader.outlinePage == page + 1, "the left page's arrow turns the outline's page");
+        var back = Say(reader.host, "Delta's manual", "Manuel de Delta");
+        reader.Click((Page - Margin - (reader.Measure(back, 23, true) / 2f)) / Width, (Footer + 10f) / Height);
+        check(reader.Title == manualTitle, "the left page's « Delta's manual » link brings the manual back");
     }
 }

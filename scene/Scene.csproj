@@ -34,6 +34,8 @@
     <None Include="..\gallery\gallery.json" Link="gallery.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- The lectern's reader, built in as the fallback of its mod (modules/LearnReader, scene/LearnLectern.cs). -->
     <Compile Include="..\modules\LearnReader\ReaderModule.cs" Link="LearnReaderModule.cs" />
+    <EmbeddedResource Include="..\modules\LearnReader\manual.fr.md" LogicalName="LearnReader.manual.fr.md" WithCulture="false" />
+    <EmbeddedResource Include="..\modules\LearnReader\manual.en.md" LogicalName="LearnReader.manual.en.md" WithCulture="false" />
     <!-- The release notes the window shows when its version is clicked (Notes.cs). -->
     <EmbeddedResource Include="..\docs\releases\*.md" LogicalName="releases/%(Filename)%(Extension)" />
     <!-- The arcade film's pilot, which plays PARSEC by its keys (ArcadeFilm). -->

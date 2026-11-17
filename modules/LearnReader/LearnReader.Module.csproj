@@ -8,5 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../module-contracts/SceneModules.Contracts.csproj" Private="false" />
+    <EmbeddedResource Include="manual.fr.md" LogicalName="LearnReader.manual.fr.md" WithCulture="false" />
+    <EmbeddedResource Include="manual.en.md" LogicalName="LearnReader.manual.en.md" WithCulture="false" />
   </ItemGroup>
 </Project>
