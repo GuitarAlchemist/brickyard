@@ -1,61 +1,59 @@
+using Delta.SceneModules;
 using System.Net;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 
-// The book open on the gallery's lectern (HallGallery): a course of the learn site, or a department of Streeling
-// University, read in the hall. The left page is the outline: a course's lessons, as the site's sidebar lists them,
-// or a department's modules. The right page is the page being read, its text taken from the site. A click on the
-// outline opens an entry, the arrows turn the pages, and a link opens the page on the site in the browser. The text
-// comes from spareilleux.github.io/learn only, fetched when a page is opened (read only, HTTPS, no cookie), in French
-// when the window is, else in English, and kept in %LOCALAPPDATA%\delta\learn-cache for a day; offline, the copy kept
-// is read, however old. The pages are drawn into one RGBA picture, two pages side by side, that the scene shows on the
-// book (ScreenGpuRenderer); each new picture has a new revision.
-internal sealed partial class LearnReader
-{
-    internal const int Page = 1000, Width = 2 * Page, Height = 1300;
-    internal const string Site = "https://spareilleux.github.io/learn/";
-    private const int Margin = 70, Footer = 1210;
+namespace Delta.LearnReader;
 
-    internal sealed record Item(string Title, string Url);
+// The book open on the gallery's lectern (scene/HallGallery.cs): a course of the learn site, or a department of
+// Streeling University, read in the hall. The left page is the outline: a course's lessons, as the site's sidebar lists
+// them, or a department's modules. The right page is the page being read, its text taken from the site. A click on the
+// outline opens an entry, the arrows turn the pages, and a link opens the page on the site in the browser. The pages
+// are drawn into one RGBA picture, two pages side by side, that the scene shows on the book; each new picture has a new
+// revision. This is a mod (module-contracts/ReaderModule.cs): the scene runs it from modules\reader\LearnReader.Module.dll
+// when one is there, and reloads it when a build replaces it, else the same code built into the scene. The host reads
+// the pages (the learn site only) and draws the text.
+public sealed partial class ReaderModule : IReaderModule
+{
+    public const int Page = 1000, Width = ReaderPicture.Width, Height = ReaderPicture.Height;
+    public const string Site = "https://spareilleux.github.io/learn/";
+    private const int Margin = 70, Footer = 1210;
 
     // A line of the right page: a heading (2 or 3), a bullet, or text, as the page has it.
     internal readonly record struct Block(int Kind, string Text);
 
-    private readonly record struct Region(int X0, int Y0, int X1, int Y1, Action<LearnReader> Act);
+    private readonly record struct Region(int X0, int Y0, int X1, int Y1, Action<ReaderModule> Act);
 
-    private static readonly HttpClient Http = new(new HttpClientHandler { UseCookies = false, AllowAutoRedirect = true }) { Timeout = TimeSpan.FromSeconds(15) };
     private readonly object gate = new();
     private sealed record Shown(byte[] Pixels, ulong Revision, Region[] Regions);
 
+    private IReaderHost host = null!;
     private Shown shown = new([], 0, []);
     private long request;
 
     // What is open: the book's title and link, its outline and which entry is read, the text read and how far in.
     private string title = "", link = Site;
-    private List<Item> outline = [];
+    private List<ReaderItem> outline = [];
     private int outlinePage, reading = -1, readingPage;
     private string readingTitle = "", readingLink = "", status = "";
     private List<Block> body = [];
 
-    // Where opened links go: the browser by default (Program), a list in the self-test.
-    public Action<string> Open { get; set; } = _ => { };
+    public string Id => "learn-reader";
 
-    public LearnReader()
+    public void Initialize(IReaderHost host)
     {
-        status = Words.Say("Click a course's book or a Streeling drawer to read it here.", "Clique sur le livre d'un cours ou sur un tiroir de Streeling pour le lire ici.");
-        readingTitle = Words.Say("The reading desk", "Le lutrin");
+        this.host = host;
+        status = Say("Click a course's book or a Streeling drawer to read it here.", "Clique sur le livre d'un cours ou sur un tiroir de Streeling pour le lire ici.");
+        readingTitle = Say("The reading desk", "Le lutrin");
         Publish();
     }
 
-    public byte[] Pixels => Volatile.Read(ref shown).Pixels;
+    public void Dispose() => Interlocked.Increment(ref request); // a page still being read is not shown
 
-    // The picture and its revision, read together.
-    public (byte[] Pixels, ulong Revision) Picture => Volatile.Read(ref shown) is var s ? (s.Pixels, s.Revision) : default;
-
-    public ulong Revision => Volatile.Read(ref shown).Revision;
+    public ReaderPicture Picture => Volatile.Read(ref shown) is var s ? new(s.Pixels, s.Revision) : default;
 
     public string Title => title;
+
+    private string Say(string english, string french) => host.Language == "fr" ? french : english;
 
     // A course: its lessons from the site's sidebar, its own page on the right.
     public void OpenCourse(string name, string url)
@@ -63,28 +61,28 @@ internal sealed partial class LearnReader
         lock (gate)
         {
             (title, link, outline, outlinePage, reading, readingTitle, readingLink, body, readingPage) = (name, url, [], 0, -1, name, url, [], 0);
-            status = Words.Say("Loading…", "Chargement…");
+            status = Say("Loading…", "Chargement…");
             Publish();
         }
 
         var id = Interlocked.Increment(ref request);
         _ = Task.Run(async () =>
         {
-            var (page, why) = await Fetch(url);
+            var page = await host.Fetch(url);
             lock (gate)
             {
                 if (id != Interlocked.Read(ref request)) return;
-                if (page is null)
+                if (page.Html is not { } html)
                 {
-                    status = why;
+                    status = page.Why;
                 }
                 else
                 {
-                    outline = Lessons(page.Value.Html, page.Value.Url);
-                    body = Extract(page.Value.Html);
-                    readingTitle = TitleOf(page.Value.Html) ?? name;
+                    outline = Lessons(html, page.Url);
+                    body = Extract(html);
+                    readingTitle = TitleOf(html) ?? name;
                     title = Course(readingTitle);
-                    status = outline.Count == 0 ? Words.Say("This course lists no lessons.", "Ce cours ne liste aucune leçon.") : "";
+                    status = outline.Count == 0 ? Say("This course lists no lessons.", "Ce cours ne liste aucune leçon.") : "";
                 }
 
                 Publish();
@@ -93,13 +91,13 @@ internal sealed partial class LearnReader
     }
 
     // A department of Streeling: its modules as the gallery lists them, the first one on the right.
-    public void OpenDepartment(string name, IReadOnlyList<Item> modules)
+    public void OpenDepartment(string name, IReadOnlyList<ReaderItem> modules)
     {
         lock (gate)
         {
             (title, link, outline, outlinePage, reading, readingPage, body) = (name, modules.Count > 0 ? Parent(modules[0].Url) : Site, [.. modules], 0, -1, 0, []);
             (readingTitle, readingLink) = (name, link);
-            status = Words.Say($"{modules.Count} modules. Click one to read it.", $"{modules.Count} modules. Clique sur l'un d'eux pour le lire.");
+            status = Say($"{modules.Count} modules. Click one to read it.", $"{modules.Count} modules. Clique sur l'un d'eux pour le lire.");
             Publish();
         }
     }
@@ -107,25 +105,25 @@ internal sealed partial class LearnReader
     // The entry at index of the outline, read on the right page.
     public void Read(int index)
     {
-        Item item;
+        ReaderItem item;
         lock (gate)
         {
             if (index < 0 || index >= outline.Count) return;
             (reading, item) = (index, outline[index]);
             (readingTitle, readingLink, body, readingPage) = (item.Title, item.Url, [], 0);
-            status = Words.Say("Loading…", "Chargement…");
+            status = Say("Loading…", "Chargement…");
             Publish();
         }
 
         var id = Interlocked.Increment(ref request);
         _ = Task.Run(async () =>
         {
-            var (page, why) = await Fetch(item.Url);
+            var page = await host.Fetch(item.Url);
             lock (gate)
             {
                 if (id != Interlocked.Read(ref request)) return;
-                (body, status) = page is null ? ([], why) : (Extract(page.Value.Html), "");
-                if (page is not null) readingTitle = TitleOf(page.Value.Html) ?? item.Title;
+                (body, status) = page.Html is { } html ? (Extract(html), "") : ([], page.Why);
+                if (page.Html is not null) readingTitle = TitleOf(page.Html) ?? item.Title;
                 Publish();
             }
         });
@@ -192,7 +190,7 @@ internal sealed partial class LearnReader
             Arrows(rgba, regions, 0, $"{outlinePage + 1} / {outlinePages}", r => r.Turn(ref r.outlinePage, -1, outlinePages), r => r.Turn(ref r.outlinePage, 1, outlinePages));
         }
 
-        Link(rgba, regions, Margin, Words.Say("Open on the site ↗", "Ouvrir sur le site ↗"), link);
+        Link(rgba, regions, Margin, Say("Open on the site ↗", "Ouvrir sur le site ↗"), link);
 
         // The right page: what is read, its text a page at a time.
         var right = Page + Margin;
@@ -224,7 +222,7 @@ internal sealed partial class LearnReader
 
         if (readingLink.Length > 0)
         {
-            Link(rgba, regions, right, Words.Say("Open this page on the site ↗", "Ouvrir cette page sur le site ↗"), readingLink);
+            Link(rgba, regions, right, Say("Open this page on the site ↗", "Ouvrir cette page sur le site ↗"), readingLink);
         }
 
         var previous = Volatile.Read(ref shown);
@@ -232,7 +230,7 @@ internal sealed partial class LearnReader
     }
 
     // A line laid out: its text, size, weight, indent and the space above it.
-    private static List<(string Text, int Size, bool Bold, int Indent, int Gap)> Lay(List<Block> blocks, int width)
+    private List<(string Text, int Size, bool Bold, int Indent, int Gap)> Lay(List<Block> blocks, int width)
     {
         var laid = new List<(string, int, bool, int, int)>();
         foreach (var block in blocks)
@@ -277,7 +275,7 @@ internal sealed partial class LearnReader
         return pages;
     }
 
-    private static void Arrows(byte[] rgba, List<Region> regions, int left, string label, Action<LearnReader> back, Action<LearnReader> on)
+    private void Arrows(byte[] rgba, List<Region> regions, int left, string label, Action<ReaderModule> back, Action<ReaderModule> on)
     {
         var y = Footer - 60;
         Write(rgba, "‹", 40, true, left + Margin, y - 10, (110, 40, 25));
@@ -287,10 +285,10 @@ internal sealed partial class LearnReader
         regions.Add(new Region(left + Page - 200, y - 30, left + Page - 20, y + 50, on));
     }
 
-    private static void Link(byte[] rgba, List<Region> regions, int x, string label, string url)
+    private void Link(byte[] rgba, List<Region> regions, int x, string label, string url)
     {
         var h = Write(rgba, label, 23, true, x, Footer, (30, 70, 140));
-        regions.Add(new Region(x - 10, Footer - 8, x + Page - (2 * Margin), Footer + h + 8, r => r.Open(url)));
+        regions.Add(new Region(x - 10, Footer - 8, x + Page - (2 * Margin), Footer + h + 8, r => r.host.Browse(url)));
     }
 
     // Warm paper, darker toward the gutter and the edges.
@@ -321,9 +319,9 @@ internal sealed partial class LearnReader
     }
 
     // Writes text at x, y in the picture; returns its height.
-    private static int Write(byte[] rgba, string text, int pixels, bool bold, int x, int y, (byte R, byte G, byte B) color)
+    private int Write(byte[] rgba, string text, int pixels, bool bold, int x, int y, (byte R, byte G, byte B) color)
     {
-        var glyphs = Splash.Text(text, pixels, out var w, out var h, bold);
+        var glyphs = host.Text(text, pixels, bold, out var w, out var h);
         if (glyphs is null)
         {
             return pixels;
@@ -350,14 +348,14 @@ internal sealed partial class LearnReader
     // How wide text is drawn at that size, each word measured once.
     private static readonly Dictionary<(string, int, bool), int> Widths = [];
 
-    private static int Measure(string text, int size, bool bold)
+    private int Measure(string text, int size, bool bold)
     {
         lock (Widths)
         {
             if (Widths.TryGetValue((text, size, bold), out var known)) return known;
         }
 
-        _ = Splash.Text(text, size, out var w, out _, bold);
+        _ = host.Text(text, size, bold, out var w, out _);
         lock (Widths)
         {
             if (Widths.Count > 20_000) Widths.Clear();
@@ -368,7 +366,7 @@ internal sealed partial class LearnReader
     }
 
     // Text in lines no wider than width, by words; a word wider than a line is cut.
-    internal static List<string> Wrap(string text, int size, bool bold, int width)
+    internal List<string> Wrap(string text, int size, bool bold, int width)
     {
         var lines = new List<string>();
         var space = Math.Max(1, Measure("a a", size, bold) - Measure("aa", size, bold));
@@ -396,7 +394,7 @@ internal sealed partial class LearnReader
     }
 
     // Text cut with an ellipsis to fit width.
-    private static string Fit(string text, int size, bool bold, int width)
+    private string Fit(string text, int size, bool bold, int width)
     {
         if (Measure(text, size, bold) <= width) return text;
         for (var cut = text.Length - 1; cut > 1; cut--)
@@ -407,57 +405,6 @@ internal sealed partial class LearnReader
 
         return "…";
     }
-
-    // A page of the site: from the cache when fresh, else fetched (in French first when the window is), else the cache
-    // however old. Only pages of the learn site are read.
-    internal static async Task<((string Html, string Url)? Page, string Why)> Fetch(string url)
-    {
-        if (!url.StartsWith(Site, StringComparison.Ordinal))
-        {
-            return (null, Words.Say("Only the learn site's pages are read here.", "Seules les pages du site learn se lisent ici."));
-        }
-
-        var tries = Words.Language == "fr" ? new[] { French(url), url }.Distinct().ToArray() : [url];
-        string? why = null;
-        foreach (var at in tries)
-        {
-            var file = CacheFile(at);
-            if (File.Exists(file) && DateTime.UtcNow - File.GetLastWriteTimeUtc(file) < TimeSpan.FromDays(1))
-            {
-                return ((await File.ReadAllTextAsync(file), at), "");
-            }
-
-            try
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Get, at);
-                request.Headers.UserAgent.ParseAdd("Delta-scene/1.0");
-                using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                if (response.StatusCode == HttpStatusCode.NotFound) continue;
-                response.EnsureSuccessStatusCode();
-                if (response.Content.Headers.ContentLength > 4_000_000) throw new InvalidDataException("page too large");
-                var html = await response.Content.ReadAsStringAsync();
-                if (html.Length > 4_000_000) throw new InvalidDataException("page too large");
-                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                await File.WriteAllTextAsync(file, html);
-                return ((html, at), "");
-            }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or InvalidDataException or IOException)
-            {
-                why = e.Message;
-                if (File.Exists(file)) return ((await File.ReadAllTextAsync(file), at), "");
-            }
-        }
-
-        return (null, Words.Say($"The page could not be read ({why ?? "not found"}).", $"La page n'a pas pu être lue ({why ?? "introuvable"})."));
-    }
-
-    // The French page of an English one: /learn/fr/… for /learn/….
-    internal static string French(string url) =>
-        url.StartsWith(Site + "fr/", StringComparison.Ordinal) ? url : Site + "fr/" + url[Site.Length..];
-
-    private static string CacheFile(string url) =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "learn-cache",
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(url)))[..24] + ".html");
 
     private static string Parent(string url)
     {
@@ -474,11 +421,11 @@ internal sealed partial class LearnReader
     }
 
     // A course's lessons: the sidebar's links under the course's own path, in its order, the course page itself left out.
-    internal static List<Item> Lessons(string html, string url)
+    internal static List<ReaderItem> Lessons(string html, string url)
     {
         var path = new Uri(url).AbsolutePath; // /learn/[fr/]course/
         var english = path.StartsWith("/learn/fr/", StringComparison.Ordinal) ? "/learn/" + path["/learn/fr/".Length..] : path; // a lesson not yet translated links there
-        var lessons = new List<Item>();
+        var lessons = new List<ReaderItem>();
         var seen = new HashSet<string>();
         var article = html.IndexOf("sl-markdown-content", StringComparison.Ordinal); // the sidebar comes before the article
         foreach (Match m in Anchor().Matches(article > 0 ? html[..article] : html))
@@ -487,7 +434,7 @@ internal sealed partial class LearnReader
             var under = href.StartsWith(path, StringComparison.Ordinal) ? href[path.Length..] : href.StartsWith(english, StringComparison.Ordinal) ? href[english.Length..] : null;
             if (under is not { Length: > 0 } || href.Contains('#') || !seen.Add(under)) continue;
             var text = Clean(m.Groups[2].Value);
-            if (text.Length > 0) lessons.Add(new Item(text, new Uri(new Uri(url), href).AbsoluteUri));
+            if (text.Length > 0) lessons.Add(new ReaderItem(text, new Uri(new Uri(url), href).AbsoluteUri));
         }
 
         return lessons;
@@ -569,8 +516,9 @@ internal sealed partial class LearnReader
     [GeneratedRegex(@"[ \t\r ]+")]
     private static partial Regex Spaces();
 
-    // Part of --selftest: a page of the site as Starlight writes it, read without the network.
-    internal static void SelfTest(Action<bool, string> check)
+    // Part of the scene's --selftest, with the scene's host: a page of the site as Starlight writes it, read without the
+    // network, and a department opened, clicked and turned. Links opened go to opened instead of the browser.
+    public static void SelfTest(IReaderHost host, Action<bool, string> check)
     {
         const string html = """
             <html><head><title>Variables | learn</title></head><body>
@@ -593,20 +541,16 @@ internal sealed partial class LearnReader
         var lessons = Lessons(html, "https://spareilleux.github.io/learn/csharp-beginner/");
         check(lessons is [{ Title: "1. Hello", Url: "https://spareilleux.github.io/learn/csharp-beginner/01-hello/" }, { Title: "2. Variables" }],
             "a course's lessons are the sidebar's links under its path, in order, the course page and other courses left out");
-        check(French("https://spareilleux.github.io/learn/streeling/x/") == "https://spareilleux.github.io/learn/fr/streeling/x/"
-            && French("https://spareilleux.github.io/learn/fr/a/") == "https://spareilleux.github.io/learn/fr/a/", "the French page of a page is under /learn/fr/");
-        check(Fetch("https://claude.ai/artifact/x").Result.Page is null, "the reader reads only the learn site's pages");
-        check(Wrap("one two three four five six seven eight nine ten", 25, false, 200) is { Count: > 1 } wrapped && wrapped.All(l => Measure(l, 25, false) <= 200),
-            "the reader's lines fit the page");
 
-        var opened = new List<string>();
-        var reader = new LearnReader { Open = opened.Add };
-        var modules = Enumerable.Range(1, 60).Select(i => new Item($"MOD-{i:000} · A module", $"https://spareilleux.github.io/learn/streeling/dept/mod-{i:000}/")).ToList();
-        var before = reader.Revision;
+        var reader = new ReaderModule();
+        reader.Initialize(host);
+        check(reader.Wrap("one two three four five six seven eight nine ten", 25, false, 200) is { Count: > 1 } wrapped && wrapped.All(l => reader.Measure(l, 25, false) <= 200),
+            "the reader's lines fit the page");
+        var modules = Enumerable.Range(1, 60).Select(i => new ReaderItem($"MOD-{i:000} · A module", $"https://spareilleux.github.io/learn/streeling/dept/mod-{i:000}/")).ToList();
+        var before = reader.Picture.Revision;
         reader.OpenDepartment("Department", modules);
-        check(reader.Revision > before && reader.Pixels.Length == Width * Height * 4 && reader.Title == "Department", "a department opens on the book as a new picture");
+        check(reader.Picture is { Valid: true } shown && shown.Revision > before && reader.Title == "Department", "a department opens on the book as a new picture");
         reader.Click((Margin + 20f) / Width, (Footer + 10f) / Height);
-        check(opened is ["https://spareilleux.github.io/learn/streeling/dept/"], "the left page's link opens the department on the site");
         var page = reader.outlinePage;
         reader.Click((Page - 100f) / Width, (Footer - 40f) / Height);
         check(reader.outlinePage == page + 1, "the left page's arrow turns the outline's page");

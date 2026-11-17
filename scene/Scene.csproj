@@ -32,6 +32,8 @@
     <None Include="brand\LOGO_BRUTAL_WHT.png;brand\NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
     <!-- The gallery's content as the learn site had it (HallGallery), when %LOCALAPPDATA%\delta has none of its own. -->
     <None Include="..\gallery\gallery.json" Link="gallery.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The lectern's reader, built in as the fallback of its mod (modules/LearnReader, scene/LearnLectern.cs). -->
+    <Compile Include="..\modules\LearnReader\ReaderModule.cs" Link="LearnReaderModule.cs" />
     <!-- The release notes the window shows when its version is clicked (Notes.cs). -->
     <EmbeddedResource Include="..\docs\releases\*.md" LogicalName="releases/%(Filename)%(Extension)" />
     <!-- The arcade film's pilot, which plays PARSEC by its keys (ArcadeFilm). -->

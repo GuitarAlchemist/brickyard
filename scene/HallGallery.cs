@@ -607,7 +607,7 @@ internal sealed class HallGallery : IDisposable
     {
         var content = Load(ShippedPath);
         check(content is { Courses.Length: 41, Demos.Length: 11, Artifacts.Length: 7, Streeling.Length: 482, Departments.Count: 22 }
-            && content.Courses.Concat(content.Streeling).All(c => c.Url.StartsWith(LearnReader.Site, StringComparison.Ordinal)),
+            && content.Courses.Concat(content.Streeling).All(c => c.Url.StartsWith(LearnHost.Site, StringComparison.Ordinal)),
             "the shipped gallery holds the site's 41 courses, 11 demos, 7 artifacts and Streeling's 482 modules in 22 departments, each course and module on the site");
         var built = Build(content);
         var all = built.Furniture.Concat(built.English).Concat(built.French).Concat(built.Glowing.SelectMany(g => g.Vertices)).ToArray();

@@ -1809,10 +1809,12 @@ internal static unsafe class Stage
         var (wallW, wallH) = (WallSource.Width / 2f, WallSource.Height / 2f);
         var sessionWall = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
             WallCard.Render([], ""), WallCard.Width, WallCard.Height, 1, new(-wallW, wallH, wallW, -wallH), 0f, 0f);
-        // The lectern's open book (LearnReader): a course or a Streeling department read in the hall, its pages a picture.
-        var reader = new LearnReader { Open = HallGallery.Browse };
+        // The lectern's open book (LearnLectern): a course or a Streeling department read in the hall, its pages a picture
+        // laid out by the reader's mod, reloaded when a build replaces modules\reader\LearnReader.Module.dll.
+        var reader = new LearnLectern(new LearnHost(HallGallery.Browse), Option(args, "--reader-module") ?? Installed(Path.Combine("reader", "LearnReader.Module.dll")));
+        var firstPage = reader.Picture;
         var readerBook = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
-            reader.Pixels, LearnReader.Width, LearnReader.Height, reader.Revision, HallGallery.BookRect, 0f, 0f);
+            firstPage.Rgba, Delta.SceneModules.ReaderPicture.Width, Delta.SceneModules.ReaderPicture.Height, firstPage.Revision, HallGallery.BookRect, 0f, 0f);
         // --read course:N or department:N opens that book on the lectern from the start, for captures (with --view 9).
         if (Option(args, "--read") is { } toRead)
         {
@@ -2577,7 +2579,7 @@ internal static unsafe class Stage
             {
                 var (name, modules) = content.Departments[d];
                 Console.WriteLine($"GALLERY reads Streeling's {name} on the lectern");
-                reader.OpenDepartment(name, [.. modules.Select(m => new LearnReader.Item(m.Title, m.Url))]);
+                reader.OpenDepartment(name, [.. modules.Select(m => new Delta.SceneModules.ReaderItem(m.Title, m.Url))]);
                 return true;
             }
 
@@ -3707,8 +3709,9 @@ internal static unsafe class Stage
                 sessionWall.UploadAfterFence(cb, slot, wallPixels, wallCardRevision);
             }
             cabinet.UploadAfterFence(cb, slot);
-            var (bookPixels, bookRevision) = reader.Picture;
-            readerBook.UploadAfterFence(cb, slot, bookPixels, bookRevision);
+            Guard("lectern's reader", () => reader.Poll(now));
+            var bookPage = reader.Picture;
+            readerBook.UploadAfterFence(cb, slot, bookPage.Rgba, bookPage.Revision);
             clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
             var splitCards = hudless && Streamline.Generating && !splashing; // the hall, then the cards, in two passes
@@ -4432,6 +4435,7 @@ internal static unsafe class Stage
         pongWall?.Dispose();
         sessionWall.Dispose();
         readerBook.Dispose();
+        reader.Dispose();
         cabinet.Dispose();
         arcade?.Dispose();
         Console.WriteLine($"ARCADE shutdown: uploads {arcadeGpu?.Uploads ?? 0}; native texture images remaining {Texture.LiveCount}; pid {Environment.ProcessId}");

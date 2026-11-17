@@ -2011,6 +2011,25 @@ and tags, at most `--dlss-g-frames` (1 by default, twice the frames; up to 3 on 
   *To verify*: in a shown window, the cards and captions held still over generated frames (a hidden window presents
   none), and Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show.
 
+## The lectern's reader, a mod (2026-11-16)
+
+The author asked: « J'aimerais ça dans un module ou mod pour pouvoir améliorer sans relancer l'app au complet ». The
+book on the hall's lectern (key 9; a click on a course's book or a Streeling drawer opens it there) is laid out by
+`modules/LearnReader` against `module-contracts/ReaderModule.cs`. The module draws the two pages: the outline, the
+page's text extracted, laid out and paginated, the arrows and links. The host (`scene/LearnLectern.cs`) keeps what may
+be read: `LearnHost` reads only spareilleux.github.io/learn (HTTPS, no cookie, a day's cache in
+`%LOCALAPPDATA%\delta\learn-cache`), draws the text with the scene's rasterizer and opens learn pages only.
+
+- The same source is compiled into the scene as the fallback. The mod in `modules\reader\LearnReader.Module.dll` beside
+  scene.exe (or `--reader-module <dll>`) replaces it at start. The generalised `ModuleSession` reloads it, as it does
+  the office's widgets (`WidgetModuleSession` is now that session for widget modules), and the book reopens at what was
+  open. If the mod throws, or its picture is not 2000×1300 RGBA, the built-in reader takes over until a new image comes.
+- Work on it live: `dotnet build modules/LearnReader/LearnReader.Module.csproj -c Release -p:Version=<next> -o
+  <checkout>\scene\bin\Debug\net10.0\win-x64\modules\reader`. The log shows « READER learn-reader reloaded: v… ».
+- Proof, hidden, `--view 9 --read course:2 --reader-module <dll>`: v0.1.0 then v0.1.1 copied over it 18 s in,
+  « reload 1 », same pid, the F# course still open on the book after the reload (peeks before and after).
+  `LearnLectern.SelfTest` covers the reader's extraction and pages, the host's limits, and a missing mod falling back.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
