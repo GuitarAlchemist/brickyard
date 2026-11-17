@@ -161,6 +161,77 @@ let ecrans: Block =
                       let x, y = slotAt i
                       $"ecran-{i}", at x (y + h / 2.0) 0.032 ] } }
 
+// A glass's plinth: its height, and its side as a part of the glass's radius.
+let private plinth = 0.05
+let private plinthSide = 1.7
+
+/// Where a row of glasses stands, its shelf's top, rows a row apart from bottom up; and a glass's centre above it,
+/// radius r on its plinth (a dome's: its base, on the plinth).
+let private shelfTop bottom rowHeight lines r = bottom + float (lines - 1 - r) * rowHeight
+
+/// Shelves of glasses (tablettes): count of them, cols a row, pitch apart, each radius metres round on an oak
+/// plinth with a brass ring. The lowest row stands on a counter counter metres tall (none at 0: an oak shelf at bottom),
+/// the others on oak shelves rowHeight apart, fixed to the wall by brass brackets. dome 1: paperweights (sulfures), the
+/// upper half of a sphere on its plinth; 0: water globes (boules à eau), a whole sphere on it. The scene draws the glass
+/// and what is inside (scene/GlassWork.cs, scene/HallGallery.cs). Anchors boule-0 and on (each sphere's centre, on its
+/// plinth for a dome) and titre (the heading board's face).
+let tablettes: Block =
+    { Id = id "tablettes"
+      Params =
+        [ whole "count" 11 1 60
+          whole "cols" 6 1 12
+          real "pitch" 0.3 0.1 1.0
+          real "radius" 0.1 0.03 0.3
+          real "rowHeight" 0.42 0.15 1.0
+          real "bottom" 0.75 0.0 3.0
+          real "counter" 0.75 0.0 1.2
+          real "depth" 0.3 0.15 0.6
+          whole "dome" 0 0 1 ]
+      Build =
+        fun args _ ->
+            let count, cols, dome = args.Whole "count", args.Whole "cols", args.Whole "dome" = 1
+            let pitch, r, rowHeight, bottom = args.Real "pitch", args.Real "radius", args.Real "rowHeight", args.Real "bottom"
+            let counter, depth = args.Real "counter", args.Real "depth"
+            let lines = rows count cols
+            let width = float cols * pitch
+            let lowest = if counter > 0.0 then counter else bottom
+            let top = shelfTop lowest rowHeight lines 0 + plinth + (if dome then r else 2.0 * r) + headingGap + heading
+            let side = plinthSide * r
+
+            let slotAt i =
+                let row, c = i / cols, i % cols
+                let y = shelfTop lowest rowHeight lines row + plinth
+                -width / 2.0 + (float c + 0.5) * pitch, (if dome then y else y + r * 0.96)
+
+            { Parts =
+                [ if counter > 0.0 then
+                      Clad(Metal, place (at 0.0 0.0 (depth / 2.0)) (box (width + 0.04) (counter - 0.04) depth steel))
+                      place (at 0.0 (counter - 0.04) (depth / 2.0 + 0.02)) (box (width + 0.1) 0.04 (depth + 0.04) oak)
+                  for row in 0 .. lines - 1 do
+                      let y = shelfTop lowest rowHeight lines row
+
+                      if counter <= 0.0 || row < lines - 1 then
+                          place (at 0.0 (y - 0.03) (depth / 2.0)) (box (width + 0.06) 0.03 depth oak)
+
+                          for bracket in [ -1.0; 1.0 ] do
+                              Clad(Metal, place (at (bracket * (width / 2.0 - 0.05)) (y - 0.13) 0.06) (box 0.02 0.1 0.12 brass))
+                  for i in 0 .. count - 1 do
+                      let x, y = slotAt i
+                      let foot = if dome then y - plinth else y - r * 0.96 - plinth
+                      place (at x foot (depth / 2.0)) (box side plinth side darkOak)
+                      Clad(Metal, place (at x (foot + plinth - 0.006) (depth / 2.0)) (box (side + 0.006) 0.008 (side + 0.006) brass))
+                  headingBoard (max width 0.8) top ]
+              Anchors =
+                [ "titre", at 0.0 (top - heading / 2.0) 0.024
+                  for i in 0 .. count - 1 do
+                      let x, y = slotAt i
+                      $"boule-{i}", at x y (depth / 2.0) ] } }
+
+/// Shelves of glasses' width and height (the heading board's top), as tablettes makes them.
+let tablettesSize count cols pitch r rowHeight bottom counter dome =
+    let lowest = if counter > 0.0 then counter else bottom
+    float cols * pitch, shelfTop lowest rowHeight (rows count cols) 0 + plinth + (if dome then r else 2.0 * r) + headingGap + heading
+
 /// The artifacts' wall: count frames, cols a row, each an oak moulding round a paper mat width by height, the lowest
 /// mat's bottom metres up. Anchors cadre-0 and on (the mats' faces) and titre (the heading board's face).
 let cadres: Block =
@@ -279,7 +350,8 @@ let lutrin: Block =
 
 // The default slots, the learn site's on 2026-11-16 (scene/gallery.json).
 let private bookcase count = bookcaseSize count 11 0.4 0.42 0.3
-let private screens count = wallSize count 4 0.56 0.33 0.06 0.95
+let private globes count = tablettesSize count 6 0.3 0.1 0.42 0.75 0.75 false
+let private paperweights count = tablettesSize count 7 0.28 0.09 0.36 0.75 0.75 true
 let private frames count = wallSize count 4 0.34 0.26 0.06 1.05
 
 /// The gap between two sections, and the margin at each end of the wall.
@@ -319,18 +391,28 @@ let galerie: Block =
             let departments = args.Whole "departments"
 
             let sections =
-                [ "cours", args.Whole "courses", bookcase, id "bibliotheque"
-                  "demos", args.Whole "demos", screens, id "ecrans"
-                  "artifacts", args.Whole "artifacts", frames, id "cadres" ]
-                |> List.filter (fun (_, count, _, _) -> count > 0)
+                [ "cours", args.Whole "courses", bookcase, id "bibliotheque", []
+                  "demos", args.Whole "demos", globes, id "tablettes", []
+                  "artifacts",
+                  args.Whole "artifacts",
+                  paperweights,
+                  id "tablettes",
+                  [ "cols", Whole 7
+                    "pitch", Real 0.28
+                    "radius", Real 0.09
+                    "rowHeight", Real 0.36
+                    "bottom", Real 0.75
+                    "counter", Real 0.75
+                    "dome", Whole 1 ] ]
+                |> List.filter (fun (_, count, _, _, _) -> count > 0)
 
-            let widths = sections |> List.map (fun (_, count, size, _) -> fst (size count))
+            let widths = sections |> List.map (fun (_, count, size, _, _) -> fst (size count))
             let needed = List.sum widths + gap * float (max 0 (widths.Length - 1)) + 2.0 * margin
 
             if needed > front - back then
                 failwith $"the gallery needs {needed:F2} m of wall and has {front - back:F2}"
 
-            for name, count, size, _ in sections do
+            for name, count, size, _, _ in sections do
                 let _, height = size count
 
                 if height > ceiling then
@@ -353,9 +435,9 @@ let galerie: Block =
             let starts = widths |> List.scan (fun z w -> z + w + gap) (back + margin)
 
             { Parts =
-                [ for (name, count, size, block), start, width in List.zip3 sections (List.take sections.Length starts) widths do
+                [ for (name, count, size, block, settings), start, width in List.zip3 sections (List.take sections.Length starts) widths do
                       let centre = start + width / 2.0
-                      place (onWall centre) (Use(name, block, [ "count", Whole count ]))
+                      place (onWall centre) (Use(name, block, ("count", Whole count) :: settings))
                       let _, height = size count
                       let y = max lightHeight (height + 0.25)
                       place (at wall y centre |> turned 90.0) (Use($"lampe-{name}", id "applique", [ "length", Real(min 2.4 (width - 0.2)); "reach", Real lightReach ]))
@@ -378,13 +460,13 @@ type Section =
 
 let sections =
     [| { Name = "cours"; Anchor = "livre"; Width = 0.32; Height = 0.28 }
-       { Name = "demos"; Anchor = "ecran"; Width = 0.56; Height = 0.33 }
-       { Name = "artifacts"; Anchor = "cadre"; Width = 0.34; Height = 0.26 }
+       { Name = "demos"; Anchor = "boule"; Width = 0.2; Height = 0.2 }
+       { Name = "artifacts"; Anchor = "boule"; Width = 0.18; Height = 0.18 }
        { Name = "streeling"; Anchor = "tiroir"; Width = 0.3; Height = 0.2 } |]
 
 /// Every block the gallery names.
 let library =
-    Library.Of [ livre; bibliotheque; ecrans; cadres; fichier; applique; lutrin; galerie ]
+    Library.Of [ livre; bibliotheque; ecrans; cadres; tablettes; fichier; applique; lutrin; galerie ]
 
 /// The gallery for that many courses, demos, artifacts and Streeling departments, generated and validated.
 let describe (courses: int) (demos: int) (artifacts: int) (departments: int) =

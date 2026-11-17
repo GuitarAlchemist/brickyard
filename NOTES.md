@@ -2109,6 +2109,37 @@ off only after 120 failures in a row.
 Shutting down still logs `dlssEntry.cpp destroyKernel(mvecKernel) failed 6`. It comes from the kernel that computes
 the camera's motion, and changes nothing on screen.
 
+## Glass: water globes and paperweights in the gallery (2026-11-16)
+
+The author asked: "Dans l'observatoire on a une dll de réfraction pour des objets en verre, peut on faire la même chose
+dans delta?" and "Peut être les démos devraient des 'boules a neige' sur une tablette … Même chose pour les artifacts."
+The Observatory's glass is not a DLL but a shader, `assets/glassworks.gdshader`: screen-space refraction. `GlassWork`
+does the same in Delta.
+
+- **Demos** are water globes on two oak shelves with brass brackets: a ball over a slate disc, an ivory card on a brass
+  post with the title in ink, and 70 gold and silver flakes seeded by the title.
+- **Artifacts** are paperweights in one row on a counter: a dome over an enamel plate in the group's colour, tilted
+  back, with the title and the group. The `tablettes` block (gallery/Blocks.fs) builds the shelves, counters and
+  plinths for both.
+- **How the glass is drawn.** Glass comes last in the hall's pass. The pass ends, the colour drawn so far is copied
+  (`GlassWork.Capture`), and the pass resumes with load ops (`RasterUpscaler.ResumePass`). Each globe's front faces then
+  bend the view ray (Snell, ior 1.5 for a dome, 1.4 for a ball), carry it through the glass and read the copy where it
+  lands. Schlick's Fresnel mixes in a reflection of the hall and the key light's highlight; a light tint thickens with the
+  path through the glass.
+- How far the bent ray travels was tuned by eye: 1.6 times the radius for a dome turned the plate into a smear, 0.5
+  keeps the title readable; 0.6 for a ball.
+- **Three ways.**
+  - With DLSS SR on, the copy is taken from the upscaler's colour image.
+  - Under path tracing the glass reads the tracer's picture, but the globes' contents are not traced yet, so the
+    globes show the hall behind them and are empty.
+  - Without either, the glass is a blended veil with its highlight.
+- Measured in a hidden 3840x2054 run with `--view 8 --dlss`: the log reads `SCENE glass: 18 globes, bent through a copy
+  of the hall`, with no Streamline evaluation skipped. The peeks show the cards and the domes' titles readable through
+  the glass. Frame time was not measured: the GPU was shared with the live window, Whisper and Ollama.
+
+*To verify*: the cost of the copy at 4K on a quiet GPU, and tracing the globes' contents so path tracing does not show
+them empty.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

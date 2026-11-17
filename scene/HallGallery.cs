@@ -25,7 +25,7 @@ internal sealed class HallGallery : IDisposable
     // What one gallery draws, made apart from the frame: the furniture in its materials, the glowing parts by their glow
     // (Push.Glow), the titles in English and in French (only the headings differ), and the slots a click opens.
     internal sealed record Built(Vertex[] Furniture, (SN.Vector4 Glow, Vertex[] Vertices)[] Glowing, Vertex[] English, Vertex[] French,
-        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, int Boxes, string From, Content Content, SN.Matrix4x4 Book);
+        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, int Boxes, string From, Content Content, SN.Matrix4x4 Book, Globe[] Globes);
 
     // The lectern's book, in its own frame: the open pages' rectangle (left, top, right, bottom) at z 0, as the
     // reader's picture is drawn (ScreenGpuRenderer), and how the desk slopes toward the reader.
@@ -36,6 +36,11 @@ internal sealed class HallGallery : IDisposable
     internal const int MaxBytes = 512 * 1024;
     internal const int MaxCourses = 120, MaxDemos = 60, MaxArtifacts = 60, MaxStreeling = 1000;
 
+    // A glass over a slot: its sphere's centre and turn (World), its radius, whether it is a paperweight's dome (the upper
+    // half, standing on its plinth at World's origin) or a water globe's whole ball, and the colour light keeps through
+    // 10 cm of it.
+    internal readonly record struct Globe(SN.Matrix4x4 World, float Radius, bool Dome, SN.Vector3 Tint);
+
     // The picture lights' warm wash on the wall, which the Low shader adds (Stage.LowFragmentShader): along the wall at
     // this x and height, from the back of the gallery to its front.
     internal const string Wash = "vec3(-5.5, 2.45, clamp(vWorld.z, -3.3, 5.9))";
@@ -43,7 +48,8 @@ internal sealed class HallGallery : IDisposable
 
     // What a walker cannot step into: the bookcase and the demos' counter stand on the floor along the wall
     // (FreeCamera.Obstacles), x from the wall to 0.38 m out and z from the back to the counter's end.
-    internal static readonly (SN.Vector2 Centre, SN.Vector2 Half) Footprint = (new(-6.06f, 0.29f), new(0.19f, 3.64f));
+    // The artifacts' counter, after the demos', is in it too.
+    internal static readonly (SN.Vector2 Centre, SN.Vector2 Half) Footprint = (new(-6.06f, 1.05f), new(0.19f, 4.41f));
 
     // The card catalogue against the back wall, from 0.42 m off the left wall to x -3.69, and the lectern with its desk.
     internal static readonly (SN.Vector2 Centre, SN.Vector2 Half) CatalogueFootprint = (new(-4.76f, -3.22f), new(1.08f, 0.24f));
@@ -63,12 +69,18 @@ internal sealed class HallGallery : IDisposable
     private Shown? shown;
 
     private sealed record Shown(Mesh Furniture, (SN.Vector4 Glow, Mesh Mesh)[] Glowing, Mesh English, Mesh French,
-        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, (SN.Vector3 Min, SN.Vector3 Max) Box, Content Content, SN.Matrix4x4 Book);
+        (string Click, SN.Vector3 Min, SN.Vector3 Max)[] Hits, (SN.Vector3 Min, SN.Vector3 Max) Box, Content Content, SN.Matrix4x4 Book, Globe[] Globes);
 
     // What the gallery shows, and where the lectern's book lies (its frame, BookRect in it); none before the first build.
     public Content? Shelved => shown?.Content;
 
     public SN.Matrix4x4? Book => shown?.Book;
+
+    // The demos' water globes and the artifacts' paperweights, whose glass GlassWork draws over what is inside them.
+    public IReadOnlyList<Globe> Globes => shown?.Globes ?? [];
+
+    // Whether the picture shows some of the gallery (as Draw culls it).
+    public bool Shows(SN.Matrix4x4 viewProj) => shown is { } s && KnotFloor.Seen(viewProj, s.Box);
 
     public HallGallery(Func<Vertex[], Mesh> upload, int framesInFlight, string? path)
     {
@@ -175,7 +187,7 @@ internal sealed class HallGallery : IDisposable
         }
 
         shown = new Shown(meshes.Furniture, meshes.Glowing, meshes.English, meshes.French, built.Hits,
-            KnotFloor.Box([built.Furniture, built.English, built.French, .. built.Glowing.Select(g => g.Vertices)]), built.Content, built.Book);
+            KnotFloor.Box([built.Furniture, built.English, built.French, .. built.Glowing.Select(g => g.Vertices)]), built.Content, built.Book, built.Globes);
         Summary = $"{built.Hits.Length} slots, {built.Boxes} Lego boxes, {built.Furniture.Length + built.English.Length + built.Glowing.Sum(g => g.Vertices.Length)} vertices";
     }
 
@@ -384,6 +396,7 @@ internal sealed class HallGallery : IDisposable
         var french = new List<Vertex>();
         var hits = new List<(string, SN.Vector3, SN.Vector3)>();
         var groups = new List<string>();
+        var globes = new List<Globe>();
         var lists = new Dictionary<string, Entry[]>
         {
             ["cours"] = content.Courses, ["demos"] = content.Demos, ["artifacts"] = content.Artifacts,
@@ -412,9 +425,18 @@ internal sealed class HallGallery : IDisposable
                 Place(local, world, english);
                 Place(local, world, french);
                 var (lo, hi) = (new SN.Vector3(float.MaxValue), new SN.Vector3(float.MinValue));
+                // A glass's whole ball (or dome) is its box; a face is a thin one.
+                var glass = section.Name is "demos" or "artifacts";
+                var deep = glass ? w / 2 : 0.01f;
+                var (low, high) = section.Name == "artifacts" ? (0f, h / 2) : (-h / 2, h / 2);
+                if (glass)
+                {
+                    globes.Add(new Globe(world, w / 2, section.Name == "artifacts", section.Name == "artifacts" ? new SN.Vector3(0.94f, 0.97f, 0.96f) : new SN.Vector3(0.8f, 0.93f, 0.95f)));
+                }
+
                 for (var c = 0; c < 8; c++)
                 {
-                    var p = SN.Vector3.Transform(new SN.Vector3((c & 1) == 0 ? -w / 2 : w / 2, (c & 2) == 0 ? -h / 2 : h / 2, (c & 4) == 0 ? -0.01f : 0.01f), world);
+                    var p = SN.Vector3.Transform(new SN.Vector3((c & 1) == 0 ? -w / 2 : w / 2, (c & 2) == 0 ? low : high, (c & 4) == 0 ? -deep : deep), world);
                     (lo, hi) = (SN.Vector3.Min(lo, p), SN.Vector3.Max(hi, p));
                 }
 
@@ -445,7 +467,7 @@ internal sealed class HallGallery : IDisposable
             book = SN.Matrix4x4.CreateTranslation(0f, 0f, 0.0185f) * desk;
         }
 
-        return new Built([.. furniture], [.. glowing.Select(g => (g.Key, g.Value.ToArray()))], [.. english], [.. french], [.. hits], scene.Boxes.Count, content.From, content, book);
+        return new Built([.. furniture], [.. glowing.Select(g => (g.Key, g.Value.ToArray()))], [.. english], [.. french], [.. hits], scene.Boxes.Count, content.From, content, book, [.. globes]);
     }
 
     // The colours of the courses' covers and the artifacts' groups, in the order the groups come.
@@ -483,14 +505,65 @@ internal sealed class HallGallery : IDisposable
                 Text(o, $"{entry.Group} modules", new SN.Vector3(0f, -0.005f, 0.0031f), 0.016f, 0.2f, new SN.Vector3(0.35f, 0.2f, 0.1f), 28);
                 break;
             case "demos":
-                Lines(o, entry.Title, 22, 3, 0.042f, 0.054f, 0f, w - 0.06f, 0.0015f, new SN.Vector3(0.92f, 0.96f, 1f));
+                WaterGlobe(o, entry, w / 2f);
                 break;
             default:
-                Boxes.Add(o, new SN.Vector3(0f, (-h / 2f) + 0.012f, 0.0006f), new SN.Vector3(w - 0.04f, 0.006f, 0.0008f), new Finish(colour, Material.Enamel));
-                Lines(o, entry.Title, 18, 4, 0.027f, 0.036f, 0.015f, w - 0.04f, 0.0012f, new SN.Vector3(0.08f, 0.07f, 0.06f));
-                Text(o, entry.Group, new SN.Vector3(0f, (-h / 2f) + 0.035f, 0.0012f), 0.015f, w - 0.05f, new SN.Vector3(0.3f, 0.28f, 0.25f), 28);
+                Paperweight(o, entry, w / 2f, colour);
                 break;
         }
+    }
+
+    // Inside a demo's water globe, r round, centred at the origin: a slate disc on its floor, the demo's title on a
+    // small card of slate standing on it, and glitter hanging in the water about it, gold and silver, the same each time
+    // for the same title.
+    private static void WaterGlobe(List<Vertex> o, Entry entry, float r)
+    {
+        var slate = new Finish(new(0.025f, 0.03f, 0.035f), Material.Enamel);
+        var floor = -r * 0.62f;
+        Boxes.Add(o, new SN.Vector3(0f, floor, 0f), new SN.Vector3(r * 1.5f, 0.012f, r * 1.2f), slate);
+        // An ivory card on a brass post, its title in ink, held up in the middle of the water.
+        Boxes.Add(o, new SN.Vector3(0f, (floor - (r * 0.35f)) / 2f, -0.007f), new SN.Vector3(0.004f, -floor - (r * 0.35f), 0.004f), new Finish(new(0.5f, 0.36f, 0.16f), Material.Steel));
+        Boxes.Add(o, new SN.Vector3(0f, r * 0.02f, -0.004f), new SN.Vector3(r * 1.3f, r * 0.74f, 0.004f), new Finish(new(0.66f, 0.61f, 0.52f), Material.Matte));
+        Lines(o, entry.Title, 14, 3, r * 0.15f, r * 0.2f, r * 0.02f, r * 1.2f, -0.0015f, new SN.Vector3(0.07f, 0.06f, 0.05f));
+        var random = new Random(StableSeed(entry.Title));
+        var gold = new Finish(new(0.62f, 0.45f, 0.16f), Material.Steel);
+        var silver = new Finish(new(0.7f, 0.72f, 0.74f), Material.Steel);
+        for (var i = 0; i < 70; i++)
+        {
+            // Within 0.82 of the radius, none in front of the card's face.
+            SN.Vector3 p;
+            do
+            {
+                p = new SN.Vector3((float)random.NextDouble() * 2f - 1f, (float)random.NextDouble() * 2f - 1f, (float)random.NextDouble() * 2f - 1f) * (r * 0.82f);
+            }
+            while (p.Length() > r * 0.82f || p.Y < floor + 0.01f || (MathF.Abs(p.X) < r * 0.7f && MathF.Abs(p.Y) < r * 0.42f && p.Z > -0.01f && p.Z < 0.012f));
+
+            var s = 0.0025f + ((float)random.NextDouble() * 0.002f);
+            Boxes.Add(o, p, new SN.Vector3(s, s * 0.3f, s), i % 3 == 0 ? silver : gold);
+        }
+    }
+
+    // Inside an artifact's paperweight, a dome r round standing at the origin: a plate in its group's colour lying
+    // tilted toward the viewer, the artifact's title lettered on it and its group under it.
+    private static void Paperweight(List<Vertex> o, Entry entry, float r, SN.Vector3 colour)
+    {
+        var plate = new List<Vertex>();
+        Boxes.Add(plate, new SN.Vector3(0f, 0f, -0.002f), new SN.Vector3(r * 1.3f, r * 0.9f, 0.004f), new Finish(colour, Material.Enamel));
+        Boxes.Add(plate, new SN.Vector3(0f, (-r * 0.45f) + 0.006f, 0.0002f), new SN.Vector3(r * 1.2f, 0.002f, 0.0006f), new Finish(new(0.7f, 0.55f, 0.25f), Material.Steel));
+        Lines(plate, entry.Title, 14, 3, r * 0.13f, r * 0.17f, r * 0.06f, r * 1.2f, 0.0006f, new SN.Vector3(0.93f, 0.9f, 0.82f));
+        Text(plate, entry.Group, new SN.Vector3(0f, -r * 0.33f, 0.0006f), r * 0.09f, r * 1.1f, new SN.Vector3(0.8f, 0.72f, 0.55f), 28);
+        Place(plate, SN.Matrix4x4.CreateRotationX(-0.95f) * SN.Matrix4x4.CreateTranslation(0f, r * 0.36f, 0f), o);
+    }
+
+    private static int StableSeed(string text)
+    {
+        var h = 17;
+        foreach (var ch in text)
+        {
+            h = unchecked((h * 31) + ch);
+        }
+
+        return h;
     }
 
     // A title over at most lines lines of about chars characters each, height tall a line and step apart, the block
@@ -638,8 +711,8 @@ internal sealed class HallGallery : IDisposable
         var hitAt = OnRect(vp, built.Book, BookRect, 1600, 900, (clip.X / clip.W + 1f) * 800f, (clip.Y / clip.W + 1f) * 450f);
         check(hitAt is { } uv && MathF.Abs(uv.U - 0.25f) < 0.01f && MathF.Abs(uv.V - 0.75f) < 0.01f && OnRect(vp, built.Book, BookRect, 1600, 900, 2, 2) is null,
             "a click on the book is found on its pages, where it was drawn; one beside it misses");
-        check(built.Glowing.Length == 2 && built.Glowing.Any(g => g.Glow.W >= 1f) && built.Glowing.Any(g => g.Glow.W < 1f) && lowShader.Contains(Wash, StringComparison.Ordinal) && lowShader.Contains(BackWash, StringComparison.Ordinal),
-            "the picture lights and the screens glow, and the Low shader washes the wall from the lights");
+        check(built.Glowing.Length == 1 && built.Glowing[0].Glow.W >= 1f && lowShader.Contains(Wash, StringComparison.Ordinal) && lowShader.Contains(BackWash, StringComparison.Ordinal),
+            "the picture lights glow (the demos are glass now, not screens), and the Low shader washes the wall from the lights");
         check(built.English.Length > 50_000 && built.English.Length < 3_000_000 && built.French.Length != built.English.Length,
             $"the titles are lettered in a bounded number of vertices ({built.English.Length}), the headings in each language");
         check(Wrap("Spring Boot, Spring Cloud and Reactor for C# developers", 16, 4) is ["Spring Boot,", "Spring Cloud and", "Reactor for C#", "developers"]

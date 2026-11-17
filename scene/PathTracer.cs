@@ -215,6 +215,9 @@ internal sealed unsafe class PathTracer : IDisposable
         composite = device.AllocateDescriptorSet(splashPool, splashLayout);
     }
 
+    // The picture the composite draws (General layout), which GlassWork's glass also looks through.
+    public VkImageView PictureView => targets[Upscaling ? Upscaled : Output]?.View ?? default;
+
     public int Width { get; private set; }
 
     public int Height { get; private set; }

@@ -70,6 +70,20 @@ internal sealed unsafe class RasterUpscaler : IDisposable
                 DependencyCount = 1,
                 Dependencies = &dependency,
             }, null);
+
+            // The same pass going on where it stopped, its colour and depth loaded (GlassWork's glass, after the copy of
+            // what is behind it).
+            a[0].LoadOp = a[1].LoadOp = VkAttachmentLoadOp.Load;
+            a[0].InitialLayout = a[1].InitialLayout = VkImageLayout.General;
+            ResumePass = device.CreateRenderPass(new VkRenderPassCreateInfo
+            {
+                AttachmentCount = 2,
+                Attachments = a,
+                SubpassCount = 1,
+                Subpasses = &subpass,
+                DependencyCount = 1,
+                Dependencies = &dependency,
+            }, null);
         }
 
         // The motion vectors' image is cleared once, by a pass that draws nothing.
@@ -106,6 +120,11 @@ internal sealed unsafe class RasterUpscaler : IDisposable
     public uint Mode { get; set; } = 3;
 
     public VkRenderPass Pass { get; }
+
+    public VkRenderPass ResumePass { get; }
+
+    // The hall drawn, in the General layout once its pass ends.
+    public VkImage ColourImage => colour?.Image ?? default;
 
     public VkFramebuffer Framebuffer => framebuffer;
 
@@ -319,6 +338,7 @@ internal sealed unsafe class RasterUpscaler : IDisposable
         device.DestroySampler(sampler, null);
         device.DestroyRenderPass(motionPass, null);
         device.DestroyRenderPass(Pass, null);
+        device.DestroyRenderPass(ResumePass, null);
     }
 
     private void DestroyTargets()

@@ -1881,6 +1881,9 @@ internal static unsafe class Stage
         // (quality by default); F7 turns it off and on.
         var upscaler = superResolution ? new RasterUpscaler(device, physical, surfaceFormat.Format, depthFormat, dependency, setLayout) : null;
         var upscaling = upscaler is not null;
+        // The gallery's water globes and paperweights (GlassWork): bent through the hall drawn so far.
+        var glass = new GlassWork(device, physical, renderPass, samples, surfaceFormat.Format, setLayout);
+        var glassWay = (GlassWork.Way)(-1);
         if (upscaler is not null)
         {
             upscaler.Mode = srMode;
@@ -3846,6 +3849,34 @@ internal static unsafe class Stage
                 else if (wall.Showing == WallSource.Kind.Session) sessionWall.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
                 if (hallGallery.Book is { } bookFrame) readerBook.Draw(cb, slot, bookFrame * viewProj);
 
+                // The gallery's glass last, over what it holds and what stands behind it: through a copy of the hall drawn
+                // so far (DLSS's pass, stopped and resumed), the path tracer's picture, or as a veil.
+                if (hallGallery.Globes.Count > 0 && hallGallery.Shows(viewProj))
+                {
+                    var way = upscaled ? GlassWork.Way.Copy : tracer is not null && pathTracing ? GlassWork.Way.Traced : GlassWork.Way.Veil;
+                    if (way != glassWay)
+                    {
+                        glassWay = way;
+                        Console.WriteLine($"SCENE glass: {hallGallery.Globes.Count} globes, {way switch { GlassWork.Way.Copy => "bent through a copy of the hall", GlassWork.Way.Traced => "bent through the path tracer's picture", _ => "a veil (no picture to bend)" }}");
+                    }
+
+                    if (way == GlassWork.Way.Copy)
+                    {
+                        cb.EndRenderPass();
+                        glass.Capture(cb, upscaler!.ColourImage, upscaler.Width, upscaler.Height);
+                        cb.BeginRenderPass(new VkRenderPassBeginInfo
+                        {
+                            RenderPass = upscaler.ResumePass,
+                            Framebuffer = upscaler.Framebuffer,
+                            RenderArea = new VkRect2D { Extent = drawn },
+                        }, VkSubpassContents.Inline);
+                        cb.SetViewport(firstViewport: 0, [new VkViewport { Width = drawn.Width, Height = drawn.Height, MinDepth = 0f, MaxDepth = 1f }]);
+                        cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = drawn }]);
+                    }
+
+                    glass.Draw(cb, way, hallGallery.Globes, viewProj, eye, (int)drawn.Width, (int)drawn.Height, way == GlassWork.Way.Traced ? tracer!.PictureView : default);
+                }
+
                 if (upscaled)
                 {
                     // The hall drawn, DLSS upscales it; the window's image then takes it whole in the cards' pass, the
@@ -4540,6 +4571,7 @@ internal static unsafe class Stage
         reflex?.Dispose();
         tracer?.Dispose();
         upscaler?.Dispose();
+        glass.Dispose();
         rays?.Dispose();
         Rays = null;
         device.DestroyShaderModule(splashVertex, null);
@@ -4713,7 +4745,7 @@ internal static unsafe class Stage
     }
 
     // The scene's pipeline, or with overlay the splash's: no vertex buffer, no depth, alpha blended.
-    internal static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkSampleCountFlags samples, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false, bool vertexless = false)
+    internal static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkSampleCountFlags samples, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false, bool vertexless = false, bool translucent = false)
     {
         var entry = "main"u8;
         fixed (byte* entryName = entry)
@@ -4750,10 +4782,10 @@ internal static unsafe class Stage
                 LineWidth = 1f,
             };
             var multisample = new VkPipelineMultisampleStateCreateInfo { RasterizationSamples = samples };
-            var depth = new VkPipelineDepthStencilStateCreateInfo { DepthTestEnable = !overlay, DepthWriteEnable = !overlay, DepthCompareOp = VkCompareOp.Less };
+            var depth = new VkPipelineDepthStencilStateCreateInfo { DepthTestEnable = !overlay, DepthWriteEnable = !overlay && !translucent, DepthCompareOp = VkCompareOp.Less };
             var blendAttachment = new VkPipelineColorBlendAttachmentState
             {
-                BlendEnable = overlay,
+                BlendEnable = overlay || translucent, // translucent: blended over what is drawn, depth tested, not written
                 SrcColorBlendFactor = VkBlendFactor.SrcAlpha,
                 DstColorBlendFactor = VkBlendFactor.OneMinusSrcAlpha,
                 ColorBlendOp = VkBlendOp.Add,
