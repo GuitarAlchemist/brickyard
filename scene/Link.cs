@@ -637,6 +637,21 @@ internal sealed class Link(Func<double> clock)
         GalleryVideo.SelfTest(Check);
         OfficeSpin.SelfTest(Check);
         SessionQuestion.SelfTest(Check);
+        // A session file's pid that now names a process this user cannot open (a protected one: HasExited throws Access
+        // denied) is answered as gone, not thrown.
+        var denied = System.Diagnostics.Process.GetProcesses().Select(p =>
+        {
+            using (p)
+            {
+                try { _ = p.HasExited; return 0; }
+                catch (System.ComponentModel.Win32Exception) { return p.Id; }
+                catch (InvalidOperationException) { return 0; }
+            }
+        }).FirstOrDefault(id => id > 0);
+        var threw = false;
+        var alive = true;
+        try { alive = global::Shelf.Alive(denied); } catch (Exception) { threw = true; }
+        Check(denied == 0 || (!threw && !alive), $"a session file whose pid now names a protected process ({denied}) is gone, not an exception");
         Streamline.SelfTest(Check);
         Cinematic.SelfTest(Check);
         ToolWheel.SelfTest(Check);

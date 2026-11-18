@@ -104,7 +104,7 @@ internal sealed class OfficeFeed(bool demo) : IDisposable
             reading = OfficeActivities.Merge(files, agents.Map, workspaces.Map);
             Interlocked.Exchange(ref readTicks, AsOf(DateTimeOffset.UtcNow, agents, workspaces)?.UtcTicks ?? 0);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException or System.ComponentModel.Win32Exception)
         {
             // read again at the next period
         }

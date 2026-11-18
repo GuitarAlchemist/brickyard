@@ -265,14 +265,16 @@ internal sealed class Shelf
         return sessions;
     }
 
-    private static bool Alive(int pid)
+    // Whether a session file's process still runs. After a crash its pid may belong to another process, one this user
+    // cannot even open (Access denied, 2026-11-17: the window then died every 23 s): that is not the session.
+    internal static bool Alive(int pid)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
             return !process.HasExited;
         }
-        catch (ArgumentException)
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return false;
         }
