@@ -38,8 +38,8 @@ internal sealed class HallGallery : IDisposable
 
     // A glass over a slot: its sphere's centre and turn (World), its radius, whether it is a paperweight's dome (the upper
     // half, standing on its plinth at World's origin) or a water globe's whole ball, and the colour light keeps through
-    // 10 cm of it.
-    internal readonly record struct Globe(SN.Matrix4x4 World, float Radius, bool Dome, SN.Vector3 Tint);
+    // 10 cm of it, with its slot's key (GalleryPictures.Key of its URL: the picture and the video it may hold).
+    internal readonly record struct Globe(SN.Matrix4x4 World, float Radius, bool Dome, SN.Vector3 Tint, string Key);
 
     // The pictures held (GalleryPictures), by their URL's key: each one's layer and mean colour. Set before the first
     // gallery is built; a demo or an artifact without one keeps its title inside its glass.
@@ -442,7 +442,7 @@ internal sealed class HallGallery : IDisposable
                 var (low, high) = section.Name == "artifacts" ? (0f, h / 2) : (-h / 2, h / 2);
                 if (glass)
                 {
-                    globes.Add(new Globe(world, w / 2, section.Name == "artifacts", section.Name == "artifacts" ? new SN.Vector3(0.94f, 0.97f, 0.96f) : new SN.Vector3(0.8f, 0.93f, 0.95f)));
+                    globes.Add(new Globe(world, w / 2, section.Name == "artifacts", section.Name == "artifacts" ? new SN.Vector3(0.94f, 0.97f, 0.96f) : new SN.Vector3(0.8f, 0.93f, 0.95f), GalleryPictures.Key(entries[i].Url)));
                 }
 
                 for (var c = 0; c < 8; c++)

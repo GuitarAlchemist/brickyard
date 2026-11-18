@@ -83,6 +83,9 @@ internal sealed class GalleryPictures : IDisposable
 
     public VkImageView View => image.View;
 
+    // The array itself, whose layers GalleryVideo replaces while a video plays.
+    internal MaterialTextures.ArrayImage Image => image;
+
     // --pictures DIR, else %LOCALAPPDATA%\delta\gallery\pictures.
     public static string Find(string? option) => option ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "gallery", "pictures");
 

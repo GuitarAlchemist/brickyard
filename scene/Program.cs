@@ -1885,6 +1885,9 @@ internal static unsafe class Stage
         var globes = new GlobeImages(device, physical, upload, globePixels!);
         globePixels = null;
         var pictures = new GalleryPictures(device, physical, upload, picturePixels!);
+        // The demos' videos played in their globes as the eye comes near (GalleryVideo, --videos DIR, --no-videos).
+        var videos = picturesDir is null || args.Contains("--no-videos") ? null
+            : new GalleryVideo(device, physical, pictures, picturePixels!, GalleryVideo.Dir(Option(args, "--videos")), FramesInFlight);
         picturePixels = null;
         // A globe's halves meet at the edges: clamped there, they never blend with the far side of their own half.
         var globeSampler = device.CreateSampler(new VkSamplerCreateInfo
@@ -3872,6 +3875,8 @@ internal static unsafe class Stage
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
             cb.ResetQueryPool(frameStamps, 2 * slot, 2);
             cb.WriteTimestamp(VkPipelineStageFlags.TopOfPipeBit, frameStamps, 2 * slot);
+            videos?.Update(eye, hallGallery.Globes);
+            videos?.Record(cb, slot);
             rays?.Record(cb, slot);
             if (tracer is not null && pathTracing && !splashing)
             {
@@ -4707,6 +4712,7 @@ internal static unsafe class Stage
         materials.Dispose();
         device.DestroySampler(globeSampler, null);
         globes.Dispose();
+        videos?.Dispose();
         pictures.Dispose();
         if (tracer is { GpuMilliseconds.Count: > 0 })
         {

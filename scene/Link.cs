@@ -633,6 +633,8 @@ internal sealed class Link(Func<double> clock)
         LearnLectern.SelfTest(Check);
         GlassWork.SelfTest(Check);
         GalleryPictures.SelfTest(Check);
+        MaterialTextures.SelfTest(Check);
+        GalleryVideo.SelfTest(Check);
         Streamline.SelfTest(Check);
         Cinematic.SelfTest(Check);
         ToolWheel.SelfTest(Check);

@@ -2259,6 +2259,52 @@ agreed with the author before it is built; the click that shows the pane stays t
 - the drag by hand in the live window;
 - a real blocked session's « ? ».
 
+## The demos' videos inside their water globes (2026-11-17)
+
+The author asked: « certaines demos sont des videos, peut on jouer les videos dans les boules de verre ? ». They then
+pointed at https://spareilleux.github.io/learn/demos/. On that page, two GeoTiles entries are videos:
+
+- a drone flight over Ottawa;
+- above the Château Frontenac in Québec.
+
+**The files.** `tools/gallery-pictures/videos.ps1` fetches each video and cuts it as its picture is cut.
+
+- It finds, for each demo of gallery.json, the first `<video><source src="….mp4">` after its anchor and before the next
+  heading.
+- FFmpeg cuts 4:3 from the middle, scales to 512 × 512, keeps 24 images a second, drops the sound and encodes H.264.
+- The result goes to `%LOCALAPPDATA%\delta\gallery\videos\<key>.mp4`, under the picture's key. Ottawa is 6 MB and
+  Québec 8 MB.
+- Like the pictures, the videos stay on this machine and never enter the repo.
+
+**The scene (GalleryVideo).** A video plays only in a globe whose picture is also held. Its frames replace that
+picture's layer in the gallery's array, so the shader, the meshes and the glass are unchanged.
+
+- Within 4.5 m of the eye (the gallery's view, key 8, stands 3.6 m off), an FFmpeg process decodes the video in a loop
+  at its own pace (`-stream_loop -1 -re`) into raw RGBA on stdout.
+- A thread reads one whole image at a time and makes its mips on the CPU into a flat chain (`MaterialTextures.Chain`,
+  the same averaging as the stills). It swaps that chain into a triple buffer.
+- At the start of the next frame, outside any render pass, the latest image is copied into that frame's staging and
+  then into the layer (`ArrayImage.Replace`).
+- Past 5 m the decoder is stopped and the still picture is put back.
+- At most four videos play at once, the nearest.
+- Without ffmpeg on PATH, or with `--no-videos`, the globes keep their pictures. The log says which applies.
+- `--videos DIR` reads the videos from another folder.
+
+**The barrier.** The first barriers waited on all commands, and the GPU's p95 rose to 26 ms a frame, against 6 without
+videos. The layer's only reader is the Low fragment shader, so the barriers now wait on fragment shading alone.
+
+**Checked** (hidden runs on port 8899, `--view 8`, 1600 × 900, on a loaded machine):
+
+- Both globes play, about 590 images each before the hall's tour leads the eye away. Three peeks 4 s apart show both
+  pictures changing.
+- GPU per frame, p95, over four alternating runs: 11.2 and 11.1 ms with the videos, 11.3 and 10.4 ms without.
+- Each FFmpeg process takes about 3 % of one core and 50 MB.
+- No ffmpeg.exe is left after the scene exits.
+- The selftest checks two things: a flat chain equals Chain's levels end to end, and which globes play (nearest first,
+  at most so many, Near and Far).
+
+*To verify*: the live window, walking up to the counter.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
