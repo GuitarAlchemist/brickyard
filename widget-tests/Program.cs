@@ -450,6 +450,18 @@ static void Enclosures(Action<bool, string> check, string image)
     check(MathF.Abs(arc.Max() + arc.Min()) < 0.01f, $"the ring's slots are centred on the view's side ({arc.Min():F2} to {arc.Max():F2} rad)");
     var signs = tree.Roots.Where(r => r.Path.StartsWith("w-")).ToList();
     check(signs.All(p => All([p]).Any(i => i.Text.Count > 0)), "each sign carries its workspace's name");
+    // The cubicles: on this one ring, one widget whose partitions enclose the two wmux workspaces' runs and not the
+    // session outside wmux, with a partition standing between the first workspace's last station and the second's sign.
+    var cubicles = tree.Roots.Where(r => r.Path.StartsWith("cub-", StringComparison.Ordinal)).ToList();
+    var walls = cubicles.SelectMany(c => c.Surfaces).SelectMany(s => s.Triangles).SelectMany(t => new[] { t.A.Position, t.B.Position, t.C.Position })
+        .Select(p => Vector3.Transform(p, cubicles.Count > 0 ? cubicles[0].Local : Matrix4x4.Identity)).ToList();
+    float BearingOf(string path) { var r = tree.Roots.First(x => x.Path == path); return MathF.Atan2(r.Local.M41 - axis.X, r.Local.M43 - axis.Y); }
+    float Bearing(Vector3 p) => MathF.Atan2(p.X - axis.X, p.Z - axis.Y);
+    var nearOutside = walls.Any(p => MathF.Abs(Bearing(p) - BearingOf("s-ffff6666")) < 0.05f);
+    var between = (BearingOf("s-cccc3333") + BearingOf("w-ws2")) / 2;
+    var parted = walls.Any(p => MathF.Abs(Bearing(p) - between) < 0.05f && p.Y > 0.3f);
+    check(cubicles.Count == 1 && cubicles[0].Path == "cub-0" && walls.Count > 0 && !nearOutside && parted,
+        $"a cubicle round each wmux workspace's sign and stations, none for the session outside wmux ({cubicles.Count} widget, parted {parted}, outside {nearOutside})");
     var homes = new Dictionary<string, string> { ["aaaa1111"] = "w-ws1", ["bbbb2222"] = "w-ws1", ["cccc3333"] = "w-ws1", ["dddd4444"] = "w-ws2", ["eeee5555"] = "w-ws2", ["ffff6666"] = "w-outside" };
 
     // The rings turn: a slot's pose turns it about the axis, keeping its distance; the selected robot's ring holds still.
@@ -463,6 +475,9 @@ static void Enclosures(Action<bool, string> check, string image)
     var turned = MathF.Abs(Turned(slot) - (((MathF.Atan2(moved.M41 - axis.X, moved.M43 - axis.Y) - MathF.Atan2(0.4f, 1.9f) + (5 * MathF.PI)) % (2 * MathF.PI)) - MathF.PI));
     var kept = MathF.Abs(Vector2.Distance(new(moved.M41, moved.M43), axis) - Vector2.Distance(new(slot.Local.M41, slot.Local.M43), axis));
     check(turned is > 1.1f and < 1.4f && kept < 1e-4f, $"in 30 s a ring turns a fifth of a turn about the tower's axis ({turned:F3} rad), each slot at its distance");
+    // A slot's pose turns it about the axis, so its own turn is the ring's; the cubicles' pose is that turn alone.
+    check(spun.TryGetValue("cub-0", out var cubicle) && MathF.Abs(cubicle.Transform.M13 - p1.Transform.M13) < 1e-4f && MathF.Abs(cubicle.Transform.M11 - p1.Transform.M11) < 1e-4f
+        && cubicle.Transform.Translation == Vector3.Zero, "the cubicles turn with their ring");
     office.Update(new("fr", false, sessions, "aaaa1111"));
     spun.Clear();
     office.Pose(70.1, spun);

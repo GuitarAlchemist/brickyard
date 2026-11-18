@@ -2377,6 +2377,35 @@ pane is known to wmux; other clicks select and show the pane as before.
 *To verify*: a real answer by hand. That Claude Code takes the number key in a permission prompt and in
 AskUserQuestion is from the wmux skill's own choices (`key: "1"`), not yet seen here.
 
+## The office: a cubicle per wmux workspace (2026-11-17)
+
+The author asked: « peut on rajouter des cubicules aux petits robots (1 par workspace wmux) ».
+
+- Each wmux workspace's run of slots on a ring (its sign, then its stations) now stands in a cubicle.
+  - A fabric partition runs behind the stools, along the ring.
+  - A partition stands on each side, halfway to the neighbouring slot.
+  - Each partition is 0.46 m high at full scale, with an aluminium rail on top. The front stays open toward the view.
+- The fabric is one of six muted colours, chosen from the workspace's ID by FNV-1a. So a refresh, a restart or a
+  renamed workspace keeps the colour.
+- Two cubicles side by side each keep their own side partition, 12 mm in from the halfway line, so the two do not
+  flicker into one.
+- A workspace alone on its ring gets one partition all round and no sides.
+- The sessions outside wmux get no cubicle.
+- **One widget per ring.** Each ring's cubicles are a single `cubicles@1` widget (`cub-<ring>`), whose `runs` text
+  lists each run's first and last angle and its colour, and a pose turns it with its ring.
+  - So the instance budget does not grow with the workspaces: 48 stations still fit within the 2048.
+  - Its triangles are about a hundred per workspace.
+
+**Checked** (widget-tests):
+
+- One widget on the ring of the enclosures check, with nothing in front of the session outside wmux.
+- A partition above 0.3 m between the first workspace's last station and the second one's sign.
+- The cubicles' pose is the ring's turn.
+- Every earlier check still passes, the 48-station budget included.
+
+*To verify*: the look in the live window. Hidden GPU runs are paused since the crashes of 2026-11-17, so no peek was
+taken.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

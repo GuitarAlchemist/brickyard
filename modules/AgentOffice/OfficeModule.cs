@@ -8,7 +8,8 @@ namespace Delta.AgentOffice;
 // a round tower. The stations stand in rings, facing out, each wmux workspace's after a sign with its name (the sessions
 // outside wmux last); a ring full, the next goes on a step above and further in, so the tower grows a storey as the
 // sessions grow, everything smaller only when that is not enough. The rings turn slowly, one turn in Turn seconds;
-// a ring with the selected robot on it holds still, so that a robot clicked stays under the pointer.
+// a ring with the selected robot on it holds still, so that a robot clicked stays under the pointer. Each wmux workspace
+// has its cubicle round its sign and stations, fabric partitions of its own colour, which turn with their ring.
 // Everything is widgets nested in widgets: a station holds a desk, a name plate, a robot fixed to the desk's seat and
 // the selection's mark above it; the robot a torso, with the head and the arms fixed to its anchors; the torso Mac
 // minis, each with its status light. The robot types while its session works, lights a red beacon and turns a question
@@ -129,14 +130,25 @@ public sealed class OfficeModule : IOfficeModule
                 : new(slot.Path, Sign, at, new Dictionary<string, WidgetValue> { ["title"] = slot.Title!.Length > 40 ? slot.Title[..39] + "…" : slot.Title }));
         }
 
+        // The cubicles, one widget per ring holding every wmux workspace's run of slots on it, turned with its ring.
+        for (var k = 0; k < tower.Rings; k++)
+        {
+            if (Runs(tower, k) is not { Length: > 0 } runs) continue;
+            roots.Add(new($"cub-{k}", Cubicles, CubiclePlace(k, tower.Scale), new Dictionary<string, WidgetValue>
+            {
+                ["r"] = Desks(k, tower.Scale), ["s"] = tower.Scale, ["step"] = tower.Steps[k], ["runs"] = runs,
+            }));
+        }
+
         return new(Library, roots);
     }
 
     // A slot of a ring: a session's station, or a workspace's sign (Title) before its stations; at Angle about the axis,
-    // from +Z toward +X, facing out.
-    private sealed record Slot(string Path, int Ring, float Angle, OfficeSession? Session, string? Title);
+    // from +Z toward +X, facing out. Workspace is wmux's ID of its workspace, "" outside wmux.
+    private sealed record Slot(string Path, int Ring, float Angle, OfficeSession? Session, string? Title, string Workspace);
 
-    private sealed record TowerLayout(float Scale, int Rings, IReadOnlyList<Slot> Slots);
+    // Steps: each ring's angle between neighbouring slots.
+    private sealed record TowerLayout(float Scale, int Rings, IReadOnlyList<Slot> Slots, IReadOnlyList<float> Steps);
 
     private TowerLayout? tower;
     private int towerRevision;
@@ -151,6 +163,35 @@ public sealed class OfficeModule : IOfficeModule
     // How many slots ring k holds at scale s; 0 once its stools would reach the core.
     internal static int Capacity(int k, float s) =>
         Edge(k, s) - (Step * s) < Core ? 0 : (int)MathF.Floor(2 * MathF.PI * Desks(k, s) / (Pitch * s));
+
+    // A ring's cubicles stand on its step, their origin on the tower's axis.
+    private static SN.Matrix4x4 CubiclePlace(int k, float s) => Place(Cx, Math.Max(0.02f, k * Rise * s), Cz);
+
+    // Ring k's runs of slots, each wmux workspace's sign and stations side by side, written for the Cubicles widget:
+    // "first last colour" per run, the angles of its first and last slots, runs separated by ';'. Outside wmux, none.
+    private static string Runs(TowerLayout layout, int k)
+    {
+        var runs = new List<string>();
+        var ring = layout.Slots.Where(x => x.Ring == k).ToList();
+        for (var i = 0; i < ring.Count;)
+        {
+            var j = i;
+            while (j + 1 < ring.Count && ring[j + 1].Workspace == ring[i].Workspace) j++;
+            if (ring[i].Workspace.Length > 0)
+                runs.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{ring[i].Angle:F5} {ring[j].Angle:F5} {Fabric(ring[i].Workspace)}"));
+            i = j + 1;
+        }
+
+        return string.Join(";", runs);
+    }
+
+    // A workspace's fabric among Fabrics, from its ID alone (FNV-1a, the same in every process), so a refresh keeps it.
+    private static int Fabric(string workspace)
+    {
+        var h = 2166136261u;
+        foreach (var c in workspace) h = (h ^ c) * 16777619u;
+        return (int)(h % (uint)Fabrics.Length);
+    }
 
     private static SN.Matrix4x4 SlotPlace(Slot slot, float s)
     {
@@ -178,21 +219,23 @@ public sealed class OfficeModule : IOfficeModule
 
         rings ??= Pack(groups, Smallest, force: true)!;
         var slots = new List<Slot>();
+        var steps = new List<float>();
         for (var k = 0; k < rings.Count; k++)
         {
             var ring = rings[k];
+            // Evenly round the ring, or, for a ring with room to spare, Spread slots' width apart in one arc facing the view.
+            var step = MathF.Min(2 * MathF.PI / Math.Max(1, ring.Count), Spread * Pitch * scale / Desks(k, scale));
+            steps.Add(step);
             for (var j = 0; j < ring.Count; j++)
             {
                 var (session, key, title) = ring[j];
-                // Evenly round the ring, or, for a ring with room to spare, Spread slots' width apart in one arc facing the view.
-                var step = MathF.Min(2 * MathF.PI / ring.Count, Spread * Pitch * scale / Desks(k, scale));
                 var angle = Bearing + ((j - ((ring.Count - 1) / 2f)) * step);
                 var sign = slots.Any(x => x.Path == PenKey(key)) ? $"{PenKey(key)}-{k}" : PenKey(key); // a workspace going on to another ring
-                slots.Add(session is null ? new(sign, k, angle, null, title) : new(Key(session), k, angle, session, null));
+                slots.Add(session is null ? new(sign, k, angle, null, title, key) : new(Key(session), k, angle, session, null, key));
             }
         }
 
-        (tower, towerRevision) = (new(scale, rings.Count, slots), layoutRevision);
+        (tower, towerRevision) = (new(scale, rings.Count, slots, steps), layoutRevision);
         return tower;
     }
 
@@ -324,6 +367,13 @@ public sealed class OfficeModule : IOfficeModule
             var about = SN.Matrix4x4.CreateTranslation(-axis) * SN.Matrix4x4.CreateRotationY(a) * SN.Matrix4x4.CreateTranslation(axis);
             poses[slot.Path] = new(place * about * inverse);
         }
+
+        // A ring's cubicles have their origin on the axis: its turn is theirs, about their own vertical.
+        for (var k = 0; k < layout.Rings; k++)
+        {
+            var a = (float)(spins[k] + byHand[k]);
+            if (a != 0 && layout.Slots.Any(x => x.Ring == k && x.Workspace.Length > 0)) poses[$"cub-{k}"] = new(SN.Matrix4x4.CreateRotationY(a));
+        }
     }
 
     public void Dispose()
@@ -386,7 +436,76 @@ public sealed class OfficeModule : IOfficeModule
     private static readonly WidgetId Block = new("block", 1), MacMini = new("mac-mini", 1), Torso = new("torso", 1), Head = new("head", 1),
         Arm = new("arm", 1), Robot = new("robot", 1), Desk = new("desk", 1), Plate = new("plate", 1), Station = new("station", 1),
         Board = new("board", 1), Row = new("row", 1), Mark = new("mark", 1), Tier = new("tier", 1), Sign = new("sign", 1),
-        Ask = new("ask", 1), Glyph = new("glyph", 1);
+        Ask = new("ask", 1), Glyph = new("glyph", 1), Cubicles = new("cubicles", 1);
+
+    // The cubicles' fabrics, muted: slate blue, sage, terracotta, ochre, plum, teal.
+    private static readonly SN.Vector3[] Fabrics =
+    [
+        new(0.22f, 0.3f, 0.42f), new(0.3f, 0.38f, 0.3f), new(0.5f, 0.26f, 0.18f), new(0.52f, 0.42f, 0.18f), new(0.36f, 0.24f, 0.38f), new(0.18f, 0.36f, 0.38f),
+    ];
+
+    // A ring's cubicles in its own frame, the tower's axis at its origin (OfficeScene's cub-k): for each run of a
+    // workspace's slots, a fabric partition behind its stools, along the ring, and one on each side between it and its
+    // neighbours, each capped with an aluminium rail. r is the ring's desks' radius, s the tower's scale, step the angle
+    // between its slots; the sides stand halfway to the neighbouring slots, a little inside, so that two cubicles side by
+    // side keep two partitions instead of one flickering. The front stays open toward the view.
+    private static Built CubicleRuns(WidgetArgs a)
+    {
+        var (r, s, step) = ((float)a.Number("r"), (float)a.Number("s"), (float)a.Number("step"));
+        var fabric = new List<ModuleTriangle>();
+        var rails = new List<ModuleTriangle>();
+        float height = 0.46f * s, back = r - (0.225f * s), front = r + (0.1f * s), wall = 0.022f * s, side = 0.014f * s, inside = 0.012f * s, cap = 0.012f * s;
+        void Panel(float angle, SN.Vector3 centre, float width, float depth, SN.Vector3 colour)
+        {
+            var turn = SN.Matrix4x4.CreateRotationY(angle);
+            Solid(fabric, turn, centre with { Y = height / 2 }, new(width, height, depth), colour);
+            Solid(rails, turn, centre with { Y = height + (cap / 2) }, new(width + (0.004f * s), cap, depth + (0.008f * s)), Aluminium);
+        }
+
+        foreach (var run in a.Text("runs").Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = run.Split(' ');
+            var (first, last) = (float.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture), float.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture));
+            var colour = Fabrics[Math.Clamp(int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture), 0, Fabrics.Length - 1)];
+            var (from, to) = (first - (step / 2), last + (step / 2));
+            var round = to - from >= (2 * MathF.PI) - 0.001f; // a workspace alone on its ring: one partition all round, no sides
+            if (!round)
+            {
+                Panel(from, new(inside, 0f, (back + front) / 2), side, front - back, colour);
+                Panel(to, new(-inside, 0f, (back + front) / 2), side, front - back, colour);
+            }
+
+            // The back, in segments of 0.12 rad at most, from under one side to under the other, short of the neighbours'.
+            var margin = round ? 0f : (inside - (side / 2)) / back;
+            var (start, span) = (from + margin, (round ? 2 * MathF.PI : to - from) - (2 * margin));
+            var n = Math.Max(1, (int)MathF.Ceiling(span / 0.12f));
+            var segment = span / n;
+            for (var i = 0; i < n; i++)
+                Panel(start + ((i + 0.5f) * segment), new(0f, 0f, back), (2 * back * MathF.Tan(segment / 2)) + (0.003f * s), wall, colour);
+        }
+
+        return new([new SurfacePiece(fabric, 0), new SurfacePiece(rails, 2)]);
+    }
+
+    // A box as a surface's triangles: centred on centre in a frame turned by turn, each face wound about its normal.
+    private static void Solid(List<ModuleTriangle> into, SN.Matrix4x4 turn, SN.Vector3 centre, SN.Vector3 size, SN.Vector3 colour)
+    {
+        var half = size / 2;
+        // Each face's normal and two edges whose cross product is that normal.
+        (SN.Vector3 N, SN.Vector3 U, SN.Vector3 V)[] faces =
+        [
+            (SN.Vector3.UnitX, SN.Vector3.UnitY, SN.Vector3.UnitZ), (-SN.Vector3.UnitX, SN.Vector3.UnitZ, SN.Vector3.UnitY),
+            (SN.Vector3.UnitY, SN.Vector3.UnitZ, SN.Vector3.UnitX), (-SN.Vector3.UnitY, SN.Vector3.UnitX, SN.Vector3.UnitZ),
+            (SN.Vector3.UnitZ, SN.Vector3.UnitX, SN.Vector3.UnitY), (-SN.Vector3.UnitZ, SN.Vector3.UnitY, SN.Vector3.UnitX),
+        ];
+        foreach (var (n, u, v) in faces)
+        {
+            var normal = SN.Vector3.Normalize(SN.Vector3.TransformNormal(n, turn));
+            ModuleVertex At(float su, float sv) => new(SN.Vector3.Transform(centre + (n * half) + (u * half * su) + (v * half * sv), turn), normal, colour);
+            into.Add(new(At(-1, -1), At(1, -1), At(1, 1)));
+            into.Add(new(At(-1, -1), At(1, 1), At(-1, 1)));
+        }
+    }
 
     private static readonly SN.Vector3 Steel = new(0.16f, 0.165f, 0.17f), Dark = new(0.04f, 0.04f, 0.045f), Aluminium = new(0.6f, 0.61f, 0.64f),
         Shell = new(0.7f, 0.68f, 0.62f), Orange = new(0.78f, 0.27f, 0.05f), Visor = new(0.012f, 0.014f, 0.018f), Wood = new(0.36f, 0.24f, 0.14f),
@@ -534,6 +653,9 @@ public sealed class OfficeModule : IOfficeModule
         // band round its rim. The rings of stations stand on the steps.
         new(Tier, [new("r", 0.5, 0.02, 2), new("h", 0.1, 0.005, 3)],
             a => new([new SurfacePiece(Drum((float)a.Number("r"), (float)a.Number("h")))])),
+
+        // A ring's cubicles, one per wmux workspace on it (CubicleRuns).
+        new(Cubicles, [new("r", 0.5, 0.02, 2), new("s", 1.0, 0.05, 1), new("step", 0.5, 0.001, 6.3), new("runs", "", 0, 4000)], CubicleRuns),
 
         // A workspace's sign in its ring, facing out: a dark board on a post, the workspace's name on it, as wide as a desk.
         new(Sign, [Text("title")],
