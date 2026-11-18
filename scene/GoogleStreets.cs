@@ -138,7 +138,7 @@ internal static class GoogleStreets
                 int ia = t, ib = mirrored ? t + 2 : t + 1, ic = mirrored ? t + 1 : t + 2;
                 var (pa, pb, pc) = (Hall(ia), Hall(ib), Hall(ic));
                 var centre = (pa + pb + pc) / 3f;
-                if (centre.X > HallShell.Left - 0.2f && centre.X < HallShell.Right + 0.2f && centre.Z > HallShell.Back - 0.2f && centre.Z < HallShell.Front + 0.2f) continue;
+                if (Gymnasium.Covers(centre.X, centre.Z, 0.2f)) continue; // the hall and its gymnasium
                 var cross = SN.Vector3.Cross(pb - pa, pc - pa);
                 if (cross.LengthSquared() < 1e-14f) continue;
                 var n = SN.Vector3.Normalize(cross);

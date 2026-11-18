@@ -40,7 +40,22 @@ internal static class HallShell
         Boxes.Add(o, new((Left - Thick + doorLeft) / 2, Top / 2, Front + (Thick / 2)), new(doorLeft - Left + Thick, Top, Thick), concrete);
         Boxes.Add(o, new((doorRight + Right + Thick) / 2, Top / 2, Front + (Thick / 2)), new(Right + Thick - doorRight, Top, Thick), concrete);
         Boxes.Add(o, new(DoorX, (DoorHeight + 0.05f + Top) / 2, Front + (Thick / 2)), new(DoorWidth, Top - DoorHeight - 0.05f, Thick), concrete);
-        Boxes.Add(o, new(Right + (Thick / 2), Top / 2, (4.15f + Front) / 2), new(Thick, Top, Front - 4.15f), concrete);
+        // The right wall to the front, round the door into the gymnasium (Gymnasium): before it, after it, and over it.
+        var (gymFrom, gymTo) = (Gymnasium.DoorZ - (Gymnasium.DoorWidth / 2), Gymnasium.DoorZ + (Gymnasium.DoorWidth / 2));
+        Boxes.Add(o, new(Right + (Thick / 2), Top / 2, (4.15f + gymFrom) / 2), new(Thick, Top, gymFrom - 4.15f), concrete);
+        Boxes.Add(o, new(Right + (Thick / 2), Top / 2, (gymTo + Front) / 2), new(Thick, Top, Front - gymTo), concrete);
+        Boxes.Add(o, new(Right + (Thick / 2), (Gymnasium.DoorHeight + Top) / 2, Gymnasium.DoorZ), new(Thick, Top - Gymnasium.DoorHeight, Gymnasium.DoorWidth), concrete);
+        // Its steel frame, on both faces of the wall.
+        foreach (var x in new[] { Right - 0.03f, Right + Thick + 0.03f })
+        {
+            foreach (var z in new[] { gymFrom - 0.05f, gymTo + 0.05f })
+            {
+                Boxes.Add(o, new(x, Gymnasium.DoorHeight / 2, z), new(0.06f, Gymnasium.DoorHeight + 0.1f, 0.1f), paint);
+            }
+
+            Boxes.Add(o, new(x, Gymnasium.DoorHeight + 0.05f, Gymnasium.DoorZ), new(0.06f, 0.1f, Gymnasium.DoorWidth + 0.2f), paint);
+        }
+
         Boxes.Add(o, new(0f, (4.6f + Top) / 2, Back), new(Right - Left, Top - 4.6f, 0.3f), concrete);
         Boxes.Add(o, new(Right + (Thick / 2), (4.6f + Top) / 2, (Back + 4.15f) / 2), new(Thick, Top - 4.6f, 4.15f - Back), concrete);
 
@@ -86,7 +101,7 @@ internal static class HallShell
 
     // A steel window of small panes, its face on the wall's inner side at centre c, facing in (normal n), u along the
     // wall: a frame, mullions every 40 cm or so across and up, and a pane of glass in each.
-    private static void Window(List<Vertex> o, List<Vertex> glass, SN.Vector3 c, SN.Vector3 n, SN.Vector3 u, float width, float height, Finish steel, Finish pane)
+    internal static void Window(List<Vertex> o, List<Vertex> glass, SN.Vector3 c, SN.Vector3 n, SN.Vector3 u, float width, float height, Finish steel, Finish pane)
     {
         var up = SN.Vector3.UnitY;
         var face = c + (n * 0.02f);
@@ -121,7 +136,7 @@ internal static class HallShell
 
     // A surface of revolution round the vertical through base: (radius, height) from the top down, 24 sides, its
     // faces lit by their own normals.
-    private static void Lathe(List<Vertex> o, SN.Vector3 baseAt, (float R, float Y)[] profile, Finish finish)
+    internal static void Lathe(List<Vertex> o, SN.Vector3 baseAt, (float R, float Y)[] profile, Finish finish)
     {
         const int sides = 24;
         var flat = new SN.Vector4(0f, 0f, 1f, 1f);

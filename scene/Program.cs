@@ -289,7 +289,9 @@ internal static unsafe class Stage
         // Out in the streets: the city, wherever it stands round the hall, and whatever lies past the front wall.
         bool outdoors(vec3 p)
         {
-            return city() || p.z > 6.0;
+            // Halfway through the front wall (6.0 to 6.16): its inner face, at 6.0 give or take a rounding, stays inside;
+            // at 6.0 itself the sun of the streets speckled it.
+            return city() || p.z > 6.08;
         }
 
         // The key light's share that reaches p: three rays into a light about 4° across, each pixel's turned its way.
@@ -577,6 +579,10 @@ internal static unsafe class Stage
                     float board = 0.88 + 0.24 * noise(vec3(q.x * 0.8, q.y * 3.0, seed * 31.0)); // a board's tone, not even
                     base = vColor * board * figure * mix(1.0, mix(1.06, 0.78, late), rings) * mix(1.0, 0.8, pore * pores);
                     m = vec4(0.04, 28.0, 0.0, 0.4);
+                    // A board's rounded edge fades out where it would be under a pixel: far off, a floor's rows of
+                    // edges, each a pixel catching the light, made moiré (Gymnasium).
+                    vec2 far = smoothstep(vec2(0.003), vec2(0.01), fwidth(toEdge));
+                    n = normalize(face + lean.x * (1.0 - far.x) * across + lean.y * (1.0 - far.y) * cross(face, across));
                 }
                 else if (vMaterial == 2u || vMaterial == 3u)
                 {
@@ -698,9 +704,16 @@ internal static unsafe class Stage
             pool = max(pool, 0.8 * gallery);
             float catalogue = (1.0 - smoothstep(0.0, 1.0, box(vWorld.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
             pool = max(pool, 0.8 * catalogue);
-            float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
-            // The streets beyond the front wall's roll-up door (OttawaStreets) are in daylight, every height of them.
-            float street = city() ? 1.0 : smoothstep(6.0, 6.4, vWorld.z);
+            // The gymnasium on the hall's right (Gymnasium) is lit through, under its high-bay lamps and its windows; its
+            // edge is sharp, so that the hall's side of the wall between them stays the hall's.
+            float gym = 1.0 - smoothstep(0.0, 0.08, box(vWorld.xz - vec2(17.405, -1.75), vec2(10.995, 7.75)));
+            pool = max(pool, gym);
+            float high = max(max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots), gym);
+            // The streets beyond the front wall's roll-up door (OttawaStreets) are in daylight, every height of them, and
+            // so are the building's outer walls and roofs, past its inner faces by more than a wall's thickness.
+            vec3 outHall = max(abs(vWorld - vec3(0.0, 2.425, 1.275)) - vec3(6.25, 2.425, 4.725), 0.0);
+            vec3 outGym = max(abs(vWorld - vec3(17.405, 2.9, -1.75)) - vec3(10.995, 2.9, 7.75), 0.0);
+            float street = max(city() ? 1.0 : smoothstep(6.0, 6.4, vWorld.z), smoothstep(0.1, 0.15, min(length(outHall), length(outGym))));
             pool = max(pool, street);
             high = max(high, street);
             // A video projected on the gallery's wall (GalleryVideo.Projection): a projector's light, 4:3, on the white
@@ -729,6 +742,7 @@ internal static unsafe class Stage
     // The streets' haze, much thinner: about half the light through at 290 m. At 0.12 of the hall's (half at 96 m) the
     // Parliament's towers faded into a white mist (the user, 2026-11-18: « je veux moins de brouillard »).
     private const float StreetHaze = Haze * 0.04f;
+    private const float GymHaze = Haze * 0.3f; // the gymnasium's: its far end, 34 m off, still clear (Gymnasium)
     private static readonly float4 HazeColor = new(0.075f, 0.09f, 0.115f, 1f); // the shader's haze() colour
     private static readonly float4 DaySky = new(0.42f, 0.55f, 0.75f, 1f); // its day colour over the streets of Ottawa (OttawaStreets)
 
@@ -1836,6 +1850,10 @@ internal static unsafe class Stage
         // The hall closed round (HallShell): walls, ceiling, windows and lamps, drawn but not traced.
         var (shellVertices, glassVertices, bulbVertices) = HallShell.Build(photographed: materialDir is not null);
         var (shell, shellGlass, shellBulbs) = (new Mesh(device, physical, shellVertices), new Mesh(device, physical, glassVertices), new Mesh(device, physical, bulbVertices));
+        // The gymnasium through the hall's right wall (Gymnasium): its walls, roof and windows drawn as the shell is, its
+        // floor, court, hoops, bleachers and trusses traced.
+        var (gymShellVertices, gymGlassVertices, gymBulbVertices, gymInsideVertices) = Gymnasium.Build(photographed: materialDir is not null);
+        var (gymShell, gymGlass, gymBulbs, gymInside) = (new Mesh(device, physical, gymShellVertices), new Mesh(device, physical, gymGlassVertices), new Mesh(device, physical, gymBulbVertices), new Mesh(device, physical, gymInsideVertices));
         // The roll-up door's curtain, and the streets of Ottawa behind it once fetched (StreetDoor, OttawaStreets).
         var streetDoor = new StreetDoor();
         var doorCurtain = new Mesh(device, physical, StreetDoor.Curtain());
@@ -2456,7 +2474,7 @@ internal static unsafe class Stage
             Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
         }
 
-        // --door inside|street|back: the roll-up door open from the start, the streets loading, and the camera looking
+        // --door inside|street|back|air|lawn|wing: the roll-up door open from the start, the streets loading, and the camera looking
         // out through it from the hall, up the street from outside, or back at the hall; for hidden checks.
         if (Option(args, "--door") is { } doorShot)
         {
@@ -2469,11 +2487,24 @@ internal static unsafe class Stage
                 "back" => (new SN.Vector3(HallShell.DoorX + 4f, FreeCamera.WalkHeight + 1f, HallShell.Front + 14f), new SN.Vector3(HallShell.DoorX, 2f, HallShell.Front)),
                 "air" => (new SN.Vector3(HallShell.DoorX + 30f, 50f, HallShell.Front + 2f), new SN.Vector3(HallShell.DoorX, 8f, HallShell.Front + 120f)),
                 "lawn" => (new SN.Vector3(HallShell.DoorX + 6f, FreeCamera.WalkHeight, HallShell.Front + 80f), new SN.Vector3(HallShell.DoorX - 4f, 30f, HallShell.Front + 140f)),
+                "wing" => (new SN.Vector3(Gymnasium.Right + 8f, 16f, HallShell.Front + 22f), new SN.Vector3(10f, 2f, -2f)), // the building and its gymnasium from the air
                 _ => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, 1.5f), new SN.Vector3(HallShell.DoorX, 1.8f, 20f)),
             };
             camera.GoTo(doorEye, doorTarget, cut: true);
         }
 
+        // --gym court|door|stands: the gymnasium (Gymnasium) from its end, from the hall's door into it, or from the
+        // bleachers; for hidden checks.
+        if (Option(args, "--gym") is { } gymShot)
+        {
+            var (gymEye, gymTarget) = gymShot switch
+            {
+                "door" => (new SN.Vector3(4.6f, FreeCamera.WalkHeight, Gymnasium.DoorZ), new SN.Vector3(20f, 1.6f, 0f)),
+                "stands" => (new SN.Vector3(17.4f, 2.3f, 5.4f), new SN.Vector3(17.4f, 1.2f, -6f)),
+                _ => (new SN.Vector3(Gymnasium.Left + 1.2f, 1.8f, 4.6f), new SN.Vector3(Gymnasium.Right - 2f, 1.6f, -4f)),
+            };
+            camera.GoTo(gymEye, gymTarget, cut: true);
+        }
         var film = filmDir is null || origamiFilmed ? new Cinematic { ReducedMotion = reducedMotion } : new Cinematic(ArcadeFilm.Shots, ArcadeFilm.Heading); // 0, or --cinematic once the splash is over
         var arcadeFilm = filmDir is null || origamiFilmed ? null : new ArcadeFilm(camera, film);
         var origamiFilm = origamiPlay is null ? null : new OrigamiFilm(camera, origamiPlay, origamiSeconds);
@@ -3921,7 +3952,7 @@ internal static unsafe class Stage
             var aspect = extent.Width / (float)extent.Height;
             var pose = film.Pose(aspect) ?? (rides.Riding != Rides.Kind.None ? rides.Pose(dt) : camera.View(time));
             var eye = pose.Eye;
-            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, outside ? 350f : 40f);
+            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, outside ? 350f : 60f); // 60 inside: the gymnasium's far end, seen from the hall
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up) * projection;
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
@@ -4269,7 +4300,7 @@ internal static unsafe class Stage
                 projectionScreen?.Dispose();
                 projectionScreen = place == default ? null : new Mesh(device, physical, GalleryVideo.ScreenModel(place));
             }
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? (outside ? StreetHaze : Haze) : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? (outside ? StreetHaze : Gymnasium.Holds(eye) ? GymHaze : Haze) : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
                 videos?.Projected ?? GalleryVideo.Projection.None);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
@@ -4283,7 +4314,7 @@ internal static unsafe class Stage
             if (tracer is not null && pathTracing && !splashing)
             {
                 tracer.Resize(extent.Width, extent.Height);
-                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? (outside ? StreetHaze : Haze) : 0f, materials.Photographed,
+                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? (outside ? StreetHaze : Gymnasium.Holds(eye) ? GymHaze : Haze) : 0f, materials.Photographed,
                     hazy && quality == Quality.Low ? new SN.Vector4(0.075f, 0.09f, 0.115f, 0f) : new SN.Vector4(0.006f, 0.005f, 0.005f, 0f));
             }
 
@@ -4397,6 +4428,10 @@ internal static unsafe class Stage
                 DrawLetThrough(cb, layout, shellGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
                 DrawLetThrough(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
                 DrawLetThrough(cb, layout, doorCurtain, new Push(streetDoor.World(), viewProj, default));
+                Draw(cb, layout, gymInside, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                DrawLetThrough(cb, layout, gymShell, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                DrawLetThrough(cb, layout, gymGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
+                DrawLetThrough(cb, layout, gymBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
                 // The streets, out of the traced structure: a kilometre of city would swell it for what the door shows.
                 if (outside && googleChosen && aerial is not null)
                 {
@@ -5109,6 +5144,10 @@ internal static unsafe class Stage
         aerialImage.Dispose();
         aerialCardTexture?.Dispose();
         shellBulbs.Dispose();
+        gymShell.Dispose();
+        gymGlass.Dispose();
+        gymBulbs.Dispose();
+        gymInside.Dispose();
         hallGallery.Dispose();
         foreach (var gallery in knots.Values)
         {

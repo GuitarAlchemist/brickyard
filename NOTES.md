@@ -2563,6 +2563,38 @@ the scan's into moiré. A pull-down screen now hangs where `GalleryVideo.Place` 
 alone, in the projector's light (1.15 times its colour), and the room's light on the cloth is dimmed by 70 % where the
 picture falls, so that its darks stay dark. Seen hidden with `--view 8`: the Québec flyover sharp on the screen.
 
+### A gymnasium: the Brickyard building made bigger (2026-11-18)
+
+« je pense qu'on va avoir besoin d'un batiment beaucoup plus grand, peut etre un gymnase », then « le gymnase je
+parlais pour etendre le batiment brickyard », and « Attaque […] l'extension gymnase ». `Gymnasium` adds a wing on the
+hall's right, 34 m by 24 m and 9 m high inside, its front flush with the hall's on the street. A door 2.3 m wide and
+4 m high opens in the hall's right wall, just past the knots' floor's stair (z 4.3 to 5.8).
+
+- **Inside.** A maple floor of butted 12 cm strips, a FIBA court of 28 m by 15 m painted on it with its keys stained
+  blue, and two hoops at 3.05 m on wall-mounted backstops. Blue pads on the end walls, four rows of bleachers along
+  the front wall, seven Warren trusses with 21 high-bay lamps under them, five clerestories front and back, two on the
+  right wall, and a scoreboard.
+- **Lighting.** The Low shader lights the whole wing as one pool, with a sharp edge so that the hall's face of the
+  shared wall stays the hall's. Walls, roof, windows, trusses and lamps let the key light through, as the hall's shell
+  does. Traced, the trusses and the lamps had striped the floor with dark, grainy shadows. The floor, the court, the
+  hoops and the bleachers are traced. The haze in the wing is 0.3 times the hall's, and the far plane indoors went
+  from 40 to 60 so that the wing's far end shows from the hall.
+- **Outside.** The building's outer walls and roofs, beyond its inner faces by more than a wall's thickness, are now
+  in daylight; before, the hall's were dark from the street. The windows have outer faces too.
+- **Walking.** `FreeCamera.Confine` gained two spaces that are always open, the door and the wing. The bleachers are
+  an obstacle. The streets leave the building's whole footprint out: OpenStreetMap's buildings and roads in
+  `OttawaStreets`, Google's triangles through `Gymnasium.Covers`.
+- **Two fixes found by eye.**
+  - Far off, each board's rounded edge was a pixel catching the light, so the floor's rows made moiré. Oak's edge now
+    fades where it would fall under a pixel.
+  - The front wall's inner face sat exactly at the shader's « outdoors » line (z 6.0), so the streets' sun lit some
+    of its pixels at random. The line is now halfway through the wall, at 6.08.
+- **Checks.**
+  - SelfTest covers the wing's sizes, the room round the court, the rims' height and the open door. It also walks the
+    body in through the door, back out, and into the bleachers, and checks that the wall beside the door stops it.
+  - Seen hidden with `--gym court|door|stands`, and from the air with `--door wing`, at about 50 fps hidden.
+  - Not yet seen: the wing under path tracing, a ride through the door, and the live window.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

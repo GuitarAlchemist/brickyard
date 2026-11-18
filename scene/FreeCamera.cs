@@ -29,6 +29,18 @@ internal sealed class FreeCamera
     // Up to 150 m over them, where the drone may climb (Rides).
     private static readonly (SN.Vector3 Min, SN.Vector3 Max) Streets = (new(-400f, Min.Y, HallShell.Front + 0.6f), new(400f, 150f * Scale, 400f));
 
+    // Through the hall's right wall into the gymnasium (Gymnasium): the door's opening, overlapping the hall and the
+    // wing, and the wing itself; always open.
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) GymDoor =
+        (new(Max.X - 0.5f, Min.Y, Gymnasium.DoorZ - (Gymnasium.DoorWidth / 2) + 0.3f), new(Gymnasium.Left + 0.6f, Gymnasium.DoorHeight - 0.3f, Math.Min(Max.Z, Gymnasium.DoorZ + (Gymnasium.DoorWidth / 2) - 0.3f)));
+
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Gym =
+        (new(Gymnasium.Left + 0.3f, Min.Y, Gymnasium.Back + 0.3f), new(Gymnasium.Right - 0.3f, Gymnasium.Top - 0.6f, Max.Z));
+
+    // The places the body may be, with the roll-up door shut and open.
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max)[] ClosedSpaces = [(Min, Max), GymDoor, Gym];
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max)[] OpenSpaces = [(Min, Max), GymDoor, Gym, Doorway, Streets];
+
     // Whether the door lets the body through; set by the scene each frame.
     internal bool DoorOpen { get; set; }
 
@@ -45,13 +57,12 @@ internal sealed class FreeCamera
     // Whether the eye is out in the streets.
     internal bool Outdoors => position.Z > HallShell.Front;
 
-    // Where a move from one place to another ends: anywhere in a space that holds both (the hall, the doorway, the
-    // streets when the door is open); else at the nearest place in the space it started from; anywhere it is to go when
+    // Where a move from one place to another ends: anywhere in a space that holds both (the hall, the gymnasium and its
+    // door, and the doorway and the streets when the roll-up door is open); else at the nearest place in the space it started from; anywhere it is to go when
     // it started outside them all (a view's cut).
     internal SN.Vector3 Confine(SN.Vector3 from, SN.Vector3 to)
     {
-        if (!DoorOpen) return SN.Vector3.Clamp(to, Min, Max);
-        ReadOnlySpan<(SN.Vector3 Min, SN.Vector3 Max)> spaces = [(Min, Max), Doorway, Streets];
+        var spaces = DoorOpen ? OpenSpaces : ClosedSpaces;
         static bool In((SN.Vector3 Min, SN.Vector3 Max) s, SN.Vector3 p) => SN.Vector3.Clamp(p, s.Min, s.Max) == p;
         foreach (var s in spaces)
         {
@@ -89,6 +100,7 @@ internal sealed class FreeCamera
         (HallGallery.Footprint.Centre, 0f, HallGallery.Footprint.Half), // the gallery's bookcase and counter along the left wall
         (HallGallery.CatalogueFootprint.Centre, 0f, HallGallery.CatalogueFootprint.Half), // Streeling's card catalogue on the back wall
         (HallGallery.LecternFootprint.Centre, 0f, HallGallery.LecternFootprint.Half), // the lectern
+        .. Gymnasium.Obstacles, // the gymnasium's bleachers
     ];
 
     private const float Sensitivity = 0.0025f; // radians a pixel, the Observatory's

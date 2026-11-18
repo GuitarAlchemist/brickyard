@@ -21,7 +21,8 @@ internal static class OttawaStreets
     private const double LevelHeight = 3, DefaultHeight = 8;
 
     // The hall's footprint, from HallShell's walls and their thickness, with a margin.
-    private static readonly SN.Vector2 HallMin = new(HallShell.Left - 1f, HallShell.Back - 1f), HallMax = new(HallShell.Right + 1f, HallShell.Front + 0.5f);
+    // The building, the hall and its gymnasium (Gymnasium) together, with a metre round it.
+    private static readonly SN.Vector2 HallMin = new(HallShell.Left - 1f, Math.Min(HallShell.Back, Gymnasium.Back) - 1f), HallMax = new(Math.Max(HallShell.Right, Gymnasium.Right) + 1f, HallShell.Front + 0.5f);
 
     internal static string CachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "ottawa", "overpass.json");
 
