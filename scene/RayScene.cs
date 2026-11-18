@@ -130,7 +130,8 @@ internal sealed unsafe class RayScene : IDisposable
 
             var (p0, p1, p2) = before.TryGetValue((mesh, turn), out var was) ? was : (r0, r1, r2);
             infos[n] = new InstanceInfo(blas.Vertices, (uint)mesh.Count, glow, p0, p1, p2);
-            instances[n++] = new Instance(r0, r1, r2, blas.Address) { IndexAndMask = (unshadowing.Contains(mesh) ? 0x02u : 0xFFu) << 24 };
+            var mask = unshadowing.Contains(mesh) ? 0x02u : outdoors.Contains(mesh) ? CityMask : 0xFFu;
+            instances[n++] = new Instance(r0, r1, r2, blas.Address) { IndexAndMask = mask << 24 };
         }
 
         Instances = n;
@@ -162,7 +163,10 @@ internal sealed unsafe class RayScene : IDisposable
     // What a draw remembers for the next frame's structure: the mesh, its world rows and its glow.
     // shadows false: the mesh is seen by every ray but the key light's shadow rays, which pass through it (mask 0x02,
     // they trace 0x01): the hall's shell, which the key light comes in through.
-    public void Remember(Mesh mesh, in Push push, bool shadows = true)
+    // outdoors: the mesh casts the key light's shadow only on what lies outside the hall (mask 0x04, which only a street
+    // fragment's shadow rays trace): the city of Ottawa, whose buildings shade its streets but not the hall's floor
+    // through its open door.
+    public void Remember(Mesh mesh, in Push push, bool shadows = true, bool outside = false)
     {
         if (Drawn.Count < MaxInstances)
         {
@@ -171,13 +175,22 @@ internal sealed unsafe class RayScene : IDisposable
             {
                 unshadowing.Add(mesh);
             }
+
+            if (outside)
+            {
+                outdoors.Add(mesh);
+            }
         }
     }
 
     private readonly HashSet<Mesh> unshadowing = [];
+    private readonly HashSet<Mesh> outdoors = [];
 
-    // The mask a shadow ray traces: every instance but the shell's.
+    // The mask a shadow ray traces: every instance but the shell's (and, inside the hall, the city's).
     public const uint ShadowMask = 0x01u;
+
+    // The city's instances, which a street fragment's shadow rays trace besides ShadowMask.
+    public const uint CityMask = 0x04u;
 
     public void Dispose()
     {

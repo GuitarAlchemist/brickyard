@@ -2439,7 +2439,7 @@ Google's photorealistic tiles on choice. This is the first slice, OpenStreetMap 
   (207, −42) m from Parliament Hill's point.
 
 **Drawing.** While the door is open or the eye is out, the far plane goes from 40 to 350 and the haze thins to
-0.12 of its density. The city is drawn untraced, so it adds nothing to the ray-traced structure.
+0.12 of its density. The city was first drawn untraced; it is now traced for its shadows (below).
 
 **Checked.**
 
@@ -2472,8 +2472,37 @@ the door at once and sets the camera.
   passes over and through as before. The selftest walks out through the door and not through the wall beside it, and
   stops against a wall from outside and from within.
 
-**Still to do:** Google's tiles on choice. That is the second slice: a paid API, with the key in the environment and
-never stored.
+**More real (same night).** The author: « Les rues n'ont pas l'air très réaliste, des idées? ». Proposed: shadows, a
+day sky, windows; then the ground; then Google's tiles. « Ok » for the first three.
+
+- **Parts, not outlines.** OpenStreetMap draws a complex building twice: its outline, with the tallest height, and its
+  `building:part`s. Drawing both turned the Peace Tower into a 92 m block over the whole Centre Block. An outline with a
+  part's centroid inside it is now left out, as the Simple 3D Buildings rule says; the parts carry the shape.
+- **Roofs and colours.** A `roof:shape` other than flat is a pyramid to the ring's centroid, `roof:height` high or 3 m
+  (at most 0.8 of the building). A roof is `roof:colour`, else verdigris for `roof:material=copper`, else grey. Walls are
+  `building:colour`, else by `building:material` (limestone, brick, glass, concrete), else the stone as before.
+- **Windows** (`Material.Facade`, 19). The Low shader draws a window every 2.2 m along a wall and on every 3 m floor, the
+  ground floor's taller, with a sill; each pane its own shade of dark glass, mirroring the sky. Below a few pixels a
+  window fades into the wall, so nothing shimmers far away. The path tracer and Flat draw the wall's colour (the path
+  tracer's photographed-material branch now stops at 16, or 19 would have read as a brick scan).
+- **Daylight.** Out in the streets, the key light is an afternoon sun from the south-west (+z is north there), the fill
+  is the sky's blue from the whole dome (a wall sees half of it, so the shaded side is not black), and what a surface
+  mirrors is the sky and the paving, not the hall. The clear colour and the haze are a day's blue whenever the streets
+  are in view. Inside, nothing changed.
+- **Which fragments are outside.** Past the front wall (z > 6), and the whole city wherever it stands: the city's draw
+  carries a glow of alpha −1, no light, which the shader reads as `city()`. Without it, the buildings south of the hall
+  were lit as its inside, dark.
+- **Shadows.** The city is now in the ray-traced structure, with its own instance mask (`RayScene.CityMask`, 0x04).
+  A street fragment's key-light rays trace 0x05 up to 160 (a 60 m tower's shadow, 45 of the hall's units, with room);
+  a fragment of the hall's inside still traces 0x01 up to 40, so no building outside shades the hall's floor through
+  the open door.
+
+Seen hidden at 1920 × 1080, `--door street|inside|back|air|lawn`: the Centre Block in sandstone under copper roofs, the
+Peace Tower with its four pinnacles, shadow between the wings and the tower; the buildings behind the hall in daylight.
+54 fps, p95 17 ms, as before. `--selftest` passes. The Library of Parliament's roof is grey: its data has no copper tag.
+
+**Still to do:** the ground (lawns, sidewalks, trees, lamps from OpenStreetMap), then Google's tiles on choice. Those
+are a paid API, with the key in the environment and never stored.
 
 ## Known problems
 

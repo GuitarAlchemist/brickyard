@@ -138,6 +138,11 @@ internal enum Material : uint
     // Oak boards, drawn by the Low shader from a box's Edge: flat-sawn grain along the face's longer side, its pores, a
     // sheen that moves with the eye, under a clear coat. The path tracer and Flat draw them in their colour.
     Oak = 18,
+
+    // A city building's wall (OttawaStreets): the Low shader draws a window every 2.2 m along it (its Tangent) and on
+    // every floor, dark glass that takes the sky's light; Edge.w varies the panes from building to building. The path
+    // tracer and Flat draw the wall in its colour.
+    Facade = 19,
 }
 
 // A surface's colour and what it is made of.

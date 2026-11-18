@@ -248,16 +248,23 @@ internal static unsafe class Stage
         #ifdef RAYS
         layout(set = 0, binding = 4) uniform accelerationStructureEXT hallRays; // RayScene: last frame's meshes
 
-        // How far along dir, from origin, the first surface is; tmax when none is nearer.
-        float reach(vec3 origin, vec3 dir, float tmax, bool any)
+        // reach, through the instances whose mask meets the given one (RayScene: 0x01 casts shadows, 0x02 the shell,
+        // 0x04 the city, whose shadows only fall outside).
+        float reachThrough(vec3 origin, vec3 dir, float tmax, bool any, uint mask)
         {
             rayQueryEXT q;
-            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | (any ? gl_RayFlagsTerminateOnFirstHitEXT : 0u), any ? 0x01u : 0xFFu, origin, 0.0, dir, tmax); // a shadow ray passes the shell (RayScene.ShadowMask)
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | (any ? gl_RayFlagsTerminateOnFirstHitEXT : 0u), mask, origin, 0.0, dir, tmax);
             while (rayQueryProceedEXT(q))
             {
             }
 
             return rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT ? tmax : rayQueryGetIntersectionTEXT(q, true);
+        }
+
+        // How far along dir, from origin, the first surface is; tmax when none is nearer.
+        float reach(vec3 origin, vec3 dir, float tmax, bool any)
+        {
+            return reachThrough(origin, dir, tmax, any, any ? 0x01u : 0xFFu); // a shadow ray passes the shell (RayScene.ShadowMask)
         }
 
         // Interleaved gradient noise: a different turn for each pixel, the same every frame, so nothing crawls.
@@ -272,6 +279,18 @@ internal static unsafe class Stage
             b = cross(n, t);
         }
 
+        // The city of Ottawa's draw (OttawaStreets), which Program marks with a glow of no light (alpha -1).
+        bool city()
+        {
+            return pc.glow.a < -0.5;
+        }
+
+        // Out in the streets: the city, wherever it stands round the hall, and whatever lies past the front wall.
+        bool outdoors(vec3 p)
+        {
+            return city() || p.z > 6.0;
+        }
+
         // The key light's share that reaches p: three rays into a light about 4° across, each pixel's turned its way.
         float keyShadow(vec3 p, vec3 face, vec3 keyDir)
         {
@@ -284,11 +303,16 @@ internal static unsafe class Stage
             across(keyDir, t, b);
             float turn = grain(gl_FragCoord.xy) * 6.2831853;
             float lit = 0.0;
+            // Outside the hall's front wall (HallShell.Front, 6.0) the streets: the city's buildings cast shadows there,
+            // and from further away (a 60 m tower's shadow runs about 70 m, 45 of the hall's units).
+            bool street = outdoors(p);
+            float upTo = street ? 160.0 : 40.0;
+            uint mask = street ? 0x05u : 0x01u;
             for (int i = 0; i < 3; i++)
             {
                 float a = turn + float(i) * 2.3999632;
                 float r = sqrt((float(i) + 0.5) / 3.0) * 0.035;
-                lit += reach(p, normalize(keyDir + (cos(a) * t + sin(a) * b) * r), 40.0, true) >= 40.0 ? 1.0 : 0.0;
+                lit += reachThrough(p, normalize(keyDir + (cos(a) * t + sin(a) * b) * r), upTo, true, mask) >= upTo ? 1.0 : 0.0;
             }
 
             return lit / 3.0;
@@ -381,6 +405,13 @@ internal static unsafe class Stage
             return c * (r.z < 0.0 ? 1.0 : 0.7);
         }
 
+        // What a surface at p mirrors along r: inside, the hall; out in the streets of Ottawa, the day's sky above and
+        // the paved ground below.
+        vec3 around(vec3 r, vec3 p)
+        {
+            return outdoors(p) ? (r.y < 0.0 ? vec3(0.16, 0.15, 0.14) : mix(vec3(0.62, 0.68, 0.76), vec3(0.42, 0.55, 0.75), smoothstep(0.0, 0.5, r.y))) * 0.5 : hall(r);
+        }
+
         // The haze between the eye and p: none in the first 3 m, then thicker with distance and thinner with height
         // (half as thick 2 m up), a cool steel blue, dim, so that the far brick and the roof recede into it while what
         // is near stays clear. Its colour is HazeColor's, the clear colour beyond the hall.
@@ -388,7 +419,9 @@ internal static unsafe class Stage
         {
             float density = frame.eye.w * exp(-0.35 * max(0.5 * (p.y + frame.eye.y), 0.0));
             float through = exp(-density * max(length(p - frame.eye.xyz) - 3.0, 0.0));
-            return mix(vec3(0.075, 0.09, 0.115), c, through);
+            // Inside, the hall's dusk; seen from the streets or looking out onto them, a day's blue (OttawaStreets).
+            float day = max(smoothstep(6.0, 6.4, frame.eye.z), city() ? 1.0 : smoothstep(6.0, 6.4, p.z));
+            return mix(mix(vec3(0.075, 0.09, 0.115), vec3(0.42, 0.55, 0.75), day), c, through);
         }
 
         // Below 0.6 as it is; above, rolling off towards 1 instead of clipping.
@@ -404,6 +437,7 @@ internal static unsafe class Stage
             vec3 v = normalize(frame.eye.xyz - vWorld);
             vec3 base = vColor;
             float occlusion = 1.0;
+            float skyGlass = 0.0; // a city window's glass, which mirrors the sky (Material.Facade)
             vec3 n;
             vec4 m;
             if (vMaterial == 16u)
@@ -469,6 +503,27 @@ internal static unsafe class Stage
                 occlusion = mix(1.0, mix(0.72, 1.0, crest), detail);
                 m = materials[6];
             }
+            else if (vMaterial == 19u)
+            {
+                // A city building's wall (Material.Facade, OttawaStreets): a window every 2.2 m along it (1.42 at the
+                // hall's scale) and on every 3 m floor (1.94), the ground floor's taller; dark glass, each pane its own
+                // shade, in the wall's stone, which takes the sky's light further on. Under a few pixels a window
+                // fades to the wall's tone.
+                vec3 along = normalize(vTangent - face * dot(vTangent, face));
+                vec2 q = vec2(dot(vWorld, along) / 1.42, vWorld.y / 1.94);
+                vec2 w = fwidth(q);
+                float detail = 1.0 - smoothstep(0.12, 0.35, max(w.x, w.y));
+                vec2 cell = fract(q);
+                vec2 lo = vec2(0.24, q.y < 1.0 ? 0.08 : 0.3), hi = vec2(0.76, 0.84);
+                vec2 inside = smoothstep(lo - w, lo + w, cell) * (1.0 - smoothstep(hi - w, hi + w, cell));
+                float glass = inside.x * inside.y * detail;
+                float pane = fract(sin(dot(floor(q), vec2(12.9898, 78.233)) + vEdge.w * 91.7) * 43758.5453);
+                float sill = (1.0 - smoothstep(0.0, w.y * 1.5, abs(cell.y - lo.y + 0.02))) * step(lo.x, cell.x) * step(cell.x, hi.x) * detail;
+                base = mix(vColor * mix(1.0, 0.82, sill), vec3(0.035, 0.045, 0.055) * (0.7 + 0.6 * pane), glass);
+                n = face;
+                m = mix(materials[0], vec4(0.04, 220.0, 0.0, 1.0), glass);
+                skyGlass = glass;
+            }
             else if (vMaterial == 7u)
             {
                 // Turned oak (Material.Wood): its grain along the post, the lines wandering a little, darker late wood.
@@ -527,6 +582,15 @@ internal static unsafe class Stage
             vec3 fillDir = normalize(vec3(0.7, 0.25, 0.3));
             vec3 keyColor = vec3(1.0, 0.86, 0.68);
             vec3 fillColor = vec3(0.35, 0.45, 0.6) * 0.35;
+            if (outdoors(vWorld))
+            {
+                // The streets of Ottawa, past the hall's front wall: an afternoon sun from the south-west, behind the eye
+                // that looks out of the door towards Parliament (+z is northward there), and the blue sky's light from above.
+                keyDir = normalize(vec3(0.35, 0.7, -0.6));
+                fillDir = vec3(0.0, 1.0, 0.0);
+                keyColor = vec3(1.0, 0.93, 0.82) * 1.1;
+                fillColor = vec3(0.42, 0.55, 0.75) * 0.6;
+            }
 
             // On the floor: the robot's shadow from the key light, as a column 1.25 m high whose penumbra widens away
             // from its foot, and the dark where the robot, the pallet, the cabinet and the wall stand. On the wall: the
@@ -562,7 +626,8 @@ internal static unsafe class Stage
             }
 
             float key = max(dot(n, keyDir), 0.0);
-            float fill = max(dot(n, fillDir), 0.0);
+            // Outside, the sky's light from the whole dome: a wall sees half of it, a roof all, the shaded side too.
+            float fill = outdoors(vWorld) ? 0.5 + 0.5 * n.y : max(dot(n, fillDir), 0.0);
             float bounce = 0.5 - 0.5 * n.y;
             ao *= occlusion;
             vec3 light = (keyColor * key * shade + fillColor * fill + vec3(0.12, 0.1, 0.09) * bounce + 0.03) * ao;
@@ -591,7 +656,7 @@ internal static unsafe class Stage
             brush = dot(brush, brush) > 1e-8 ? normalize(brush) : vec3(1.0, 0.0, 0.0);
             vec3 highlight = keyColor * lobe(n, normalize(keyDir + v), m.y, brush, aniso) * key * shade
                 + fillColor * lobe(n, normalize(fillDir + v), m.y, brush, aniso) * fill;
-            vec3 lit = base * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
+            vec3 lit = base * light + (highlight * norm + around(reflect(-v, n), vWorld) * ao) * fresnel;
             // A thin clear coat over oiled wood (Material.Wood, Material.Oak): its own sharp highlight and reflection,
             // off the face's smooth normal rather than the grain's, weighed by a dielectric's Fresnel.
             if (vMaterial == 7u || vMaterial == 18u)
@@ -601,6 +666,8 @@ internal static unsafe class Stage
                 lit = lit * (1.0 - fc) + (keyColor * coat + hall(reflect(-v, face)) * ao) * fc;
             }
             lit += vMaterial == 17u ? base * 0.5 : vec3(0.0); // a gallery picture's light from within
+            // A city window mirrors the daylight sky (around, by Fresnel), and a little more of it seen face on.
+            lit += vec3(0.42, 0.55, 0.75) * skyGlass * 0.06;
 
             // A pool of light around the robot; the hall falls into the dark beyond it and above it. The knots' floor
             // has its own light over its tables (KnotFloor), its edge fading over 80 cm.
@@ -621,7 +688,7 @@ internal static unsafe class Stage
             pool = max(pool, 0.8 * catalogue);
             float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
             // The streets beyond the front wall's roll-up door (OttawaStreets) are in daylight, every height of them.
-            float street = smoothstep(6.0, 6.4, vWorld.z);
+            float street = city() ? 1.0 : smoothstep(6.0, 6.4, vWorld.z);
             pool = max(pool, street);
             high = max(high, street);
             // A video projected on the gallery's wall (GalleryVideo.Projection): a projector's light, 4:3, on what faces
@@ -646,6 +713,7 @@ internal static unsafe class Stage
 
     private const float Haze = 0.06f; // the haze's density per metre past its first 3 m: about half the light through at 15 m
     private static readonly float4 HazeColor = new(0.075f, 0.09f, 0.115f, 1f); // the shader's haze() colour
+    private static readonly float4 DaySky = new(0.42f, 0.55f, 0.75f, 1f); // its day colour over the streets of Ottawa (OttawaStreets)
 
     // How the scene is lit (--quality): Flat as it was first drawn, or Low (LowFragmentShader).
     private enum Quality
@@ -4041,7 +4109,7 @@ internal static unsafe class Stage
             Guard("lectern's reader", () => reader.Poll(now));
             var bookPage = reader.Picture;
             readerBook.UploadAfterFence(cb, slot, bookPage.Rgba, bookPage.Revision);
-            clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
+            clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = outside && quality == Quality.Low ? DaySky : hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze; beyond the streets, the sky
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
             var splitCards = hudless && Streamline.Generating && !splashing; // the hall, then the cards, in two passes
             // DLSS Super Resolution (F7): the hall drawn smaller into the upscaler's pass, jittered, then upscaled.
@@ -4123,7 +4191,13 @@ internal static unsafe class Stage
                 DrawLetThrough(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
                 DrawLetThrough(cb, layout, doorCurtain, new Push(streetDoor.World(), viewProj, default));
                 // The streets, out of the traced structure: a kilometre of city would swell it for what the door shows.
-                if (streets is not null && outside) DrawUntraced(cb, layout, streets, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                if (streets is not null && outside)
+                {
+                    // Traced, so its buildings shade the streets; their shadows fall only outside (RayScene.CityMask).
+                    var at = new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0f, 0f, 0f, -1f)); // the shader's city()
+                    Rays?.Remember(streets, at, outside: true);
+                    DrawUntraced(cb, layout, streets, at);
+                }
                 // The gallery is traced too: under path tracing, what the structure lacks the picture lacks.
                 hallGallery.Draw((mesh, glow) => Draw(cb, layout, mesh, new Push(SN.Matrix4x4.Identity, viewProj, glow)), viewProj, Words.Language == "fr");
 

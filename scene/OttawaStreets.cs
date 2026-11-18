@@ -155,15 +155,30 @@ internal static class OttawaStreets
             streets++;
         }
 
+        // A building drawn in parts (building:part, OpenStreetMap's Simple 3D Buildings) is drawn by its parts alone: its
+        // outline only says where it stands, and still stops the walker.
+        static List<SN.Vector2>? Ring(List<SN.Vector2> points, Placement placement)
+        {
+            var ring = points.Select(p => placement.ToHall(p, 0f)).Select(p => new SN.Vector2(p.X, p.Z)).ToList();
+            if (ring.Count < 4 || SN.Vector2.Distance(ring[0], ring[^1]) > 0.01f) return null;
+            ring.RemoveAt(ring.Count - 1);
+            return ring;
+        }
+
+        var parts = ways.Where(w => w.Tags.ContainsKey("building:part")).Select(w => Ring(w.Points, placement)).OfType<List<SN.Vector2>>()
+            .Select(r => r.Aggregate(SN.Vector2.Zero, (a, p) => a + p) / r.Count).ToList();
+        var seed = 0;
         foreach (var way in ways.Where(w => w.Tags.ContainsKey("building") || w.Tags.ContainsKey("building:part")))
         {
-            var ring = way.Points.Select(p => placement.ToHall(p, 0f)).Select(p => new SN.Vector2(p.X, p.Z)).ToList();
-            if (ring.Count < 4 || SN.Vector2.Distance(ring[0], ring[^1]) > 0.01f) continue;
-            ring.RemoveAt(ring.Count - 1);
+            if (Ring(way.Points, placement) is not { } ring) continue;
             if (Reaches(ring)) { left++; continue; }
             var (bottom, top) = Heights(way.Tags);
             if (bottom < 2) footprints.Add([.. ring]); // what overhangs higher than a head is walked under
-            Extrude(o, ring, (float)bottom * FreeCamera.Scale, (float)top * FreeCamera.Scale, Stone(way.Points[0]));
+            var outline = !way.Tags.ContainsKey("building:part") && parts.Any(c => Inside(c, ring));
+            if (outline) continue;
+            var roof = RoofOf(way.Tags, top - bottom);
+            Extrude(o, ring, (float)bottom * FreeCamera.Scale, (float)(top - roof.Height) * FreeCamera.Scale, (float)top * FreeCamera.Scale,
+                WallColour(way.Tags) ?? Stone(way.Points[0]), roof.Colour, roof.Peaked, ++seed);
             buildings++;
         }
 
@@ -219,6 +234,68 @@ internal static class OttawaStreets
         return top > bottom ? (bottom, top) : (0, DefaultHeight);
     }
 
+    // A colour as OpenStreetMap writes it, "#d2b48c" or a few names, made linear; null for what is not understood.
+    internal static SN.Vector3? Colour(string? text)
+    {
+        if (text is null) return null;
+        text = text.Trim().ToLowerInvariant();
+        text = text switch
+        {
+            "white" => "#f0f0ec", "grey" or "gray" => "#9a9a98", "lightgrey" or "lightgray" => "#c8c8c4", "darkgrey" or "darkgray" => "#5a5a58",
+            "black" => "#303030", "brown" => "#7a5a40", "red" => "#9a4434", "beige" => "#d8cfb4", "tan" => "#d2b48c", "yellow" => "#d8c070",
+            "green" => "#4f7a5e", "blue" => "#4e6680", "silver" => "#b8bcc0", "orange" => "#c07040",
+            _ => text,
+        };
+        if (text.Length != 7 || text[0] != '#' || !uint.TryParse(text.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb)) return null;
+        static float Linear(uint c) => MathF.Pow(c / 255f, 2.2f);
+        return new(Linear((rgb >> 16) & 0xFF), Linear((rgb >> 8) & 0xFF), Linear(rgb & 0xFF));
+    }
+
+    // A wall's colour from its building:colour, or its building:material's.
+    private static SN.Vector3? WallColour(Dictionary<string, string> tags) =>
+        Colour(tags.GetValueOrDefault("building:colour")) ?? tags.GetValueOrDefault("building:material") switch
+        {
+            "limestone" or "sandstone" or "stone" => new SN.Vector3(0.62f, 0.55f, 0.42f),
+            "brick" => new SN.Vector3(0.42f, 0.2f, 0.13f),
+            "glass" => new SN.Vector3(0.18f, 0.24f, 0.3f),
+            "concrete" => new SN.Vector3(0.5f, 0.5f, 0.48f),
+            _ => null,
+        };
+
+    // A roof: how high it rises over the walls, in metres, its colour, and whether it peaks (any shape but flat, drawn
+    // as a pyramid from the walls' top to a point over the footprint's middle); copper turns verdigris.
+    private static (double Height, SN.Vector3 Colour, bool Peaked) RoofOf(Dictionary<string, string> tags, double tall)
+    {
+        var shape = tags.GetValueOrDefault("roof:shape", "flat");
+        var peaked = shape is not ("flat" or "");
+        var height = peaked ? Math.Min(tall * 0.8, Number(tags.GetValueOrDefault("roof:height")) ?? 3.0) : 0;
+        var colour = Colour(tags.GetValueOrDefault("roof:colour")) ?? (tags.GetValueOrDefault("roof:material") == "copper"
+            ? new SN.Vector3(0.22f, 0.42f, 0.34f) : new SN.Vector3(0.36f, 0.37f, 0.38f));
+        return (height, colour, peaked);
+    }
+
+    private static double? Number(string? text)
+    {
+        if (text is null) return null;
+        text = text.Trim();
+        var end = 0;
+        while (end < text.Length && (char.IsDigit(text[end]) || text[end] == '.')) end++;
+        return double.TryParse(text.AsSpan(0, end), NumberStyles.Float, CultureInfo.InvariantCulture, out var n) ? n : null;
+    }
+
+    // Whether p lies inside a ring (even-odd).
+    private static bool Inside(SN.Vector2 p, List<SN.Vector2> ring)
+    {
+        var inside = false;
+        for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+        {
+            var (a, b) = (ring[j], ring[i]);
+            if ((a.Y > p.Y) != (b.Y > p.Y) && p.X < a.X + ((p.Y - a.Y) / (b.Y - a.Y) * (b.X - a.X))) inside = !inside;
+        }
+
+        return inside;
+    }
+
     // A building's stone, one of a few pale tones, from where it stands.
     private static SN.Vector3 Stone(SN.Vector2 at)
     {
@@ -235,12 +312,15 @@ internal static class OttawaStreets
 
     private static readonly SN.Vector4 Flat = new(0f, 0f, 1f, 1f);
 
-    private static void Triangle(List<Vertex> o, SN.Vector3 a, SN.Vector3 b, SN.Vector3 c, SN.Vector3 n, SN.Vector3 colour)
+    // A triangle wound counter-clockwise about n, as the boxes are; a wall's runs along tangent (Material.Facade's windows
+    // follow it), its Edge.w the building's seed.
+    private static void Triangle(List<Vertex> o, SN.Vector3 a, SN.Vector3 b, SN.Vector3 c, SN.Vector3 n, SN.Vector3 colour,
+        Material material = Material.Matte, SN.Vector3? tangent = null, float seed = 1f)
     {
-        // Wound counter-clockwise about n, as the boxes are.
         if (SN.Vector3.Dot(SN.Vector3.Cross(b - a, c - a), n) < 0) (b, c) = (c, b);
-        var tangent = SN.Vector3.Normalize(b - a);
-        o.AddRange([new(a, n, colour, Material.Matte, tangent, Flat), new(b, n, colour, Material.Matte, tangent, Flat), new(c, n, colour, Material.Matte, tangent, Flat)]);
+        var t = tangent ?? SN.Vector3.Normalize(b - a);
+        var edge = Flat with { W = seed };
+        o.AddRange([new(a, n, colour, material, t, edge), new(b, n, colour, material, t, edge), new(c, n, colour, material, t, edge)]);
     }
 
     private static void Ribbon(List<Vertex> o, SN.Vector3 a, SN.Vector3 b, float width, SN.Vector3 colour)
@@ -255,12 +335,15 @@ internal static class OttawaStreets
         Triangle(o, p - side, q + side, p + side, SN.Vector3.UnitY, colour);
     }
 
-    // A footprint (x, z in the hall's frame) raised from bottom to top: its walls facing out, its roof.
-    private static void Extrude(List<Vertex> o, List<SN.Vector2> ring, float bottom, float top, SN.Vector3 stone)
+    // A footprint (x, z in the hall's frame) raised from bottom to the walls' top: its walls facing out, with windows
+    // (Material.Facade), then its roof: flat at the walls' top, or peaked, a pyramid up to top over the footprint's middle.
+    private static void Extrude(List<Vertex> o, List<SN.Vector2> ring, float bottom, float walls, float top, SN.Vector3 stone, SN.Vector3 roof, bool peaked, int seed)
     {
         // Its signed area made positive in (x, z): the inside is then on the left of each edge, the outside on its right.
         if (Area(ring) < 0) ring.Reverse();
-        var roof = new SN.Vector3(0.36f, 0.37f, 0.38f);
+        walls = Math.Max(walls, bottom + 0.01f);
+        var tone = (seed % 97) / 97f;
+        SN.Vector3 P(SN.Vector2 v, float y) => new(v.X, y, v.Y);
         for (var i = 0; i < ring.Count; i++)
         {
             var (p, q) = (ring[i], ring[(i + 1) % ring.Count]);
@@ -268,14 +351,29 @@ internal static class OttawaStreets
             if (e.LengthSquared() < 1e-6f) continue;
             var outward = SN.Vector2.Normalize(new(e.Y, -e.X));
             var n = new SN.Vector3(outward.X, 0f, outward.Y);
-            SN.Vector3 P(SN.Vector2 v, float y) => new(v.X, y, v.Y);
-            Triangle(o, P(p, bottom), P(q, bottom), P(q, top), n, stone);
-            Triangle(o, P(p, bottom), P(q, top), P(p, top), n, stone);
+            var along = SN.Vector3.Normalize(new(e.X, 0f, e.Y));
+            Triangle(o, P(p, bottom), P(q, bottom), P(q, walls), n, stone, Material.Facade, along, tone);
+            Triangle(o, P(p, bottom), P(q, walls), P(p, walls), n, stone, Material.Facade, along, tone);
+        }
+
+        if (peaked && top > walls + 0.01f)
+        {
+            var apex = P(ring.Aggregate(SN.Vector2.Zero, (a, v) => a + v) / ring.Count, top);
+            for (var i = 0; i < ring.Count; i++)
+            {
+                var (a, b) = (P(ring[i], walls), P(ring[(i + 1) % ring.Count], walls));
+                var n = SN.Vector3.Cross(b - a, apex - a);
+                if (n.LengthSquared() < 1e-10f) continue;
+                n = SN.Vector3.Normalize(n.Y < 0 ? -n : n);
+                Triangle(o, a, b, apex, n, roof);
+            }
+
+            return;
         }
 
         foreach (var (a, b, c) in Triangulate(ring))
         {
-            Triangle(o, new(ring[a].X, top, ring[a].Y), new(ring[b].X, top, ring[b].Y), new(ring[c].X, top, ring[c].Y), SN.Vector3.UnitY, roof);
+            Triangle(o, P(ring[a], walls), P(ring[b], walls), P(ring[c], walls), SN.Vector3.UnitY, roof);
         }
     }
 

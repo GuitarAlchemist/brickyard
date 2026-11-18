@@ -961,7 +961,7 @@ internal sealed unsafe class PathTracer : IDisposable
                 s.n = shading;
                 s.glow += material == 17u ? colour * 0.5 : vec3(0.0); // its light from within, as the Low shader's
             }
-            else if (material >= 8u && t.options.x > 0.5)
+            else if (material >= 8u && material < 16u && t.options.x > 0.5)
             {
                 vec4 scan = scans[min(material - 8u, 5u)];
                 vec2 uv;
