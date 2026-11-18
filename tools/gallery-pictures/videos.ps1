@@ -1,5 +1,5 @@
-# The gallery's videos (scene/GalleryVideo.cs): for each demo of gallery.json whose page shows a video after its #anchor
-# (the demos page's <video><source src="...mp4">), that video fetched over HTTPS and cut by FFmpeg as its picture is
+# The gallery's videos (scene/GalleryVideo.cs): for each demo of gallery.json whose page shows a video after its #anchor,
+# or anywhere on a page without one (<video><source src="...mp4">), that video fetched over HTTPS and cut by FFmpeg as its picture is
 # (pictures.ps1: 4:3 from the middle, stretched to 512 x 512), at 24 images a second without sound, saved in
 # %LOCALAPPDATA%\delta\gallery\videos under the same key as its picture (the first 16 hex digits of the SHA-1 of its
 # URL's [Uri]::AbsoluteUri). They stay on this machine. A video already there is kept; -Again fetches it anew.
@@ -19,12 +19,15 @@ function Get-Key([string]$url) {
     (([Security.Cryptography.SHA1]::HashData([Text.Encoding]::UTF8.GetBytes($abs)) | Select-Object -First 8 | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
-# The first video source after the anchor's id on the page and before the next id'd heading, as an absolute URL.
+# The first video source after the anchor's id on the page and before the next id'd heading, or the page's first
+# without an anchor, as an absolute URL.
 function Find-Video([string]$html, [Uri]$page, [string]$anchor) {
-    $at = $html.IndexOf("id=`"$anchor`"", [StringComparison]::Ordinal)
-    if ($at -lt 0) { return $null }
-    $next = [regex]::Match($html.Substring($at + 4), '<h[1-6][^>]* id="')
-    $part = if ($next.Success) { $html.Substring($at, $next.Index + 4) } else { $html.Substring($at) }
+    if ($anchor) {
+        $at = $html.IndexOf("id=`"$anchor`"", [StringComparison]::Ordinal)
+        if ($at -lt 0) { return $null }
+        $next = [regex]::Match($html.Substring($at + 4), '<h[1-6][^>]* id="')
+        $part = if ($next.Success) { $html.Substring($at, $next.Index + 4) } else { $html.Substring($at) }
+    } else { $part = $html }
     $m = [regex]::Match($part, '<video[^>]*>[\s\S]*?<source[^>]*\ssrc="([^"]+\.mp4)"')
     if (-not $m.Success) { return $null }
     [Uri]::new($page, [Net.WebUtility]::HtmlDecode($m.Groups[1].Value))
@@ -33,10 +36,13 @@ function Find-Video([string]$html, [Uri]$page, [string]$anchor) {
 $pages = @{}
 foreach ($demo in (Get-Content $Gallery -Raw -Encoding utf8 | ConvertFrom-Json).demos) {
     $uri = [Uri]$demo.url
-    if (-not $uri.Fragment -or $uri.Scheme -ne 'https') { continue }
+    if ($uri.Scheme -ne 'https') { continue }
     $base = $uri.GetLeftPart([UriPartial]::Query)
-    if (-not $pages.ContainsKey($base)) { $pages[$base] = (Invoke-WebRequest -UseBasicParsing $base).Content }
-    $video = Find-Video $pages[$base] ([Uri]$base) ([Uri]::UnescapeDataString($uri.Fragment.Substring(1)))
+    if (-not $pages.ContainsKey($base)) {
+        try { $pages[$base] = (Invoke-WebRequest -UseBasicParsing $base).Content }
+        catch { "skipped $($demo.title): $($_.Exception.Message)"; $pages[$base] = ''; continue }
+    }
+    $video = Find-Video $pages[$base] ([Uri]$base) ($uri.Fragment ? [Uri]::UnescapeDataString($uri.Fragment.Substring(1)) : '')
     if (-not $video) { continue }
     if ($video.Scheme -ne 'https') { "skipped $($demo.title): $video is not HTTPS"; continue }
     $key = Get-Key $demo.url

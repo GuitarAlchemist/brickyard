@@ -69,14 +69,17 @@ internal struct Vertex(SN.Vector3 pos, SN.Vector3 normal, SN.Vector3 color, Mate
     public SN.Vector4 Edge = edge;
 }
 
-// What the Low shader reads once a frame, 32 bytes: the camera's position, the haze's density per metre (0: none),
-// whether the photographed materials are there (1) or drawn in their flat colours (0), and whether the shadows and the
-// ambient occlusion are traced (1) or painted (0).
+// What the Low shader reads once a frame, 48 bytes: the camera's position, the haze's density per metre (0: none),
+// whether the photographed materials are there (1) or drawn in their flat colours (0), whether the shadows and the
+// ambient occlusion are traced (1) or painted (0), and the video projected on the gallery's wall (GalleryVideo.Projection):
+// its picture's layer and its strength (0: none), and where on the wall (Screen: its centre's z and y, its half width,
+// the wall's x).
 [StructLayout(LayoutKind.Sequential)]
-internal struct Frame(SN.Vector3 eye, float haze, bool photographed, bool traced)
+internal struct Frame(SN.Vector3 eye, float haze, bool photographed, bool traced, GalleryVideo.Projection projection)
 {
     public SN.Vector4 Eye = new(eye, haze);
-    public SN.Vector4 Options = new(photographed ? 1f : 0f, traced ? 1f : 0f, 0f, 0f);
+    public SN.Vector4 Options = new(photographed ? 1f : 0f, traced ? 1f : 0f, projection.Layer, projection.Strength);
+    public SN.Vector4 Screen = projection.Screen;
 }
 
 // What each draw pushes, 128 bytes: the part's clip transform, the three rows of its world transform (for the light)
@@ -170,7 +173,7 @@ internal static unsafe class Stage
         layout(location = 4) in vec3 vTangent;
         layout(location = 5) in vec4 vEdge;
         layout(push_constant) uniform Push { mat4 mvp; vec4 row0; vec4 row1; vec4 row2; vec4 glow; } pc;
-        layout(set = 0, binding = 0) uniform Frame { vec4 eye; vec4 options; } frame;
+        layout(set = 0, binding = 0) uniform Frame { vec4 eye; vec4 options; vec4 screen; } frame;
         layout(set = 0, binding = 1) uniform sampler2DArray albedoMaps; // colour, the height in alpha (MaterialTextures)
         layout(set = 0, binding = 2) uniform sampler2DArray normalMaps; // tangent space, green up
         layout(set = 0, binding = 3) uniform sampler2DArray armMaps;    // occlusion, roughness, metalness
@@ -617,7 +620,23 @@ internal static unsafe class Stage
             float catalogue = (1.0 - smoothstep(0.0, 1.0, box(vWorld.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
             pool = max(pool, 0.8 * catalogue);
             float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
-            outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
+            // A video projected on the gallery's wall (GalleryVideo.Projection): a projector's light, 4:3, on what faces
+            // the room within 6 cm of the wall, the wall's own colour showing through; its edges soft over 1 %.
+            // The derivatives are taken outside the branch, where every pixel of a quad still runs.
+            vec3 projected = vec3(0.0);
+            vec2 extent = vec2(frame.screen.z, frame.screen.z * 0.75); // half sizes; "half" is reserved in GLSL
+            vec2 onScreen = (frame.screen.xy + extent - vWorld.zy) / max(2.0 * extent, vec2(1e-4));
+            vec2 screenDx = dFdx(onScreen), screenDy = dFdy(onScreen);
+            if (frame.options.w > 0.0 && face.x > 0.5 && vWorld.x < frame.screen.w + 0.06)
+            {
+                vec2 inside = smoothstep(vec2(0.0), vec2(0.01), onScreen) * smoothstep(vec2(0.0), vec2(0.01), 1.0 - onScreen);
+                if (inside.x * inside.y > 0.0)
+                {
+                    vec3 shown = textureGrad(pictureMaps, vec3(clamp(onScreen, 0.0, 1.0), frame.options.z), screenDx, screenDy).rgb;
+                    projected = base * shown * 3.0 * face.x * frame.options.w * inside.x * inside.y;
+                }
+            }
+            outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high + projected) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
         }
         """;
 
@@ -1777,6 +1796,8 @@ internal static unsafe class Stage
         (double X, double Y) officeDragFrom = default, officeDragAt = default;
         var officeDragMoved = 0.0;
         const double DragSlop = 6, TurnPerWidth = Math.PI;
+        var officeSpin = new OfficeSpin(); // and coasts on once let go
+        var officeSpinAt = double.NaN;
         SN.Matrix4x4? officeView = null; // the frame's camera for clicks; none during the splash
         SN.Matrix4x4? chestView = null; // the last frame's torso transform and camera, for a click on Delta's chest screen
         var wallTestStep = 0; // --wall-test: the checks made
@@ -3023,7 +3044,8 @@ internal static unsafe class Stage
             {
                 officeDrag = null;
                 if (officeDragMoved < DragSlop) Click(officeDragFrom.X, officeDragFrom.Y);
-                else Console.WriteLine($"WIDGETS agent-office turned by hand: session {dragged}, {officeTurns.GetValueOrDefault(dragged):F2} rad in all");
+                else officeSpin.Release(dragged);
+                if (officeDragMoved >= DragSlop) Console.WriteLine($"WIDGETS agent-office turned by hand: session {dragged}, {officeTurns.GetValueOrDefault(dragged):F2} rad in all");
                 return;
             }
 
@@ -3124,6 +3146,7 @@ internal static unsafe class Stage
                 {
                     // Held: the release decides between a click and a turn (the frame loop turns it meanwhile).
                     (officeDrag, officeDragFrom, officeDragAt, officeDragMoved) = (robot, (cx, cy), (cx, cy), 0);
+                    officeSpin.Take(robot);
                 }
                 else
                 {
@@ -3514,19 +3537,31 @@ internal static unsafe class Stage
 
             // A robot held: its ring follows the mouse sideways once it has moved past the slop. A window that loses
             // focus with the button held lets the robot go, as it gives the cursor back.
+            // Let go, it coasts on (OfficeSpin).
+            var spinDt = double.IsNaN(officeSpinAt) ? 0 : Math.Clamp(now - officeSpinAt, 0, 0.25);
+            officeSpinAt = now;
             if (officeDrag is { } turning)
             {
                 var (dx, dy) = (window.CursorX * extent.Width / Math.Max(1, window.Width), window.CursorY * extent.Height / Math.Max(1, window.Height));
                 officeDragMoved = Math.Max(officeDragMoved, Math.Abs(dx - officeDragFrom.X) + Math.Abs(dy - officeDragFrom.Y));
+                var turned = 0.0;
                 if (officeDragMoved >= DragSlop && dx != officeDragAt.X)
                 {
-                    officeTurns[turning] = officeTurns.GetValueOrDefault(turning) + ((dx - officeDragAt.X) / Math.Max(1, extent.Width) * TurnPerWidth);
+                    turned = (dx - officeDragAt.X) / Math.Max(1, extent.Width) * TurnPerWidth;
+                    officeTurns[turning] = officeTurns.GetValueOrDefault(turning) + turned;
                     tour.Touch(now);
                 }
 
+                officeSpin.Follow(turned, spinDt);
                 officeDragAt = (dx, dy);
-                if (!window.IsFocused || wheel.Open || shelf.Open) officeDrag = null;
+                if (!window.IsFocused || wheel.Open || shelf.Open)
+                {
+                    officeDrag = null;
+                    officeSpin.Release(turning);
+                }
             }
+
+            officeSpin.Step(officeTurns, spinDt);
 
             if (!shelf.Open && !film.Playing && !cabinet.Playing && (window.IsFocused || walkHeld.Count > 0))
             {
@@ -3867,7 +3902,9 @@ internal static unsafe class Stage
                 return true;
             }
 
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing);
+            videos?.Update(eye, hallGallery.Globes);
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
+                videos?.Projected ?? GalleryVideo.Projection.None);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
 
@@ -3875,7 +3912,6 @@ internal static unsafe class Stage
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
             cb.ResetQueryPool(frameStamps, 2 * slot, 2);
             cb.WriteTimestamp(VkPipelineStageFlags.TopOfPipeBit, frameStamps, 2 * slot);
-            videos?.Update(eye, hallGallery.Globes);
             videos?.Record(cb, slot);
             rays?.Record(cb, slot);
             if (tracer is not null && pathTracing && !splashing)

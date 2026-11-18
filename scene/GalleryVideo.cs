@@ -29,7 +29,43 @@ internal sealed unsafe class GalleryVideo : IDisposable
     private readonly nint[] mapped;
     private readonly Dictionary<string, Player> playing = new(StringComparer.Ordinal);
     private readonly Queue<(int Layer, byte[] Still)> restores = new(); // stopped videos' layers, their pictures to put back
+    private readonly Stopwatch clock = Stopwatch.StartNew();
     private bool failed;
+    private double lastUpdate;
+    private IReadOnlyList<HallGallery.Globe>? placedFor;
+    private SN.Vector4 screen;
+
+    // The video projected on the gallery's wall, as the Low shader reads it (Frame): the nearest one playing, its
+    // picture's layer, its strength (fading in and out over Fade seconds; 0: none), and where (Place).
+    internal readonly record struct Projection(float Layer, float Strength, SN.Vector4 Screen)
+    {
+        public static readonly Projection None = new(0f, 0f, default);
+    }
+
+    public const float Fade = 0.8f;
+
+    public Projection Projected { get; private set; } = Projection.None;
+
+    // Where the wall shows the projection: over the demos' water globes on the left wall, centred on them along it, 4:3,
+    // its foot 0.45 m over their tops; as (its centre's z, its centre's y, its half width, the wall's x). Zero when the
+    // gallery has no water globe.
+    internal static SN.Vector4 Place(IEnumerable<HallGallery.Globe> globes, float wallX)
+    {
+        var (lo, hi, top, any) = (float.MaxValue, float.MinValue, float.MinValue, false);
+        foreach (var g in globes.Where(g => !g.Dome))
+        {
+            var c = g.World.Translation;
+            (lo, hi, top, any) = (MathF.Min(lo, c.Z), MathF.Max(hi, c.Z), MathF.Max(top, c.Y + g.Radius), true);
+        }
+
+        if (!any)
+        {
+            return default;
+        }
+
+        var halfWidth = Math.Clamp(((hi - lo) / 2f) + 0.15f, 0.6f, 1.1f);
+        return new SN.Vector4((lo + hi) / 2f, top + 0.45f + (halfWidth * 0.75f), halfWidth, wallX);
+    }
 
     public GalleryVideo(Device device, PhysicalDevice physical, GalleryPictures pictures, GalleryPictures.Pixels pixels, string? dir, int framesInFlight)
     {
@@ -97,6 +133,7 @@ internal sealed unsafe class GalleryVideo : IDisposable
         }
 
         var want = Pick(eye, globes, videos.ContainsKey, playing.ContainsKey, room);
+        Project(want.Count > 0 ? videos[want[0]].Layer : null, globes);
         foreach (var key in playing.Keys.Where(k => !want.Contains(k)).ToList())
         {
             Stop(key);
@@ -122,6 +159,23 @@ internal sealed unsafe class GalleryVideo : IDisposable
                 return;
             }
         }
+    }
+
+    // The nearest video wanted (its layer) fades in on the wall; with none, the last one fades out.
+    private void Project(int? layer, IReadOnlyList<HallGallery.Globe> globes)
+    {
+        if (!ReferenceEquals(globes, placedFor))
+        {
+            placedFor = globes;
+            screen = Place(globes, HallGallery.Footprint.Centre.X - HallGallery.Footprint.Half.X);
+            Console.WriteLine($"SCENE gallery videos: projected on the left wall at z {screen.X:F2}, y {screen.Y:F2}, {2f * screen.Z:F2} m wide");
+        }
+
+        var now = clock.Elapsed.TotalSeconds;
+        var dt = (float)Math.Min(now - lastUpdate, 0.1);
+        lastUpdate = now;
+        var strength = Math.Clamp(Projected.Strength + ((layer is null ? -dt : dt) / Fade), 0f, 1f);
+        Projected = new(layer ?? Projected.Layer, screen == default ? 0f : strength, screen);
     }
 
     // After cb.Begin, outside any render pass: stills put back, then the playing videos' latest images, each in this
@@ -305,5 +359,9 @@ internal sealed unsafe class GalleryVideo : IDisposable
         check(Pick(new(-4.7f, 1f, 0f), globes, Held, k => k == "a", 4) is ["a"] && Pick(new(-4.7f, 1f, 0f), globes, Held, None, 4) is [],
             "a playing video goes on to Far, and none starts past Near");
         check(Pick(new(-5.1f, 1f, 0f), globes, Held, k => k == "a", 4) is [], "a playing video stops past Far");
+        var screen = Place([At(0f, "a") with { World = SN.Matrix4x4.CreateTranslation(-6f, 1f, 0f) }, At(0f, "b") with { World = SN.Matrix4x4.CreateTranslation(-6f, 1.4f, 2f) },
+            At(0f, "p") with { Dome = true, World = SN.Matrix4x4.CreateTranslation(-6f, 3f, 9f) }], -6.25f);
+        check(MathF.Abs(screen.X - 1f) < 1e-5f && screen.Z == 1.1f && MathF.Abs(screen.Y - 2.775f) < 1e-5f && screen.W == -6.25f, "the projection is centred over the water globes, 4:3, above them, paperweights aside");
+        check(Place([], -6.25f) == default, "no water globe, no projection");
     }
 }

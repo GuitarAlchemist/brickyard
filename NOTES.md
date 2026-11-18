@@ -2305,6 +2305,40 @@ videos. The layer's only reader is the Low fragment shader, so the barriers now 
 
 *To verify*: the live window, walking up to the counter.
 
+**Later the same evening.** The author added three requests.
+
+**Colossus.** « the colossus est une video et ne joue pas presentement dans la scene ». Its gallery URL is a page
+without an anchor (observatory/brutal/), and videos.ps1 looked only after an anchor. A page without one now gives its
+first video: colossus.mp4, 1280 × 536, cut 4:3 from the middle like its picture, 6.6 MB.
+
+**On the wall.** « je veux pouvoir projetter les videos sur le mur ».
+
+- The nearest video playing is projected on the left wall over the demos, as a projector's light: 4:3, 1.8 m wide.
+- Its foot is 0.45 m over the water globes' tops, centred on them along the wall (GalleryVideo.Place). It sits at
+  z 2.28, y 2.54 with today's gallery.
+- It fades in and out over 0.8 s.
+- The Low shader adds it on what faces the room within 6 cm of the wall: the wall's own colour times the picture,
+  three times over. The plaster's texture and stains show through.
+- The Frame uniform grows by a vec4, the screen. The layer and strength go in Options' two free floats.
+- Not under path tracing.
+
+**Inertia.** « je veux un peu d'inertie quand on fait tourner les robots ». A ring let go coasts on (OfficeSpin).
+
+- Its speed while held is smoothed over 60 ms. A ring held still before it is let go does not coast.
+- It then slows by e every 0.7 s and stops under 0.02 rad/s; at 3 rad/s it coasts about 2.1 rad.
+- The speed is capped at 8 rad/s.
+- Taking the ring again stops it.
+- The distance is exact under exponential slowing, so a slow frame turns it as far as several quick ones.
+
+**Checked:**
+
+- The selftest covers OfficeSpin's coast, the still release, the frame independence and taking a ring, and the
+  projection's placement.
+- In a hidden run at view 8, the projection shows Québec's video on the wall over the demos, and three videos play.
+- GPU p95 7.7 ms.
+
+*To verify*: the coast by hand in the live window.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
