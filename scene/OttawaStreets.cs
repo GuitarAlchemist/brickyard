@@ -65,6 +65,10 @@ internal static class OttawaStreets
     internal static SN.Vector2 Local(double lat, double lon) =>
         new((float)((lon - Lon) * 111_320.0 * Math.Cos(Lat * Math.PI / 180)), (float)((lat - Lat) * 110_574.0));
 
+    // Local's inverse: the latitude and longitude of a point in east-north metres.
+    internal static (double Lat, double Lon) LatLon(SN.Vector2 en) =>
+        (Lat + (en.Y / 110_574.0), Lon + (en.X / (111_320.0 * Math.Cos(Lat * Math.PI / 180))));
+
     // Where the hall stands: its door's point in east-north metres and the way out of it, a unit vector; and a map
     // from east-north metres to the hall's frame.
     internal sealed record Placement(SN.Vector2 Door, SN.Vector2 Out)

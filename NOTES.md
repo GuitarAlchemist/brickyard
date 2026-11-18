@@ -2501,8 +2501,39 @@ Seen hidden at 1920 × 1080, `--door street|inside|back|air|lawn`: the Centre Bl
 Peace Tower with its four pinnacles, shadow between the wings and the tower; the buildings behind the hall in daylight.
 54 fps, p95 17 ms, as before. `--selftest` passes. The Library of Parliament's roof is grey: its data has no copper tag.
 
-**Still to do:** the ground (lawns, sidewalks, trees, lamps from OpenStreetMap), then Google's tiles on choice. Those
-are a paid API, with the key in the environment and never stored.
+**Google's 3D tiles, on choice (2026-11-18).** The author asked whether Google's tiles could be cached, then whether
+Ottawa could be imported into Blender (Blosm), then: « je veux pas etre illegal », « regarde ce qui serait vraiment
+photo realiste », « ok on va essayer avec google ».
+
+- **What the terms say** (read on 2026-11-18, non-EEA version). Google Maps Platform Terms 3.2.3: no pre-fetching,
+  storing or bulk download of tiles; no caching but as the Service Specific Terms allow (they have no Map Tiles section,
+  so the Map Tiles policy's HTTP-header caching is all); « Customer will not create content based on Google Maps
+  Content », 3D building models among its examples; not « with or near a non-Google Map ». The Map Tiles policy allows
+  third-party renderers, own 3D objects over the tiles if not derived from them, and asks for « Google Maps » (or the
+  logo) and every tile's providers along the bottom. So no Blender import: Blosm keeps the tiles on disk and makes a
+  model of them.
+- **What the scene does** (`GoogleStreets.cs`, `GeoTiles/`). G chooses Google's tiles, or OpenStreetMap again
+  (`--google-tiles` from the start). Once the door's place is known (from OpenStreetMap's answer), one fetch a run:
+  the root, then the tiles around a point 150 m out of the door, 330 m round, judged from a walker's eye at the door,
+  at most 160 meshes and 450 requests (`Capped`), in memory only. Each image is stretched to a 512 × 512 layer of one
+  array (binding 7, at most 320), the triangles `Material.Aerial`, which the Low shader draws as photographed, unlit,
+  in the day's haze. What stands where the hall does is left out; the ground at the door becomes the floor's level.
+  While they are drawn nothing of OpenStreetMap is, the buildings do not stop the walker (no collision is derived
+  from Google's tiles), and a « Google Maps » card with the providers sits bottom right, HUD or not.
+- **The selection, changed from GeoTiles'.** GeoTiles walks the tree depth first and stops at the cap: the first run
+  (305 requests) fetched 160 tiles and none at the door (its ground fell back to 36 m). It now refines best first, the
+  open tile with the largest error on screen first, and all or nothing: a tile is replaced only once all its children
+  are fetched down to meshes, else it stays. The selftest holds both.
+- **Seen, hidden, `--door street --google-tiles --tour-after 9999`.** Three runs: 305, 429 and 430 requests, the key
+  in no log line. The last: 159 tiles, 412,783 triangles, 222 images, loaded in about 55 s; the ground at the door
+  45.3 m over the ellipsoid; 48 fps, p95 17.0 ms, one 478 ms frame for the upload. The Centre Block, the Peace Tower
+  and the renovation's two cranes are photographed; what is near the eye is coarse, the cap spent first on the
+  hill (270 of the requests are nested tilesets).
+- *To verify*: G by hand live; the cost the console reports for those runs; whether the providers' line ever names
+  more than « Google » here.
+
+**Still to do:** the ground of OpenStreetMap's streets (lawns, sidewalks, trees, lamps); finer tiles near the eye
+(more requests a run, the author's call).
 
 ## Known problems
 

@@ -80,6 +80,15 @@ Database License (https://www.openstreetmap.org/copyright). The scene fetches th
 The extrusion follows GeoTiles' `OsmBuildings.cs` (GuitarAlchemist/ga, `Experiments/Brutal/GeoTiles`, MIT, same
 authors).
 
+With G, the streets are instead Google's Photorealistic 3D Tiles (Map Tiles API), a paid service under the Google
+Maps Platform Terms of Service and the Map Tiles API policies, through the user's own key (`GOOGLE_MAPS_API_KEY`, never
+stored or printed). They are fetched at run time, kept in memory only, never written to disk nor committed, nothing
+is derived from them, nothing of OpenStreetMap is drawn beside them, and "Google Maps" with the tiles' data providers
+shows at the bottom of the picture while they are drawn. `scene/GeoTiles/` is a copy of GeoTiles' core
+(`GeoTiles.Core` at fcef8b5: geodesy, tileset tree, selection, GLB; same authors), its selection changed to refine best
+first. It decodes the tiles' Draco geometry with Openize.Drako 1.4.4 (MIT) and their
+JPEG images with StbImageSharp 2.30.15 (public domain), both from NuGet, as GeoTiles does.
+
 ## Ideas, not code
 
 The agents' office (`modules/AgentOffice`) takes its idea from

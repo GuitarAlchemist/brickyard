@@ -76,6 +76,24 @@ internal static class Panel
     // The caption for a sentence Delta heard: for whom it was (Link's "heard"), with how to call Delta when it let the
     // sentence pass for want of its name, then the whole sentence in quotes on up to four lines, on a card no wider than
     // the window.
+    // The attribution Google's Map Tiles policy asks for while its 3D tiles are drawn (GoogleStreets): "Google Maps",
+    // the text it accepts where its logo is not drawn, and on one line the data providers the tiles name.
+    public static Card Attribution(IReadOnlyList<string> providers, int windowWidth, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var room = Math.Min(Px(560), windowWidth - (2 * Px(12))) - (2 * Px(Pad / 2));
+        var line = Fit(string.Join(" · ", providers.Where(p => !p.Equals("Google", StringComparison.OrdinalIgnoreCase))), Px(12), false, room);
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var width = Math.Max(Wide("Google Maps", Px(14), true), Wide(line, Px(12), false)) + (2 * Px(Pad / 2));
+        var height = Px(Pad / 2) + Px(18) + (line.Length > 0 ? Px(16) : 0) + Px(Pad / 2);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 190);
+        Text(rgba, width, height, "Google Maps", Px(14), true, Px(Pad / 2), Px(Pad / 2), (240, 236, 228));
+        if (line.Length > 0) Text(rgba, width, height, line, Px(12), false, Px(Pad / 2), Px(Pad / 2) + Px(18), (200, 206, 212));
+        return new Card(rgba, width, height, []);
+    }
+
     public static Card Caption(string heard, string to, int windowWidth, int windowHeight)
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
@@ -489,7 +507,7 @@ internal static class Panel
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var look = Words.Say("Right button held, or Ctrl + click: look   Home or Enter: back to Delta   B: haze   T: room captions   F6: max out   F7: DLSS   F9: path tracing   F10: RTX   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine ou Entrée : revenir à Delta   B : brume   T : légendes de la pièce   F6 : max out   F7 : DLSS   F9 : path tracing   F10 : RTX   F1 : masquer");
+        var look = Words.Say("Right button held, or Ctrl + click: look   Home or Enter: back to Delta   B: haze   G: Google's streets   T: room captions   F6: max out   F7: DLSS   F9: path tracing   F10: RTX   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine ou Entrée : revenir à Delta   B : brume   G : rues Google   T : légendes de la pièce   F6 : max out   F7 : DLSS   F9 : path tracing   F10 : RTX   F1 : masquer");
         string[] lines = flying
             ? [Words.Say("FLYING", "EN VOL"),
                Words.Say("ZQSD, WASD or arrows: move   Space or E: rise   C: descend   Shift: faster", "ZQSD, WASD ou flèches : avancer   Espace ou E : monter   C : descendre   Maj : plus vite"),

@@ -25,6 +25,10 @@
     <PackageReference Include="Ahwoo.Brutal.Vulkan" Version="[2026.10.2]" />
     <PackageReference Include="Ahwoo.Brutal.Vulkan.Abstractions" Version="[2026.10.2]" />
     <PackageReference Include="Ahwoo.Brutal.ShaderC" Version="[2026.10.2]" />
+    <!-- Google's Photorealistic 3D Tiles past the roll-up door (GoogleStreets, GeoTiles/): their geometry is Draco
+         (MIT, managed) and their images JPEG (StbImageSharp, public domain), as in ga's GeoTiles. -->
+    <PackageReference Include="Openize.Drako" Version="[1.4.4]" />
+    <PackageReference Include="StbImageSharp" Version="[2.30.15]" />
   </ItemGroup>
 
   <ItemGroup>

@@ -143,6 +143,11 @@ internal enum Material : uint
     // every floor, dark glass that takes the sky's light; Edge.w varies the panes from building to building. The path
     // tracer and Flat draw the wall in its colour.
     Facade = 19,
+
+    // A triangle of Google's Photorealistic 3D Tiles (GoogleStreets): Edge carries its place on its tile's image and the
+    // image's layer (Program's aerialMaps). The photograph carries its own light, so the Low shader draws it unlit, in
+    // the haze; Flat and the path tracer draw its colour sampled at each corner.
+    Aerial = 20,
 }
 
 // A surface's colour and what it is made of.

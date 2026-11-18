@@ -179,6 +179,7 @@ internal static unsafe class Stage
         layout(set = 0, binding = 3) uniform sampler2DArray armMaps;    // occlusion, roughness, metalness
         layout(set = 0, binding = 5) uniform sampler2DArray globeMaps;  // GlobeImages: a globe's west and east halves
         layout(set = 0, binding = 6) uniform sampler2DArray pictureMaps; // GalleryPictures: what the gallery's glasses show
+        layout(set = 0, binding = 7) uniform sampler2DArray aerialMaps;  // GoogleStreets: the 3D tiles' photographs, a layer each
         layout(location = 0) out vec4 outColor;
 
         // Per photographed material (Material.BrickWall = 8 and on): its layer, its tile in metres (tools/textures), the
@@ -438,6 +439,7 @@ internal static unsafe class Stage
             vec3 base = vColor;
             float occlusion = 1.0;
             float skyGlass = 0.0; // a city window's glass, which mirrors the sky (Material.Facade)
+            float aerial = 0.0;   // Google's photographs, which carry their own light (Material.Aerial)
             vec3 n;
             vec4 m;
             if (vMaterial == 16u)
@@ -502,6 +504,15 @@ internal static unsafe class Stage
                 base = vColor * mix(1.0, tone * fibres, detail) * mix(0.8, mix(0.6, 1.06, crest), detail);
                 occlusion = mix(1.0, mix(0.72, 1.0, crest), detail);
                 m = materials[6];
+            }
+            else if (vMaterial == 20u)
+            {
+                // A triangle of Google's Photorealistic 3D Tiles (Material.Aerial): its tile's photograph, at its place
+                // on it, drawn as it is (below, unlit).
+                base = texture(aerialMaps, vec3(vEdge.xy, vEdge.z)).rgb;
+                n = face;
+                m = materials[0];
+                aerial = 1.0;
             }
             else if (vMaterial == 19u)
             {
@@ -668,6 +679,7 @@ internal static unsafe class Stage
             lit += vMaterial == 17u ? base * 0.5 : vec3(0.0); // a gallery picture's light from within
             // A city window mirrors the daylight sky (around, by Fresnel), and a little more of it seen face on.
             lit += vec3(0.42, 0.55, 0.75) * skyGlass * 0.06;
+            lit = mix(lit, base, aerial); // a photograph already holds the day's light and shadows
 
             // A pool of light around the robot; the hall falls into the dark beyond it and above it. The knots' floor
             // has its own light over its tables (KnotFloor), its edge fading over 80 cm.
@@ -1767,6 +1779,7 @@ internal static unsafe class Stage
                 new VkDescriptorSetLayoutBinding { Binding = 3, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 5, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 6, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 7, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 .. (rayTraced
                     ? new[] { new VkDescriptorSetLayoutBinding { Binding = 4, DescriptorType = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit } }
                     : []),
@@ -1778,7 +1791,7 @@ internal static unsafe class Stage
             PoolSizes =
             [
                 new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight },
-                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 5 * FramesInFlight },
+                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 6 * FramesInFlight },
                 .. (rayTraced ? new[] { new VkDescriptorPoolSize { Type = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = FramesInFlight } } : []),
             ],
         }, null);
@@ -1823,6 +1836,16 @@ internal static unsafe class Stage
         var doorCurtain = new Mesh(device, physical, StreetDoor.Curtain());
         Task<OttawaStreets.City?>? streetsLoading = null;
         Mesh? streets = null;
+        OttawaStreets.Placement? streetsPlacement = null;
+        IReadOnlyList<FreeCamera.Footprint> streetFootprints = [];
+        // Google's 3D tiles in place of OpenStreetMap's buildings (G, or --google-tiles; GoogleStreets): fetched once a
+        // run, at most GoogleStreets.MostRequests requests, kept in memory only. While they are chosen nothing of
+        // OpenStreetMap is drawn beside them (Google's terms, 3.2.3 (e)) and the buildings do not stop the walker.
+        var googleChosen = args.Contains("--google-tiles");
+        var googleTried = false;
+        Task<GoogleStreets.Tiles?>? googleLoading = null;
+        Mesh? aerial = null;
+        IReadOnlyList<string> aerialProviders = [];
         // The gallery on the left wall (HallGallery): the learn site's courses, demos and artifacts, from gallery.json
         // (--gallery FILE), drawn from Lego's blocks and redrawn when the file changes; a click on one opens its page.
         // What the demos and artifacts show inside their glasses (GalleryPictures, --pictures DIR), read first.
@@ -1986,8 +2009,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 24, // the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 24 }], // one image each
+            MaxSets = 25, // Google's attribution (GoogleStreets), the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 25 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -2005,6 +2028,8 @@ internal static unsafe class Stage
         var globes = new GlobeImages(device, physical, upload, globePixels!);
         globePixels = null;
         var pictures = new GalleryPictures(device, physical, upload, picturePixels!);
+        // Google's 3D tiles' photographs (GoogleStreets): one white layer until they are fetched, then their own array.
+        var aerialImage = new MaterialTextures.ArrayImage(device, physical, upload, VkFormat.R8G8B8A8SRGB, 1, [[255, 255, 255, 255]], normal: false);
         // The demos' videos played in their globes as the eye comes near (GalleryVideo, --videos DIR, --no-videos).
         var videos = picturesDir is null || args.Contains("--no-videos") ? null
             : new GalleryVideo(device, physical, pictures, picturePixels!, GalleryVideo.Dir(Option(args, "--videos")), FramesInFlight);
@@ -2086,6 +2111,7 @@ internal static unsafe class Stage
         materials.FreeStaging();
         globes.FreeStaging();
         pictures.FreeStaging();
+        aerialImage.FreeStaging();
         // Path tracing (F9, --path-tracing), with the ray scene: the hall drawn by following light through it.
         if (rays is not null && rtPipeline)
         {
@@ -2118,7 +2144,7 @@ internal static unsafe class Stage
             upscaler.Mode = srMode;
             Console.WriteLine($"SCENE raster pass through DLSS Super Resolution, {Streamline.Modes[upscaler.Mode]}, textures' mip bias {lodBias:F2}; F7 or --no-dlss-sr");
         }
-        var maps = stackalloc VkDescriptorImageInfo[5];
+        var maps = stackalloc VkDescriptorImageInfo[6];
         foreach (var frameSet in frameSets)
         {
             maps[0] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Albedo, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
@@ -2126,8 +2152,10 @@ internal static unsafe class Stage
             maps[2] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Arm, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[3] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = globes.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[4] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = pictures.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            maps[5] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = aerialImage.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             device.UpdateDescriptorSets(
             [
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 7, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[5] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 1, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[0] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 2, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[1] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 3, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[2] },
@@ -2191,6 +2219,10 @@ internal static unsafe class Stage
         // The caption under the robot (Panel.Caption) for each sentence Delta heard, drawn again for each and for a new size.
         var captionSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? captionTexture = null;
+        var aerialCardSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? aerialCardTexture = null;
+        Panel.Card? aerialCard = null;
+        var aerialCardSize = (0, 0);
         Panel.Card? caption = null;
         var captionId = 0;
         var captionSize = (0, 0);
@@ -2333,6 +2365,27 @@ internal static unsafe class Stage
             var image = new VkDescriptorImageInfo { Sampler = sampler, ImageView = fresh.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = set, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &image }], []);
             return fresh;
+        }
+
+        // Google's tiles' photographs, once fetched: their array in place of the white layer, in every frame's set.
+        void UploadAerial(byte[][] layers)
+        {
+            device.WaitIdle();
+            device.ResetCommandPool(uploadPool, VkCommandPoolResetFlags.None);
+            uploader.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+            var fresh = new MaterialTextures.ArrayImage(device, physical, uploader, VkFormat.R8G8B8A8SRGB, GoogleStreets.Side, layers, normal: false);
+            uploader.End();
+            var uploaderHandle = uploader.Handle;
+            queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploaderHandle }], default);
+            device.WaitIdle();
+            fresh.FreeStaging();
+            aerialImage.Dispose();
+            aerialImage = fresh;
+            var image = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = fresh.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            foreach (var frameSet in frameSets)
+            {
+                device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 7, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &image }], []);
+            }
         }
         link.Shelf = command =>
         {
@@ -2685,6 +2738,16 @@ internal static unsafe class Stage
             else if (key == GlfwKey.F10)
             {
                 rtxShown = !rtxShown;
+            }
+            else if (key == GlfwKey.G)
+            {
+                // The streets of Ottawa from Google's 3D tiles, or from OpenStreetMap again (GoogleStreets).
+                googleChosen = !googleChosen;
+                if (googleChosen && aerial is null && googleLoading is null) googleTried = false; // a failed fetch is tried once more
+                camera.Footprints = googleChosen ? [] : streetFootprints;
+                Console.WriteLine(googleChosen
+                    ? $"SCENE streets from Google's 3D tiles{(GoogleStreets.Keyed ? "" : ": no GOOGLE_MAPS_API_KEY, OpenStreetMap stays")}"
+                    : "SCENE streets from OpenStreetMap");
             }
             else if (key == GlfwKey.H)
             {
@@ -3725,13 +3788,42 @@ internal static unsafe class Stage
                 if (loaded.IsCompletedSuccessfully && loaded.Result is { } city)
                 {
                     streets = new Mesh(device, physical, city.Vertices);
-                    camera.Footprints = [.. city.Footprints.Select(FreeCamera.Footprint.Of)];
+                    streetsPlacement = city.Placement;
+                    streetFootprints = [.. city.Footprints.Select(FreeCamera.Footprint.Of)];
+                    camera.Footprints = googleChosen ? [] : streetFootprints;
                     Console.WriteLine($"DOOR streets of Ottawa: {city.Buildings} buildings, {city.Streets} streets, {city.Left} left out where the hall stands; {OttawaStreets.Attribution}");
                 }
                 else
                 {
                     Console.Error.WriteLine($"DOOR streets of Ottawa not fetched: {loaded.Exception?.InnerException?.Message ?? "no answer"}");
                     streetsLoading = null; // the next opening tries again
+                }
+            }
+
+            // Google's tiles, chosen once the door's place is known: fetched once a run (G again tries once more after a
+            // failure), then drawn in place of OpenStreetMap's buildings.
+            if (googleChosen && aerial is null && googleLoading is null && !googleTried && streetsPlacement is { } placed)
+            {
+                googleTried = true;
+                Console.WriteLine($"GOOGLE fetching the 3D tiles around the door, at most {GoogleStreets.MostRequests} requests");
+                googleLoading = GoogleStreets.Load(placed, line => Console.WriteLine($"GOOGLE {line}"));
+            }
+
+            if (googleLoading is { IsCompleted: true } fetched)
+            {
+                googleLoading = null;
+                if (fetched.IsCompletedSuccessfully && fetched.Result is { Vertices.Length: > 0 } tiles)
+                {
+                    aerial = new Mesh(device, physical, tiles.Vertices, resident: true);
+                    if (tiles.Layers.Length > 0) UploadAerial(tiles.Layers);
+                    aerialProviders = tiles.Attributions;
+                    aerialCardSize = (0, 0);
+                    Console.WriteLine($"GOOGLE {tiles.Meshes} tiles, {tiles.Vertices.Length / 3} triangles, {tiles.Layers.Length} images, {tiles.Requests} requests{(tiles.Truncated ? ", stopped at the cap of tiles" : "")}; "
+                        + $"the ground {tiles.Ground:F1} m over the ellipsoid; Google Maps: {string.Join("; ", tiles.Attributions)}");
+                }
+                else
+                {
+                    Console.Error.WriteLine($"GOOGLE no tiles drawn: {fetched.Exception?.InnerException?.Message ?? "none fetched"}; OpenStreetMap's buildings stay");
                 }
             }
 
@@ -3832,6 +3924,13 @@ internal static unsafe class Stage
                     cardHeight = extent.Height;
                     card = Panel.Draw(shelf.Levels, extent.Height);
                     cardTexture = Upload(card, cardSet, cardTexture);
+                }
+
+                if (googleChosen && aerial is not null && !splashing && aerialCardSize != (extent.Width, extent.Height))
+                {
+                    aerialCardSize = (extent.Width, extent.Height);
+                    aerialCard = Panel.Attribution(aerialProviders, extent.Width, extent.Height);
+                    aerialCardTexture = Upload(aerialCard, aerialCardSet, aerialCardTexture);
                 }
 
                 if (moment.HeardAge >= 0f && !splashing && (moment.HeardId != captionId || (extent.Width, extent.Height) != captionSize))
@@ -4191,7 +4290,13 @@ internal static unsafe class Stage
                 DrawLetThrough(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
                 DrawLetThrough(cb, layout, doorCurtain, new Push(streetDoor.World(), viewProj, default));
                 // The streets, out of the traced structure: a kilometre of city would swell it for what the door shows.
-                if (streets is not null && outside)
+                if (outside && googleChosen && aerial is not null)
+                {
+                    // Google's photographs, untraced: they carry their own light and shadows, and nothing else of the
+                    // city is drawn beside them.
+                    DrawUntraced(cb, layout, aerial, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0f, 0f, 0f, -1f)));
+                }
+                else if (streets is not null && outside)
                 {
                     // Traced, so its buildings shade the streets; their shadows fall only outside (RayScene.CityMask).
                     var at = new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0f, 0f, 0f, -1f)); // the shader's city()
@@ -4298,6 +4403,16 @@ internal static unsafe class Stage
                     var margin = CardMargin();
                     var push = new SplashPush(Rect(margin, margin, card.Width, card.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [cardSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (outside && googleChosen && aerial is not null && aerialCard is not null && aerialCardTexture is not null)
+                {
+                    // Google's attribution, bottom right, whenever its tiles are in view, the HUD shown or not.
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var push = new SplashPush(Rect(extent.Width - aerialCard.Width - CardMargin(), extent.Height - aerialCard.Height - CardMargin(), aerialCard.Width, aerialCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [aerialCardSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -4865,6 +4980,9 @@ internal static unsafe class Stage
         shellGlass.Dispose();
         doorCurtain.Dispose();
         streets?.Dispose();
+        aerial?.Dispose();
+        aerialImage.Dispose();
+        aerialCardTexture?.Dispose();
         shellBulbs.Dispose();
         hallGallery.Dispose();
         foreach (var gallery in knots.Values)
