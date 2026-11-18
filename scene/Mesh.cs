@@ -148,6 +148,10 @@ internal enum Material : uint
     // image's layer (Program's aerialMaps). The photograph carries its own light, so the Low shader draws it unlit, in
     // the haze; Flat and the path tracer draw its colour sampled at each corner.
     Aerial = 20,
+
+    // A projection screen's matte white cloth (GalleryVideo.ScreenModel): the Low shader projects the video on it alone,
+    // in the projector's light rather than tinted by what it falls on. Flat and the path tracer draw it white.
+    Screen = 21,
 }
 
 // A surface's colour and what it is made of.

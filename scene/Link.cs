@@ -632,6 +632,7 @@ internal sealed class Link(Func<double> clock)
         StreetDoor.SelfTest(Check);
         OttawaStreets.SelfTest(Check);
         GoogleStreets.SelfTest(Check);
+        Rides.SelfTest(Check);
         HallGallery.SelfTest(Check, Stage.LowFragmentShader);
         LearnLectern.SelfTest(Check);
         GlassWork.SelfTest(Check);

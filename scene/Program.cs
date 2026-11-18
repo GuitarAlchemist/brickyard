@@ -703,23 +703,25 @@ internal static unsafe class Stage
             float street = city() ? 1.0 : smoothstep(6.0, 6.4, vWorld.z);
             pool = max(pool, street);
             high = max(high, street);
-            // A video projected on the gallery's wall (GalleryVideo.Projection): a projector's light, 4:3, on what faces
-            // the room within 6 cm of the wall, the wall's own colour showing through; its edges soft over 1 %.
+            // A video projected on the gallery's wall (GalleryVideo.Projection): a projector's light, 4:3, on the white
+            // screen hung there (Material.Screen, GalleryVideo.ScreenModel) and on nothing else; its edges soft over 1 %.
             // The derivatives are taken outside the branch, where every pixel of a quad still runs.
             vec3 projected = vec3(0.0);
+            float washed = 1.0; // the room's light on the screen, dimmed where the picture falls so that its darks stay dark
             vec2 extent = vec2(frame.screen.z, frame.screen.z * 0.75); // half sizes; "half" is reserved in GLSL
             vec2 onScreen = (frame.screen.xy + extent - vWorld.zy) / max(2.0 * extent, vec2(1e-4));
             vec2 screenDx = dFdx(onScreen), screenDy = dFdy(onScreen);
-            if (frame.options.w > 0.0 && face.x > 0.5 && vWorld.x < frame.screen.w + 0.06)
+            if (frame.options.w > 0.0 && vMaterial == 21u && face.x > 0.5 && vWorld.x < frame.screen.w + 0.06)
             {
                 vec2 inside = smoothstep(vec2(0.0), vec2(0.01), onScreen) * smoothstep(vec2(0.0), vec2(0.01), 1.0 - onScreen);
                 if (inside.x * inside.y > 0.0)
                 {
                     vec3 shown = textureGrad(pictureMaps, vec3(clamp(onScreen, 0.0, 1.0), frame.options.z), screenDx, screenDy).rgb;
-                    projected = base * shown * 3.0 * face.x * frame.options.w * inside.x * inside.y;
+                    projected = base * shown * 1.15 * face.x * frame.options.w * inside.x * inside.y;
+                    washed = 1.0 - (0.7 * frame.options.w * inside.x * inside.y);
                 }
             }
-            outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high + projected) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
+            outColor = vec4(haze(shoulder(lit * washed * (0.1 + 0.9 * pool) * high + projected) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
         }
         """;
 
@@ -1839,6 +1841,14 @@ internal static unsafe class Stage
         var doorCurtain = new Mesh(device, physical, StreetDoor.Curtain());
         Task<OttawaStreets.City?>? streetsLoading = null;
         Mesh? streets = null;
+        Mesh? projectionScreen = null; // the white screen the gallery's video is projected on (GalleryVideo.ScreenModel)
+        IReadOnlyList<HallGallery.Globe>? screenFor = null;
+        Mesh? scooterMesh = null, droneMesh = null; // the rides' models (Rides), made at the first ride
+        var rides = new Rides { ReducedMotion = args.Contains("--reduced-motion") };
+        Panel.Card? rideHint = null;
+        Texture? rideHintTexture = null;
+        (string Text, int Height) rideHintDrawn = default;
+        var rideHintAt = double.NegativeInfinity;
         OttawaStreets.Placement? streetsPlacement = null;
         IReadOnlyList<FreeCamera.Footprint> streetFootprints = [];
         // Google's 3D tiles in place of OpenStreetMap's buildings (G, or --google-tiles; GoogleStreets): fetched once a
@@ -2012,8 +2022,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 25, // Google's attribution (GoogleStreets), the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 25 }], // one image each
+            MaxSets = 26, // the ride's dial (Rides), Google's attribution (GoogleStreets), the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 26 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -2489,6 +2499,11 @@ internal static unsafe class Stage
         var wheelAtStart = args.Contains("--wheel");
         var arcadeAtStart = args.Contains("--arcade-play"); // the cabinet's game once the splash is over, for captures
         var flyTo = int.TryParse(Option(args, "--fly-to"), out var flyToValue) ? flyToValue : 0; // a view's flight half a second after the splash, for captures
+        // --ride scooter|drone: that ride a second after the splash, its throttle held (the drone climbing its first 2 s), for
+        // captures; --ride-view turns its view (O).
+        var rideAsked = Option(args, "--ride") switch { "scooter" => Rides.Kind.Scooter, "drone" => Rides.Kind.Drone, _ => Rides.Kind.None };
+        var rideHeld = rideAsked != Rides.Kind.None;
+        var rideSince = double.NaN;
         // --resize-to WxH resizes the window a second after the splash, to measure the rebuild a live window's maximising makes
         var resizeTo = Option(args, "--resize-to")?.Split('x') is [var rw, var rh] && int.TryParse(rw, out var resizeW) && int.TryParse(rh, out var resizeH) && resizeW > 0 && resizeH > 0
             ? new int2(resizeW, resizeH)
@@ -2551,6 +2566,7 @@ internal static unsafe class Stage
         Texture? filmHintTexture = null;
         Panel.Card? filmHint = null;
         var arcadeHintSet = device.AllocateDescriptorSet(descriptorPool, setLayout); // the way out of the cabinet's game
+        var rideHintSet = device.AllocateDescriptorSet(descriptorPool, setLayout); // the ride's speed and keys (Rides)
         Texture? arcadeHintTexture = null;
         Panel.Card? arcadeHint = null;
         var arcadeHintDrawn = (Height: 0, Language: "");
@@ -2625,6 +2641,14 @@ internal static unsafe class Stage
                 "VK_KHR_present_id, VK_KHR_present_wait"),
             new("MSAA 4x", msaa ? Panel.Rtx.Use : Panel.Rtx.Offered, Words.Say("four samples a pixel, Low lighting", "quatre échantillons par pixel, éclairage Low")),
         ];
+
+        // Off the scooter where it stood, or the drone landed, the view back with the pilot (Rides).
+        void EndRide()
+        {
+            var was = rides.Riding;
+            if (rides.Stop() is { } stand) camera.GoTo(stand.Eye, stand.Target, cut: true);
+            Console.WriteLine($"SCENE ride ended: {(was == Rides.Kind.Scooter ? "off the scooter" : "the drone landed")}, {rides.Crashes} crashes");
+        }
 
         GlfwKeyCallback onKey = (w, key, scancode, action, mods) => Guard("a key", () =>
         {
@@ -2704,6 +2728,42 @@ internal static unsafe class Stage
             if (action == GlfwKeyAction.Repeat)
             {
                 return; // a key held is read each frame (the loop); its repeats toggle nothing
+            }
+
+            // The rides (Rides): V the racing scooter, X the drone; on one, its keys are its own, Esc or its key again ends it,
+            // and a view's key ends it before going there.
+            if (rides.Riding != Rides.Kind.None)
+            {
+                if (key == GlfwKey.Escape || (key == GlfwKey.V && rides.Riding == Rides.Kind.Scooter) || (key == GlfwKey.X && rides.Riding == Rides.Kind.Drone))
+                {
+                    EndRide();
+                    return;
+                }
+
+                if (key == GlfwKey.O)
+                {
+                    rides.ToggleView();
+                    return;
+                }
+
+                if (key is GlfwKey.F or GlfwKey.Space or GlfwKey.C or GlfwKey.CapsLock or GlfwKey.V or GlfwKey.X or GlfwKey.E or GlfwKey.Q)
+                {
+                    return;
+                }
+
+                if (key is GlfwKey.Home or GlfwKey.Enter || (int)key is >= '0' and <= '9')
+                {
+                    EndRide();
+                }
+            }
+            else if (key is GlfwKey.V or GlfwKey.X && !wheel.Open)
+            {
+                var kind = key == GlfwKey.V ? Rides.Kind.Scooter : Rides.Kind.Drone;
+                if (kind == Rides.Kind.Scooter) scooterMesh ??= new Mesh(device, physical, Rides.ScooterModel());
+                else droneMesh ??= new Mesh(device, physical, Rides.DroneModel());
+                rides.Start(kind, camera.View((float)sceneClock));
+                Console.WriteLine($"SCENE ride: {(kind == Rides.Kind.Scooter ? "the racing scooter" : "the drone")}{(rides.Outdoors ? " in the streets" : " in the hall")}");
+                return;
             }
 
             if (key == GlfwKey.Escape && wheel.Open)
@@ -3700,6 +3760,17 @@ internal static unsafe class Stage
                 ModalDrill.Start(what => Console.WriteLine($"DRILL {what} at {clock.Elapsed.TotalSeconds - firstFrame:F2} s"), (w, h) => resizeTo = new int2(w, h));
             }
 
+            if (!splashing && rideAsked != Rides.Kind.None && shown - S >= 1.0)
+            {
+                if (rideAsked == Rides.Kind.Scooter) scooterMesh ??= new Mesh(device, physical, Rides.ScooterModel());
+                else droneMesh ??= new Mesh(device, physical, Rides.DroneModel());
+                rides.Start(rideAsked, camera.View(time));
+                if (args.Contains("--ride-view")) rides.ToggleView();
+                Console.WriteLine($"SCENE ride: {rideAsked} for a capture, its throttle held");
+                rideAsked = Rides.Kind.None;
+                rideSince = shown;
+            }
+
             if (!splashing && flyTo != 0 && shown - S >= 0.5)
             {
                 camera.GoTo(flyTo);
@@ -3725,7 +3796,8 @@ internal static unsafe class Stage
                 }
                 else if (!film.Playing)
                 {
-                    camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
+                    if (rides.Riding != Rides.Kind.None) rides.Look(cx - lookFrom.X, cy - lookFrom.Y);
+                    else camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
                     if (cx != lookFrom.X || cy != lookFrom.Y)
                     {
                         tour.Touch(now);
@@ -3774,9 +3846,24 @@ internal static unsafe class Stage
                 bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press || walkHeld.Contains(key);
                 float Axis(GlfwKey a, GlfwKey b, GlfwKey back, GlfwKey back2) => (Held(a) || Held(b) ? 1f : 0f) - (Held(back) || Held(back2) ? 1f : 0f);
                 var alt = Held(GlfwKey.LeftAlt) || Held(GlfwKey.RightAlt);
-                camera.Move(time, new(Axis(GlfwKey.W, GlfwKey.Up, GlfwKey.S, GlfwKey.Down), Axis(GlfwKey.D, GlfwKey.Right, GlfwKey.A, GlfwKey.Left),
-                    Axis(GlfwKey.Space, GlfwKey.E, GlfwKey.C, GlfwKey.C), Held(GlfwKey.LeftShift) || Held(GlfwKey.RightShift),
-                    camera.Flying || alt ? 0f : Axis(GlfwKey.E, GlfwKey.E, GlfwKey.Q, GlfwKey.Q), alt), dt);
+                var (forward, right, up, fast) = (Axis(GlfwKey.W, GlfwKey.Up, GlfwKey.S, GlfwKey.Down), Axis(GlfwKey.D, GlfwKey.Right, GlfwKey.A, GlfwKey.Left),
+                    Axis(GlfwKey.Space, GlfwKey.E, GlfwKey.C, GlfwKey.C), Held(GlfwKey.LeftShift) || Held(GlfwKey.RightShift));
+                if (rides.Riding != Rides.Kind.None)
+                {
+                    rides.Move(new(forward, right, up, fast), dt, camera); // the pilot stands still meanwhile
+                    tour.Touch(now);
+                }
+                else
+                {
+                    camera.Move(time, new(forward, right, up, fast, camera.Flying || alt ? 0f : Axis(GlfwKey.E, GlfwKey.E, GlfwKey.Q, GlfwKey.Q), alt), dt);
+                }
+            }
+            else if (rides.Riding != Rides.Kind.None)
+            {
+                // The ride coasts on, or a capture's throttle is held (--ride).
+                var climbing = rides.Riding == Rides.Kind.Drone && shown - rideSince < 2.5;
+                rides.Move(rideHeld && !double.IsNaN(rideSince) ? new(climbing ? 0f : 1f, 0f, climbing ? 1f : 0f, false) : default, dt, camera);
+                if (rideHeld) tour.Touch(now);
             }
             else
             {
@@ -3785,7 +3872,7 @@ internal static unsafe class Stage
 
             // The roll-up door rolls; once the streets are fetched they are drawn behind it, and the camera may go out.
             streetDoor.Step(dt);
-            camera.DoorOpen = streetDoor.Passing || camera.Outdoors;
+            camera.DoorOpen = streetDoor.Passing || camera.Outdoors || rides.Outdoors;
             if (streets is null && streetsLoading is { IsCompleted: true } loaded)
             {
                 if (loaded.IsCompletedSuccessfully && loaded.Result is { } city)
@@ -3830,9 +3917,9 @@ internal static unsafe class Stage
                 }
             }
 
-            var outside = streetDoor.Openness > 0f || camera.Outdoors; // the streets in view: far away, the haze thinner
+            var outside = streetDoor.Openness > 0f || camera.Outdoors || rides.Outdoors; // the streets in view: far away, the haze thinner
             var aspect = extent.Width / (float)extent.Height;
-            var pose = film.Pose(aspect) ?? camera.View(time);
+            var pose = film.Pose(aspect) ?? (rides.Riding != Rides.Kind.None ? rides.Pose(dt) : camera.View(time));
             var eye = pose.Eye;
             var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, outside ? 350f : 40f);
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
@@ -3898,6 +3985,15 @@ internal static unsafe class Stage
                     arcadeHintDrawn = (extent.Height, Words.Language);
                     arcadeHint = Panel.Hint(Words.Say("Esc, or a click away from the cabinet: leave the game", "Échap, ou un clic hors de la borne : quitter le jeu"), extent.Height);
                     arcadeHintTexture = Upload(arcadeHint, arcadeHintSet, arcadeHintTexture);
+                }
+
+                // The ride's dial, its speed rounded, made again no more than five times a second (an upload waits for the GPU).
+                if (rides.Riding != Rides.Kind.None && !splashing && rides.Hint() is var said && (said, extent.Height) != rideHintDrawn && clock.Elapsed.TotalSeconds - rideHintAt >= 0.2)
+                {
+                    rideHintDrawn = (said, extent.Height);
+                    rideHintAt = clock.Elapsed.TotalSeconds;
+                    rideHint = Panel.Hint(said, extent.Height);
+                    rideHintTexture = Upload(rideHint, rideHintSet, rideHintTexture);
                 }
 
                 if (wheel.Shown > 0f && !splashing && wheelDrawn != (wheel.Pick, extent.Width, extent.Height, Words.Language))
@@ -4164,6 +4260,15 @@ internal static unsafe class Stage
             }
 
             videos?.Update(eye, hallGallery.Globes);
+            if (!ReferenceEquals(hallGallery.Globes, screenFor))
+            {
+                // The screen hangs where the video falls, over the water globes; made again when the gallery is.
+                screenFor = hallGallery.Globes;
+                var place = GalleryVideo.Place(hallGallery.Globes, HallGallery.Footprint.Centre.X - HallGallery.Footprint.Half.X);
+                if (projectionScreen is not null) device.WaitIdle();
+                projectionScreen?.Dispose();
+                projectionScreen = place == default ? null : new Mesh(device, physical, GalleryVideo.ScreenModel(place));
+            }
             *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? (outside ? StreetHaze : Haze) : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
                 videos?.Projected ?? GalleryVideo.Projection.None);
             device.ResetFences([fences[slot]]);
@@ -4308,6 +4413,11 @@ internal static unsafe class Stage
                 }
                 // The gallery is traced too: under path tracing, what the structure lacks the picture lacks.
                 hallGallery.Draw((mesh, glow) => Draw(cb, layout, mesh, new Push(SN.Matrix4x4.Identity, viewProj, glow)), viewProj, Words.Language == "fr");
+                if (projectionScreen is not null) Draw(cb, layout, projectionScreen, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                if (rides.ModelShown && (rides.Riding == Rides.Kind.Scooter ? scooterMesh : droneMesh) is { } rideMesh)
+                {
+                    Draw(cb, layout, rideMesh, new Push(rides.World(), viewProj, default));
+                }
 
                 // Path traced, the picture goes over what the meshes drew, whose depth stays for the screens after.
                 if (tracer is not null && pathTracing) tracer.Composite(cb, splashPipeline, splashLayout);
@@ -4605,6 +4715,14 @@ internal static unsafe class Stage
                     var (left, top) = ((extent.Width - arcadeHint.Width) / 2, extent.Height - arcadeHint.Height - margin);
                     Quad(meterSet, left - margin / 2, top - margin / 4, arcadeHint.Width + margin, arcadeHint.Height + margin / 2, new SN.Vector4(0f, 0f, 0f, 0.55f));
                     Quad(arcadeHintSet, left, top, arcadeHint.Width, arcadeHint.Height, SN.Vector4.One);
+                }
+
+                if (hud && rides.Riding != Rides.Kind.None && !film.Playing && rideHint is not null && rideHintTexture is not null && meterTexture is not null)
+                {
+                    var margin = CardMargin();
+                    var (left, top) = ((extent.Width - rideHint.Width) / 2, extent.Height - rideHint.Height - margin);
+                    Quad(meterSet, left - margin / 2, top - margin / 4, rideHint.Width + margin, rideHint.Height + margin / 2, new SN.Vector4(0f, 0f, 0f, 0.55f));
+                    Quad(rideHintSet, left, top, rideHint.Width, rideHint.Height, SN.Vector4.One);
                 }
 
                 if (keysShown && !film.Playing && wheel.Shown <= 0f && keysCard is not null && keysTexture is not null)
@@ -4983,6 +5101,10 @@ internal static unsafe class Stage
         shellGlass.Dispose();
         doorCurtain.Dispose();
         streets?.Dispose();
+        projectionScreen?.Dispose();
+        scooterMesh?.Dispose();
+        droneMesh?.Dispose();
+        rideHintTexture?.Dispose();
         aerial?.Dispose();
         aerialImage.Dispose();
         aerialCardTexture?.Dispose();

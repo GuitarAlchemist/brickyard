@@ -2535,6 +2535,34 @@ photo realiste », « ok on va essayer avec google ».
 **Still to do:** the ground of OpenStreetMap's streets (lawns, sidewalks, trees, lamps); finer tiles near the eye
 (more requests a run, the author's call).
 
+### Less haze, a racing scooter and a drone (2026-11-18)
+
+- **Haze.** « je veux moins de brouillard »: the streets' haze is 0.04 of the hall's (half the light through at
+  290 m), not 0.12 (96 m); the Parliament's copper roofs read from the door.
+- **The rides** (`Rides.cs`), « je veux pouvoir me balader en scooter ou en drone comme dans l'observatoire - je veux
+  un scooter de course tres rapide, meme chose pour le drone ». After the Observatory's segway.gd and drone.gd, but
+  driven by hand. V: a racing scooter, 120 km/h, 220 with Shift, 0 to 100 km/h in about 3 s, tyres holding 1.3 g so a
+  bend at speed is wide, leaning into it; the mouse steers once it rolls. X: a drone, 150 km/h, 300 with Shift, 3 g of
+  thrust, tilting along it, up to 150 m (the streets' ceiling, for F's flight too). O: behind it or on it; Esc or its
+  key again ends it (the scooter leaves you where it stood, the drone gives the view back where you stood). The field
+  widens up to 22° with the speed (not under `--reduced-motion`). OpenStreetMap's buildings stop the scooter (a wall
+  taken over 8 m/s takes 70 % of the speed), Google's tiles do not; the drone passes through buildings. A dial at the
+  foot of the picture gives the speed (and the drone's height), made again at most five times a second since an
+  upload waits for the GPU. `--ride scooter|drone [--ride-view]` starts one a second after the splash, throttle held,
+  for captures.
+- **Seen, hidden.** `--door street --ride scooter`: 120 km/h at 4 s on Wellington, from the seat (the front lowered
+  so that the windscreen sits under the horizon) and from behind; `--ride drone`: 148 km/h at 58 m over the Centre
+  Block, 52 fps. *To verify*: by hand, the mouse's steering and a crash into a building.
+
+### A projection screen for the gallery's video (2026-11-18)
+
+« je veux un vrai ecran de projection avec un fonds blanc », and « il y a des moires bizarre »: the nearest globe's
+video was projected on the left wall's concrete, its colour times the scan's, and the video's fine lines beat against
+the scan's into moiré. A pull-down screen now hangs where `GalleryVideo.Place` puts the picture: white cloth
+(`Material.Screen`), a black border, its roller's case above and the weighted bar below. The video falls on the cloth
+alone, in the projector's light (1.15 times its colour), and the room's light on the cloth is dimmed by 70 % where the
+picture falls, so that its darks stay dark. Seen hidden with `--view 8`: the Québec flyover sharp on the screen.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

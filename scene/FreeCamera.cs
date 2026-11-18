@@ -26,7 +26,8 @@ internal sealed class FreeCamera
     private static readonly (SN.Vector3 Min, SN.Vector3 Max) Doorway =
         (new(HallShell.DoorX - (HallShell.DoorWidth / 2) + 0.35f, Min.Y, Max.Z - 0.5f), new(HallShell.DoorX + (HallShell.DoorWidth / 2) - 0.35f, HallShell.DoorHeight - 0.3f, HallShell.Front + 0.9f));
 
-    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Streets = (new(-400f, Min.Y, HallShell.Front + 0.6f), new(400f, 60f, 400f));
+    // Up to 150 m over them, where the drone may climb (Rides).
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Streets = (new(-400f, Min.Y, HallShell.Front + 0.6f), new(400f, 150f * Scale, 400f));
 
     // Whether the door lets the body through; set by the scene each frame.
     internal bool DoorOpen { get; set; }
@@ -470,9 +471,52 @@ internal sealed class FreeCamera
         return p;
     }
 
+    // A circle of the given radius at p, out of what stands on the hall's floor and the knots' floor's walls, or out of
+    // the streets' buildings beyond the front wall, as the walking body is kept: for the scooter (Rides).
+    internal SN.Vector2 Solid(SN.Vector2 p, float radius)
+    {
+        for (var pass = 0; pass < 2; pass++)
+        {
+            if (p.Y > HallShell.Front)
+            {
+                foreach (var f in Footprints) p = PushRing(p, f, radius);
+                continue;
+            }
+
+            foreach (var (centre, turn, half) in Obstacles) p = PushBox(p, centre, turn, half, radius);
+            foreach (var s in KnotFloor.Solids)
+            {
+                if (s.Min.Y < Height && s.Max.Y > StepUp)
+                {
+                    var (lo, hi) = (new SN.Vector2(s.Min.X, s.Min.Z), new SN.Vector2(s.Max.X, s.Max.Z));
+                    p = PushBox(p, (lo + hi) / 2f, 0f, (hi - lo) / 2f, radius);
+                }
+            }
+        }
+
+        return p;
+    }
+
     // The body at p out of a building's footprint by the nearest wall, its speed into the wall lost: from inside, out
     // through the nearest wall; from outside, Radius off it.
     private SN.Vector2 PushOut(SN.Vector2 p, Footprint f, float radius)
+    {
+        var pushed = PushRing(p, f, radius);
+        Lose(p, pushed);
+        return pushed;
+    }
+
+    // The speed into what pushed the body from p to pushed is lost, so that it slides along.
+    private void Lose(SN.Vector2 p, SN.Vector2 pushed)
+    {
+        if (SN.Vector2.DistanceSquared(pushed, p) > 1e-12f)
+        {
+            var n = SN.Vector2.Normalize(pushed - p);
+            velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
+        }
+    }
+
+    private static SN.Vector2 PushRing(SN.Vector2 p, Footprint f, float radius)
     {
         if (p.X < f.Min.X - radius || p.X > f.Max.X + radius || p.Y < f.Min.Y - radius || p.Y > f.Max.Y + radius)
         {
@@ -505,17 +549,17 @@ internal sealed class FreeCamera
         }
 
         var away = distance > 1e-5f ? (p - nearest) / distance : SN.Vector2.UnitX;
-        var pushed = nearest + ((inside ? -away : away) * radius);
-        if (SN.Vector2.DistanceSquared(pushed, p) > 1e-12f)
-        {
-            var n = SN.Vector2.Normalize(pushed - p);
-            velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
-        }
-
-        return pushed;
+        return nearest + ((inside ? -away : away) * radius);
     }
 
     private SN.Vector2 Push(SN.Vector2 p, SN.Vector2 centre, float turn, SN.Vector2 half, float radius)
+    {
+        var pushed = PushBox(p, centre, turn, half, radius);
+        if (pushed != p) Lose(p, pushed);
+        return pushed;
+    }
+
+    private static SN.Vector2 PushBox(SN.Vector2 p, SN.Vector2 centre, float turn, SN.Vector2 half, float radius)
     {
         var (u, v) = (new SN.Vector2(MathF.Cos(turn), -MathF.Sin(turn)), new SN.Vector2(MathF.Sin(turn), MathF.Cos(turn)));
         var d = p - centre;
@@ -546,14 +590,7 @@ internal sealed class FreeCamera
             local.Y = (half.Y + radius) * (local.Y >= 0f ? 1f : -1f);
         }
 
-        var pushed = centre + (u * local.X) + (v * local.Y);
-        if (pushed != p)
-        {
-            var n = SN.Vector2.Normalize(pushed - p);
-            velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
-        }
-
-        return pushed;
+        return centre + (u * local.X) + (v * local.Y);
     }
 
     // The height the body at p stands on, its feet at from: the highest top under it no more than a step above them, the

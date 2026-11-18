@@ -67,6 +67,28 @@ internal sealed unsafe class GalleryVideo : IDisposable
         return new SN.Vector4((lo + hi) / 2f, top + 0.45f + (halfWidth * 0.75f), halfWidth, wallX);
     }
 
+    // A pull-down projection screen where Place puts the picture (the user, 2026-11-18: « je veux un vrai ecran de
+    // projection avec un fonds blanc »; on the wall's concrete the video's lines beat against the scan's into moiré):
+    // the white cloth just over the picture, a black border round it, and its roller's case above, on the wall.
+    internal static Vertex[] ScreenModel(SN.Vector4 place)
+    {
+        var (z, y, halfWidth, wallX) = (place.X, place.Y, place.Z, place.W);
+        var halfHeight = halfWidth * 0.75f;
+        const float border = 0.06f;
+        var o = new List<Vertex>();
+        var cloth = new Finish(new(0.86f, 0.86f, 0.84f), Material.Screen);
+        var black = new Finish(new(0.03f, 0.03f, 0.035f), Material.Matte);
+        var case_ = new Finish(new(0.8f, 0.81f, 0.82f), Material.Aluminium);
+        Boxes.Add(o, new(wallX + 0.012f, y, z), new(0.008f, 2f * (halfHeight + 0.01f), 2f * (halfWidth + 0.01f)), cloth);
+        Boxes.Add(o, new(wallX + 0.014f, y + halfHeight + (border / 2f), z), new(0.01f, border, 2f * (halfWidth + border)), black);
+        Boxes.Add(o, new(wallX + 0.014f, y - halfHeight - (border / 2f), z), new(0.01f, border, 2f * (halfWidth + border)), black);
+        Boxes.Add(o, new(wallX + 0.014f, y, z + halfWidth + (border / 2f)), new(0.01f, 2f * halfHeight, border), black);
+        Boxes.Add(o, new(wallX + 0.014f, y, z - halfWidth - (border / 2f)), new(0.01f, 2f * halfHeight, border), black);
+        Boxes.Add(o, new(wallX + 0.05f, y + halfHeight + border + 0.05f, z), new(0.09f, 0.09f, 2f * (halfWidth + border) + 0.16f), case_);
+        Boxes.Add(o, new(wallX + 0.03f, y - halfHeight - border - 0.012f, z), new(0.03f, 0.024f, 2f * (halfWidth + border) + 0.04f), black); // the weighted bar
+        return [.. o];
+    }
+
     public GalleryVideo(Device device, PhysicalDevice physical, GalleryPictures pictures, GalleryPictures.Pixels pixels, string? dir, int framesInFlight)
     {
         this.device = device;
