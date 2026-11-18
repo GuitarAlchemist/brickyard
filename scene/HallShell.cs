@@ -14,6 +14,9 @@ internal static class HallShell
     internal const float Left = -6.25f, Right = 6.25f, Back = -3.45f, Front = 6.0f;
     private const float Thick = 0.16f;
 
+    // The roll-up door in the front wall: its middle's x, its width and its height (StreetDoor).
+    internal const float DoorX = -2.6f, DoorWidth = 3.6f, DoorHeight = 3.6f;
+
     // The lamps over the hall's floor, each hanging over (x, z); the Low shader's pools are at the same places.
     internal static readonly SN.Vector2[] FloorLamps = [new(-3.2f, -0.6f), new(0f, 1.6f), new(3.0f, -0.6f), new(-3.2f, 3.4f)];
 
@@ -32,7 +35,11 @@ internal static class HallShell
         // The walls, each a slab of the cast concrete from the floor to the ceiling, and the strips that carry the back
         // wall and the right one (4.6 m high) up to it.
         Boxes.Add(o, new(Left - (Thick / 2), Top / 2, (Back + Front) / 2), new(Thick, Top, Front - Back + Thick), concrete);
-        Boxes.Add(o, new(0f, Top / 2, Front + (Thick / 2)), new(Right - Left + (2 * Thick), Top, Thick), concrete);
+        // The front wall round the door's opening (StreetDoor): on its left, on its right, and over it.
+        var (doorLeft, doorRight) = (DoorX - (DoorWidth / 2), DoorX + (DoorWidth / 2));
+        Boxes.Add(o, new((Left - Thick + doorLeft) / 2, Top / 2, Front + (Thick / 2)), new(doorLeft - Left + Thick, Top, Thick), concrete);
+        Boxes.Add(o, new((doorRight + Right + Thick) / 2, Top / 2, Front + (Thick / 2)), new(Right + Thick - doorRight, Top, Thick), concrete);
+        Boxes.Add(o, new(DoorX, (DoorHeight + 0.05f + Top) / 2, Front + (Thick / 2)), new(DoorWidth, Top - DoorHeight - 0.05f, Thick), concrete);
         Boxes.Add(o, new(Right + (Thick / 2), Top / 2, (4.15f + Front) / 2), new(Thick, Top, Front - 4.15f), concrete);
         Boxes.Add(o, new(0f, (4.6f + Top) / 2, Back), new(Right - Left, Top - 4.6f, 0.3f), concrete);
         Boxes.Add(o, new(Right + (Thick / 2), (4.6f + Top) / 2, (Back + 4.15f) / 2), new(Thick, Top - 4.6f, 4.15f - Back), concrete);
@@ -59,14 +66,8 @@ internal static class HallShell
             Window(o, glass, new(x, 2.6f, Front), -SN.Vector3.UnitZ, SN.Vector3.UnitX, 1.8f, 2.4f, steel, pane);
         }
 
-        // The roll-up door at the front: a steel curtain of slats in its frame.
-        var (doorX, doorW, doorH) = (-2.6f, 3.6f, 3.6f);
-        for (var k = 0; k < 36; k++)
-        {
-            var tone = 0.85f + (0.15f * (k % 2));
-            Boxes.Add(o, new(doorX, 0.05f + ((k + 0.5f) * doorH / 36f), Front - 0.03f), new(doorW, (doorH / 36f) - 0.008f, 0.03f), new Finish(new SN.Vector3(0.16f, 0.17f, 0.18f) * tone, Material.Steel));
-        }
-
+        // The roll-up door's frame at the front; its steel curtain is StreetDoor's, drawn where it has rolled to.
+        var (doorX, doorW, doorH) = (DoorX, DoorWidth, DoorHeight);
         foreach (var side in new[] { -1f, 1f })
         {
             Boxes.Add(o, new(doorX + (side * ((doorW / 2) + 0.06f)), doorH / 2, Front - 0.06f), new(0.12f, doorH + 0.1f, 0.12f), paint);

@@ -20,6 +20,45 @@ internal sealed class FreeCamera
     internal static readonly SN.Vector3 DriftTarget = new(0f, 0.7f, 0f);
     internal static readonly SN.Vector3 Min = new(-6f, 0.25f, -3.1f);
     internal static readonly SN.Vector3 Max = new(6f, 4.2f, 5.5f);
+
+    // Out through the roll-up door when it is open (StreetDoor): the opening, overlapping the hall and the street, and
+    // the streets of Ottawa beyond it (OttawaStreets), where one may fly up to see the city.
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Doorway =
+        (new(HallShell.DoorX - (HallShell.DoorWidth / 2) + 0.35f, Min.Y, Max.Z - 0.5f), new(HallShell.DoorX + (HallShell.DoorWidth / 2) - 0.35f, HallShell.DoorHeight - 0.3f, HallShell.Front + 0.9f));
+
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Streets = (new(-400f, Min.Y, HallShell.Front + 0.6f), new(400f, 60f, 400f));
+
+    // Whether the door lets the body through; set by the scene each frame.
+    internal bool DoorOpen { get; set; }
+
+    // Whether the eye is out in the streets.
+    internal bool Outdoors => position.Z > HallShell.Front;
+
+    // Where a move from one place to another ends: anywhere in a space that holds both (the hall, the doorway, the
+    // streets when the door is open); else at the nearest place in the space it started from; anywhere it is to go when
+    // it started outside them all (a view's cut).
+    internal SN.Vector3 Confine(SN.Vector3 from, SN.Vector3 to)
+    {
+        if (!DoorOpen) return SN.Vector3.Clamp(to, Min, Max);
+        ReadOnlySpan<(SN.Vector3 Min, SN.Vector3 Max)> spaces = [(Min, Max), Doorway, Streets];
+        static bool In((SN.Vector3 Min, SN.Vector3 Max) s, SN.Vector3 p) => SN.Vector3.Clamp(p, s.Min, s.Max) == p;
+        foreach (var s in spaces)
+        {
+            if (In(s, from) && In(s, to)) return to;
+        }
+
+        foreach (var s in spaces)
+        {
+            if (In(s, from)) return SN.Vector3.Clamp(to, s.Min, s.Max);
+        }
+
+        foreach (var s in spaces)
+        {
+            if (In(s, to)) return to;
+        }
+
+        return SN.Vector3.Clamp(to, Min, Max);
+    }
     internal const float Radius = 0.3f * Scale; // the walking body's, against what stands on the floor
     internal const float SolidRadius = 0.15f; // the walking body's, against the knots' floor's solids (Collide)
     internal const float StepUp = 0.16f; // the highest step the body walks onto, above a stair's 0.125 m
@@ -313,7 +352,7 @@ internal sealed class FreeCamera
         var d = SN.Vector3.Normalize(target - eye);
         yaw = MathF.Atan2(d.X, -d.Z);
         pitch = MathF.Asin(d.Y);
-        position = SN.Vector3.Clamp(eye, Min, Max);
+        position = Confine(position, eye);
         var standing = GroundAt(new(position.X, position.Z), position.Y - WalkHeight) + WalkHeight;
         framed = !Flying && MathF.Abs(position.Y - standing) > 0.01f; // a view frames; it never takes off (F does)
         Free = true;
@@ -379,7 +418,7 @@ internal sealed class FreeCamera
         }
 
         var step = SN.Vector3.Normalize(direction) * Speed * (held.Fast ? Run : 1f) * dt;
-        position = SN.Vector3.Clamp(position + step, Min, Max);
+        position = Confine(position, position + step);
     }
 
     // The body, a circle of Radius at p, out of what stands on the floor by the nearest way, its speed into it lost so that
@@ -552,7 +591,8 @@ internal sealed class FreeCamera
         }
 
         var next = Collide(body + (velocity * dt));
-        var inside = SN.Vector2.Clamp(next, new(Min.X, Min.Z), new(Max.X, Max.Z));
+        var confined = Confine(new(body.X, 1f, body.Y), new(next.X, 1f, next.Y));
+        var inside = new SN.Vector2(confined.X, confined.Z);
         if (inside.X != next.X)
         {
             velocity.X = 0f; // a wall stops the body
@@ -622,7 +662,7 @@ internal sealed class FreeCamera
 
         var off = right * Lean * lean;
         var peekBy = peek > 0f ? PeekUp * peek : (WalkHeight - CrouchEye) * peek;
-        position = SN.Vector3.Clamp(new(body.X + off.X, feet + eye + dip + peekBy, body.Y + off.Y), Min, Max);
+        position = Confine(position, new(body.X + off.X, feet + eye + dip + peekBy, body.Y + off.Y));
 
         var kickTo = slide > 0f ? FovKick * 1.4f : sprinting && velocity.Length() > walk * 1.1f ? FovKick : 0f;
         Ease(kickTo, (-LeanRoll * lean) + (slide > 0f ? SlideRoll : 0f), dt);

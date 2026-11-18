@@ -2406,6 +2406,60 @@ The author asked: « peut on rajouter des cubicules aux petits robots (1 par wor
 *To verify*: the look in the live window. Hidden GPU runs are paused since the crashes of 2026-11-17, so no peek was
 taken.
 
+## The roll-up door onto the streets of Ottawa (2026-11-17)
+
+The author asked: « Quand je clique sur le garage, puis-je me promener dans les rues d'Ottawa (voir
+https://spareilleux.github.io/learn/demos/#geotiles-a-drone-flight-over-ottawa) ». Asked what the garage is: « Il y a
+une porte en métal qui peut s'ouvrir ». Asked how to walk there: in the Delta scene itself, OpenStreetMap by default,
+Google's photorealistic tiles on choice. This is the first slice, OpenStreetMap only.
+
+**The door** (`StreetDoor.cs`).
+
+- The front wall now has an opening, and its curtain of 36 steel slats is drawn on its own.
+- A click on the door rolls the curtain up into its box over 3.2 s, gathered toward its top. A second click rolls it
+  down again.
+- Open past 80 %, the camera may go through the doorway (`FreeCamera.Confine`). The hall, the doorway and the streets
+  are three boxes; a move stays inside a box that holds both its ends.
+- Once outside, the door can be clicked again from the street. Closing it leaves you outside until you walk back in.
+
+**The streets** (`OttawaStreets.cs`).
+
+- **The data.** The first opening sends one Overpass request: the buildings and the streets within 450 m of Parliament
+  Hill. The answer is kept in `%LOCALAPPDATA%\delta\ottawa\overpass.json` (ODbL allows it, with attribution).
+  `scene --streets` fetches or reads it without a window and prints the counts.
+- **The buildings.** They are extruded from their `height`, `building:levels` or 8 m, after GeoTiles'
+  `OsmBuildings.cs`.
+- **The streets.** They are ribbons on a kilometre of pavement, their width by kind.
+- **The scale.** Everything is at the hall's scale, whose eye stands 1.1 high: one metre is 0.647 (`FreeCamera.Scale`).
+- **Where the hall stands.** The door is placed from the data: the point of Wellington Street nearest the Centre Block,
+  14 m further from it, the door facing the Centre Block. Wellington runs from the south-west to the north-east there,
+  so the hall stands where Metcalfe meets it, the Peace Tower straight ahead, north-north-west.
+- **What is left out.** Buildings and street segments reaching the hall's footprint are left out.
+- **The first fetch, on 2026-11-17.** 553 buildings and 598 streets, 17,446 triangles. The door stands at
+  (207, −42) m from Parliament Hill's point.
+
+**Drawing.** While the door is open or the eye is out, the far plane goes from 40 to 350 and the haze thins to
+0.12 of its density. The city is drawn untraced, so it adds nothing to the ray-traced structure.
+
+**Checked.**
+
+- The selftest covers the door's roll, a click on it, and placement from a made-up answer: the Centre Block straight
+  ahead, east on the right, a building where the hall stands left out, heights, outward walls, winding and an L-shaped
+  roof.
+- `--streets` ran on the real answer.
+
+*To verify, not seen yet* (hidden GPU runs are paused since the crashes):
+
+- the picture through the door;
+- walking out;
+- the sky. It is the haze's colour, a dusk blue.
+
+**Still to do.**
+
+- A visible « © OpenStreetMap contributors » in the street.
+- Collisions with the buildings.
+- Google's tiles on choice: the second slice, a paid API with the key in the environment, never stored.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

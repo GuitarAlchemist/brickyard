@@ -693,6 +693,18 @@ internal static unsafe class Stage
             return 0;
         }
 
+        // --streets: the streets of Ottawa behind the door, fetched once (or read where they were kept) and built, without
+        // a window: what the door would show, counted.
+        if (args.Contains("--streets"))
+        {
+            var city = OttawaStreets.Load().GetAwaiter().GetResult();
+            if (city is null) { Console.Error.WriteLine("STREETS no answer from Overpass"); return 1; }
+            var p = city.Placement;
+            Console.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"STREETS {city.Buildings} buildings, {city.Streets} streets, {city.Left} left out, {city.Vertices.Length / 3} triangles; door at ({p.Door.X:F1}, {p.Door.Y:F1}) m from Parliament Hill, out toward ({p.Out.X:F3}, {p.Out.Y:F3}); kept in {OttawaStreets.CachePath}"));
+            return 0;
+        }
+
         var clock = Stopwatch.StartNew();
         var limit = double.TryParse(Option(args, "--seconds"), out var seconds) ? seconds : double.PositiveInfinity;
         var demo = args.Contains("--demo");
@@ -1734,6 +1746,11 @@ internal static unsafe class Stage
         // The hall closed round (HallShell): walls, ceiling, windows and lamps, drawn but not traced.
         var (shellVertices, glassVertices, bulbVertices) = HallShell.Build(photographed: materialDir is not null);
         var (shell, shellGlass, shellBulbs) = (new Mesh(device, physical, shellVertices), new Mesh(device, physical, glassVertices), new Mesh(device, physical, bulbVertices));
+        // The roll-up door's curtain, and the streets of Ottawa behind it once fetched (StreetDoor, OttawaStreets).
+        var streetDoor = new StreetDoor();
+        var doorCurtain = new Mesh(device, physical, StreetDoor.Curtain());
+        Task<OttawaStreets.City?>? streetsLoading = null;
+        Mesh? streets = null;
         // The gallery on the left wall (HallGallery): the learn site's courses, demos and artifacts, from gallery.json
         // (--gallery FILE), drawn from Lego's blocks and redrawn when the file changes; a click on one opens its page.
         // What the demos and artifacts show inside their glasses (GalleryPictures, --pictures DIR), read first.
@@ -2887,7 +2904,21 @@ internal static unsafe class Stage
         // the cabinet that it falls on takes it.
         void Click(double x, double y, bool simulated = false)
         {
-            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y) && !TryReaderClick(x, y) && !TryGalleryClick(x, y)) TryCabinetClick(x, y, simulated);
+            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y) && !TryReaderClick(x, y) && !TryGalleryClick(x, y)
+                && !TryCabinetClick(x, y, simulated)) TryDoorClick(x, y);
+        }
+
+        // A click on the roll-up door opens it onto the streets of Ottawa, or closes it; the first opening fetches the
+        // streets (OttawaStreets), or reads them where they were kept.
+        bool TryDoorClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view) return false;
+            if (HallGallery.OnRect(view, StreetDoor.Frame, StreetDoor.Rect, extent.Width, extent.Height, x, y) is null) return false;
+            streetDoor.Toggle();
+            Console.WriteLine($"DOOR {(streetDoor.Open ? "opens" : "closes")}");
+            if (streetDoor.Open && streetsLoading is null) streetsLoading = OttawaStreets.Load();
+
+            return true;
         }
 
         // --wall-real, once a frame after the splash: once the office's reading names the session and its robot is drawn
@@ -3596,10 +3627,28 @@ internal static unsafe class Stage
                 camera.Move(time, default, dt); // a flight, a jump or a slide goes on
             }
 
+            // The roll-up door rolls; once the streets are fetched they are drawn behind it, and the camera may go out.
+            streetDoor.Step(dt);
+            camera.DoorOpen = streetDoor.Passing || camera.Outdoors;
+            if (streets is null && streetsLoading is { IsCompleted: true } loaded)
+            {
+                if (loaded.IsCompletedSuccessfully && loaded.Result is { } city)
+                {
+                    streets = new Mesh(device, physical, city.Vertices);
+                    Console.WriteLine($"DOOR streets of Ottawa: {city.Buildings} buildings, {city.Streets} streets, {city.Left} left out where the hall stands; {OttawaStreets.Attribution}");
+                }
+                else
+                {
+                    Console.Error.WriteLine($"DOOR streets of Ottawa not fetched: {loaded.Exception?.InnerException?.Message ?? "no answer"}");
+                    streetsLoading = null; // the next opening tries again
+                }
+            }
+
+            var outside = streetDoor.Openness > 0f || camera.Outdoors; // the streets in view: far away, the haze thinner
             var aspect = extent.Width / (float)extent.Height;
             var pose = film.Pose(aspect) ?? camera.View(time);
             var eye = pose.Eye;
-            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, 40f);
+            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, outside ? 350f : 40f);
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up) * projection;
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
@@ -3922,7 +3971,7 @@ internal static unsafe class Stage
             }
 
             videos?.Update(eye, hallGallery.Globes);
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? (outside ? Haze * 0.12f : Haze) : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
                 videos?.Projected ?? GalleryVideo.Projection.None);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
@@ -3936,7 +3985,7 @@ internal static unsafe class Stage
             if (tracer is not null && pathTracing && !splashing)
             {
                 tracer.Resize(extent.Width, extent.Height);
-                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? Haze : 0f, materials.Photographed,
+                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? (outside ? Haze * 0.12f : Haze) : 0f, materials.Photographed,
                     hazy && quality == Quality.Low ? new SN.Vector4(0.075f, 0.09f, 0.115f, 0f) : new SN.Vector4(0.006f, 0.005f, 0.005f, 0f));
             }
 
@@ -4049,6 +4098,9 @@ internal static unsafe class Stage
                 DrawLetThrough(cb, layout, shell, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 DrawLetThrough(cb, layout, shellGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
                 DrawLetThrough(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
+                DrawLetThrough(cb, layout, doorCurtain, new Push(streetDoor.World(), viewProj, default));
+                // The streets, out of the traced structure: a kilometre of city would swell it for what the door shows.
+                if (streets is not null && outside) DrawUntraced(cb, layout, streets, new Push(SN.Matrix4x4.Identity, viewProj, default));
                 // The gallery is traced too: under path tracing, what the structure lacks the picture lacks.
                 hallGallery.Draw((mesh, glow) => Draw(cb, layout, mesh, new Push(SN.Matrix4x4.Identity, viewProj, glow)), viewProj, Words.Language == "fr");
 
@@ -4714,6 +4766,8 @@ internal static unsafe class Stage
         knotRopes.Dispose();
         shell.Dispose();
         shellGlass.Dispose();
+        doorCurtain.Dispose();
+        streets?.Dispose();
         shellBulbs.Dispose();
         hallGallery.Dispose();
         foreach (var gallery in knots.Values)

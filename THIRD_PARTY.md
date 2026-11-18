@@ -73,6 +73,13 @@ NASA's endorsement. `tools/textures` (`-globes only` for the globe alone) downlo
 two halves, into `%LOCALAPPDATA%\delta\materials\globes\earth`, with `globe.json` holding its source, its credit and
 the download's SHA-256; neither this repository nor the release holds it.
 
+The streets of Ottawa behind the hall's roll-up door are OpenStreetMap's: © OpenStreetMap contributors, under the Open
+Database License (https://www.openstreetmap.org/copyright). The scene fetches them from the public Overpass server
+(overpass-api.de) the first time the door is opened, one request, and keeps the answer in
+`%LOCALAPPDATA%\delta\ottawa\overpass.json`, as the licence allows. Neither this repository nor the release holds it.
+The extrusion follows GeoTiles' `OsmBuildings.cs` (GuitarAlchemist/ga, `Experiments/Brutal/GeoTiles`, MIT, same
+authors).
+
 ## Ideas, not code
 
 The agents' office (`modules/AgentOffice`) takes its idea from

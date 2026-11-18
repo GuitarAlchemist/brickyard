@@ -629,6 +629,8 @@ internal sealed class Link(Func<double> clock)
         FreeCamera.SelfTest(Check);
         KnotFloor.SelfTest(Check);
         HallShell.SelfTest(Check, Stage.LowFragmentShader);
+        StreetDoor.SelfTest(Check);
+        OttawaStreets.SelfTest(Check);
         HallGallery.SelfTest(Check, Stage.LowFragmentShader);
         LearnLectern.SelfTest(Check);
         GlassWork.SelfTest(Check);
