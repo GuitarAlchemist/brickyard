@@ -2644,6 +2644,55 @@ OpenStreetMap ».
   - `--gym door|court`, and `--gym court --path-tracing`.
   - `--door inside --ride scooter`: OpenStreetMap at first, Google's tiles after 25 s, 430 requests.
 
+## The scene's improvement tree, slice 1: observe and judge (2026-11-18)
+
+The user: « peut on rajouter un systeme d'arbre de boucles agentiques (Decomposition recursive) qui regarde la scene et
+fait des ameliorations toute seule (En delegant des travaux en CI/CD dans des agents IA, et ensuite font les
+verifications toutes seules) ».
+
+Their three answers:
+- the agents run on this PC;
+- « aussi autonome que possible »: as autonomous as the standing rules allow, which means local commits only, with no
+  push and no live without their word;
+- the budget is the plan's tokens, not an API key.
+
+`tools/sceneloop` (Go), slice 1, changes nothing:
+
+- `observe` renders each reference view hidden:
+  - port 8899, never 8805;
+  - `--osm`, so that no request goes to Google;
+  - 1600x900.
+
+  It keeps each view's last picture and its frame rate in `shots.json`. The views are the hall, the office, the
+  gallery, the knots, the rope up close, the gymnasium and its door, the street and the wing from the air.
+- `critique` hands each picture to a judge.
+  - The judge is `claude -p` with a JSON schema, Read as its only tool, no MCP server and no session kept.
+  - Its environment has no ANTHROPIC_API_KEY, so the plan pays.
+  - Findings are ranked by severity times confidence into `findings.json` and `report.md`.
+- `run` does both, into a dated folder.
+- `go test` checks:
+  - that a hidden picture stays off 8805 and off Google;
+  - that the judge reads only and runs on the plan;
+  - the frame-rate line and the judge's envelope.
+
+The judge's first answer, on the gymnasium in 16 s (about 0.16 USD of the plan's tokens), was right that the lamps
+light nothing of their own and that the bleachers have no risers. It was also wrong in places: it wanted MSAA, which
+DLSS replaces, and it took the block for brick. The judge is the weak link, and slice 2's checks must not trust it
+alone.
+
+**Next slices.**
+- **Slice 2:** one finding goes to a worker, `claude -p` in a worktree on a `loop/…` branch with only the file tools.
+  `sceneloop` itself then:
+  - builds and runs the selftest;
+  - renders the finding's view before and after, and the other views against regressions;
+  - has a second judge compare before and after blind, in random order;
+  - holds a frame-rate floor.
+
+  It commits only what passes, retries once with the reasons, then gives up and writes them down.
+- **Slice 3:** a planner splits a large finding into smaller ones, up to depth 3. A parent passes only when its
+  children do.
+- Each pass is capped in agents. Its branch waits for the user's word to go live.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
