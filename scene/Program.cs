@@ -1993,13 +1993,13 @@ internal static unsafe class Stage
         var validatedStore = Option(args, "--module-dir") is null
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "modules", "gaia", "validated")
             : Path.Combine(moduleRoot, "validated");
-        SceneModuleHost<Mesh>? gaiaModule = null;
+        SceneModuleHost<ModuleSurface>? gaiaModule = null;
         Dictionary<string, Mesh>? gaiaFallback = null;
         try
         {
-            gaiaModule = new SceneModuleHost<Mesh>(Path.Combine(moduleRoot, "initial", "GaiaPresence.Module.dll"),
+            gaiaModule = new SceneModuleHost<ModuleSurface>(Path.Combine(moduleRoot, "initial", "GaiaPresence.Module.dll"),
                 Path.Combine(moduleRoot, "available", "GaiaPresence.Module.dll"), Words.Language,
-                (visual, triangles, presentation) => new Mesh(device, physical, SceneModuleGeometry.Compile(visual, triangles, presentation)), () => device.WaitIdle(), validatedStore);
+                (visual, triangles, presentation) => ModuleSurface.Make(SceneModuleGeometry.Compile(visual, triangles, presentation), v => new Mesh(device, physical, v)), () => device.WaitIdle(), validatedStore);
             Console.WriteLine($"MODULE gaia loaded code v{gaiaModule.Version.ToString(2)}; pid {Environment.ProcessId}; sha256 {gaiaModule.CodeHash}");
         }
         catch (Exception error)
@@ -2024,6 +2024,13 @@ internal static unsafe class Stage
         var officeDragMoved = 0.0;
         const double DragSlop = 6, TurnPerWidth = Math.PI;
         var officeSpin = new OfficeSpin(); // and coasts on once let go
+        // Gaia's planet, pressed and dragged sideways, turns about its axis and coasts on as the rings do (GaiaTurn).
+        var gaiaHeld = false;
+        (double X, double Y) gaiaFrom = default, gaiaAt = default;
+        var gaiaMoved = 0.0;
+        var gaiaSpin = new OfficeSpin();
+        var gaiaTurns = new Dictionary<string, double>();
+        var gaiaEye = SN.Vector3.Zero;
         var officeSpinAt = double.NaN;
         SN.Matrix4x4? officeView = null; // the frame's camera for clicks; none during the splash
         SN.Matrix4x4? chestView = null; // the last frame's torso transform and camera, for a click on Delta's chest screen
@@ -3083,6 +3090,11 @@ internal static unsafe class Stage
                 ? null
                 : WidgetPicking.Pick(officeStage.Hits, view, extent.Width, extent.Height, x, y);
 
+        // Whether a press at (x, y) takes Gaia's planet, to turn it (GaiaTurn).
+        bool GaiaPlanetAt(double x, double y) =>
+            !(shelf.Open || pairingShown || invitationShown || notesShown) && officeView is { } view
+            && gaiaModule?.Surface is { Turning: not null } surface && GaiaTurn.Hit(view, surface.Centre, surface.Radius, extent.Width, extent.Height, x, y);
+
         // A click on the lectern's book: its outline, its arrows or its links (LearnReader).
         bool TryReaderClick(double x, double y)
         {
@@ -3435,6 +3447,20 @@ internal static unsafe class Stage
                 return;
             }
 
+            // Gaia's planet let go: a click if the mouse hardly moved, else it coasts on.
+            if (action == GlfwButtonAction.Release && button == 0 && gaiaHeld)
+            {
+                gaiaHeld = false;
+                if (gaiaMoved < DragSlop) Click(gaiaFrom.X, gaiaFrom.Y);
+                else
+                {
+                    gaiaSpin.Release(GaiaTurn.Key);
+                    Console.WriteLine($"MODULE gaia planet turned by hand: {gaiaTurns.GetValueOrDefault(GaiaTurn.Key):F2} rad in all");
+                }
+
+                return;
+            }
+
             // In the game, a left click away from the cabinet leaves it, as Esc does; one on it is the game's.
             if (cabinet.Playing && action == GlfwButtonAction.Press && button == 0 && !locked)
             {
@@ -3533,6 +3559,11 @@ internal static unsafe class Stage
                     // Held: the release decides between a click and a turn (the frame loop turns it meanwhile).
                     (officeDrag, officeDragFrom, officeDragAt, officeDragMoved) = (robot, (cx, cy), (cx, cy), 0);
                     officeSpin.Take(robot);
+                }
+                else if (GaiaPlanetAt(cx, cy))
+                {
+                    (gaiaHeld, gaiaFrom, gaiaAt, gaiaMoved) = (true, (cx, cy), (cx, cy), 0);
+                    gaiaSpin.Take(GaiaTurn.Key);
                 }
                 else
                 {
@@ -3961,6 +3992,30 @@ internal static unsafe class Stage
 
             officeSpin.Step(officeTurns, spinDt);
 
+            // Gaia's planet held: it follows the mouse sideways past the slop, the hand on its surface.
+            if (gaiaHeld)
+            {
+                var (dx, dy) = (window.CursorX * extent.Width / Math.Max(1, window.Width), window.CursorY * extent.Height / Math.Max(1, window.Height));
+                gaiaMoved = Math.Max(gaiaMoved, Math.Abs(dx - gaiaFrom.X) + Math.Abs(dy - gaiaFrom.Y));
+                var turned = 0.0;
+                if (gaiaMoved >= DragSlop && dx != gaiaAt.X && officeView is { } seen && gaiaModule?.Surface is { } planet)
+                {
+                    turned = GaiaTurn.Turned(seen, gaiaEye, planet.Centre, planet.Radius, extent.Width, extent.Height, dx - gaiaAt.X);
+                    gaiaTurns[GaiaTurn.Key] = gaiaTurns.GetValueOrDefault(GaiaTurn.Key) + turned;
+                    tour.Touch(now);
+                }
+
+                gaiaSpin.Follow(turned, spinDt);
+                gaiaAt = (dx, dy);
+                if (!window.IsFocused || wheel.Open || shelf.Open)
+                {
+                    gaiaHeld = false;
+                    gaiaSpin.Release(GaiaTurn.Key);
+                }
+            }
+
+            gaiaSpin.Step(gaiaTurns, spinDt);
+
             if (!shelf.Open && !film.Playing && !cabinet.Playing && (window.IsFocused || walkHeld.Count > 0))
             {
                 bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press || walkHeld.Contains(key);
@@ -4046,6 +4101,7 @@ internal static unsafe class Stage
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up) * projection;
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
             officeView = splashing ? null : viewProj;
+            gaiaEye = eye;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
             if (wallTest && !splashing) WallTest(linkNow);
@@ -4479,7 +4535,12 @@ internal static unsafe class Stage
                 cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
                 clocks.Draw((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)), DateTimeOffset.Now);
                 cabinet.DrawMeshes((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)));
-                if (gaiaModule is not null) Draw(cb, layout, gaiaModule.Surface, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                if (gaiaModule is not null)
+                {
+                    Draw(cb, layout, gaiaModule.Surface.Rest, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                    if (gaiaModule.Surface.Turning is { } planet)
+                        Draw(cb, layout, planet, new Push(GaiaTurn.World(gaiaModule.Surface.Centre, gaiaTurns.GetValueOrDefault(GaiaTurn.Key)), viewProj, default));
+                }
                 else if (gaiaFallback is not null) Draw(cb, layout, gaiaFallback[GaiaPresence.Status], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 for (var i = 0; i < parts.Length; i++)
                 {

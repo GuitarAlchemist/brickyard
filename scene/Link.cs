@@ -641,6 +641,7 @@ internal sealed class Link(Func<double> clock)
         MaterialTextures.SelfTest(Check);
         GalleryVideo.SelfTest(Check);
         OfficeSpin.SelfTest(Check);
+        GaiaTurn.SelfTest(Check);
         SessionQuestion.SelfTest(Check);
         // A session file's pid that now names a process this user cannot open (a protected one: HasExited throws Access
         // denied) is answered as gone, not thrown.

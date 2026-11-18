@@ -308,7 +308,8 @@ public sealed class OfficeModule : IOfficeModule
             var robot = p + "/robot";
             var torso = robot + "/torso";
             var head = torso + "/head";
-            poses[p + "/screen"] = SceneModules.Pose.Lit(glow * 0.8f);
+            poses[p + "/screen-l"] = SceneModules.Pose.Lit(glow * 0.8f);
+            poses[p + "/screen-r"] = SceneModules.Pose.Lit(glow * 0.8f);
             foreach (var eye in new[] { "/eye-l", "/eye-r", "/tip" }) poses[head + eye] = SceneModules.Pose.Lit(glow);
             if (s.Activity == OfficeActivity.Waiting) poses[head + "/beacon/light"] = SceneModules.Pose.Lit(blink ? new(1f, 0.12f, 0.08f, 1.6f) : default);
             else poses[head + "/beacon"] = SceneModules.Pose.Off;
@@ -602,13 +603,20 @@ public sealed class OfficeModule : IOfficeModule
                 new AttachPiece("torso", "shoulder-r", new("arm-r", Arm, SN.Matrix4x4.Identity, new Dictionary<string, WidgetValue> { ["side"] = 1.0 })),
             ])),
 
-        // A desk with a keyboard, a monitor whose screen faces right, toward the camera, and a stool; the seat is an anchor.
+        // A desk with a keyboard, two monitors side by side facing the robot (their screens to -Z), and a stool; the seat
+        // is an anchor. (Before 2026-11-18 one monitor stood side on, its screen to the camera: « corrige l'orientation des
+        // ecrans de petits robots et donne leur 2 ecrans chacun ». The monitors stay square to the desk: turned, each would
+        // be a widget of its own, and 48 stations would pass the scene's 2048 instances.)
         new(Desk, [],
             _ => new([
                 B(0, 0.3f, 0, 0.3f, 0.025f, 0.18f, Wood, 0), B(-0.135f, 0.145f, 0, 0.02f, 0.29f, 0.16f, Steel, 3), B(0.135f, 0.145f, 0, 0.02f, 0.29f, 0.16f, Steel, 3),
                 B(0, 0.2f, 0.086f, 0.28f, 0.17f, 0.008f, Dark, 3), B(0.01f, 0.319f, -0.02f, 0.12f, 0.012f, 0.045f, Dark, 4),
-                B(-0.11f, 0.385f, -0.01f, 0.015f, 0.11f, 0.15f, Aluminium, 2), B(-0.11f, 0.322f, -0.01f, 0.05f, 0.01f, 0.06f, Aluminium, 2),
-                Lamp("screen", new(-0.1015f, 0.39f, -0.01f), 0.002f, 0.09f, 0.13f),
+                .. new[] { -0.07f, 0.07f }.SelectMany(x => new Piece[]
+                {
+                    B(x, 0.3175f, 0.057f, 0.06f, 0.01f, 0.045f, Aluminium, 2), B(x, 0.3525f, 0.065f, 0.015f, 0.06f, 0.01f, Aluminium, 2),
+                    B(x, 0.3925f, 0.053f, 0.13f, 0.09f, 0.012f, Dark, 4),
+                    Lamp(x < 0 ? "screen-l" : "screen-r", new(x, 0.3925f, 0.0455f), 0.12f, 0.08f, 0.003f),
+                }),
                 B(0, 0.08f, -0.14f, 0.03f, 0.16f, 0.03f, Steel, 3), B(0, 0.17f, -0.14f, 0.12f, 0.025f, 0.11f, Dark, 4),
             ], new Dictionary<string, SN.Matrix4x4> { ["seat"] = SN.Matrix4x4.CreateTranslation(0f, 0f, -0.14f) })),
 

@@ -2710,6 +2710,30 @@ The user: « les murs manquent de relief et on a des lampes plantees sur l'ecran
   The formwork fades where a panel's joint would be under a pixel. The path tracer does not draw it.
 - **Seen hidden.** `--view 8`: the screen is clear and the panels and holes read on the wall, 53 fps at 1600x900.
 
+## Gaia's planet turned by hand, and two screens facing each small robot (2026-11-18)
+
+The user: « je veux pouvoir faire tourner gaia (Avec un peu d'inertie comme les petits robots) », then « corrige
+l'orientation des ecrans de petits robots et donne leur 2 ecrans chacun ».
+
+- **Gaia.** The host now splits a module's triangles painted with an image (the planet) from its labels and boxes
+  (`SceneModuleGeometry.Split`, `ModuleSurface`) and draws them turned about their centre.
+  - A press on the planet and a sideways drag turn it, as if the hand held the point of its surface facing the eye
+    (`GaiaTurn`).
+  - Let go, it coasts on and slows as the office's rings do (`OfficeSpin`). A press that hardly moves is still a click.
+  - The module (1.3) is unchanged. The ring stays still.
+- **The small robots' desks.** The one monitor stood side on, its screen to the camera. Each desk now has two monitors
+  side by side, square to the desk, their screens facing the robot.
+  - Each screen is lit by the session's glow, as the old one was.
+  - Turned toward the robot, each monitor would have been a widget of its own: 48 stations then passed the scene's 2048
+    instances (widget-tests). Square to the desk, they cost one instance more a station.
+- **Checked.**
+  - `SELFTEST ok`, with GaiaTurn's checks: the hit, the hand leading from the front and from behind, the turn about
+    the centre.
+  - `check-widgets.ps1` passes.
+  - Hidden `--view 2` with the office module, and `--view 1` with Gaia 1.3 in an isolated `--module-dir`: the screens
+    face the robots, and the planet is drawn in its place.
+  - Not checked: a drag by hand in the live window.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
