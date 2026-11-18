@@ -74,8 +74,12 @@ internal static class HallShell
             Window(o, glass, new(Left, 3.7f, z), SN.Vector3.UnitX, SN.Vector3.UnitZ, 2.2f, 1.2f, steel, pane);
         }
 
-        Window(o, glass, new(Right, 3.75f, -1.4f), -SN.Vector3.UnitX, -SN.Vector3.UnitZ, 2.4f, 1.6f, steel, pane);
-        Window(o, glass, new(Right, 3.75f, 2.6f), -SN.Vector3.UnitX, -SN.Vector3.UnitZ, 2.0f, 1.6f, steel, pane);
+        // The right wall's two give onto the gymnasium (Gymnasium) since it was built: their panes are frosted, lit by the
+        // hall like the wall and glowing with no daylight, so that nothing seems to show through them (the user,
+        // 2026-11-18: « je veux que la fenêtre sur le gymnase ne soit pas transparente »).
+        var frosted = new Finish(new(0.5f, 0.52f, 0.53f), Material.Matte);
+        Window(o, o, new(Right, 3.75f, -1.4f), -SN.Vector3.UnitX, -SN.Vector3.UnitZ, 2.4f, 1.6f, steel, frosted);
+        Window(o, o, new(Right, 3.75f, 2.6f), -SN.Vector3.UnitX, -SN.Vector3.UnitZ, 2.0f, 1.6f, steel, frosted);
         foreach (var x in new[] { 1.6f, 4.4f })
         {
             Window(o, glass, new(x, 2.6f, Front), -SN.Vector3.UnitZ, SN.Vector3.UnitX, 1.8f, 2.4f, steel, pane);

@@ -486,25 +486,36 @@ internal static unsafe class Stage
             }
             else if (vMaterial == 6u)
             {
-                // A laid rope's strand (Material.Rope; Edge: along it in metres, round it, its radius, a seed): four
-                // yarns twisted against the strand's lay, each a ridge that the light catches, the grooves between them
-                // darker, each yarn its own tone, and the fibres along it. Where a yarn is under two pixels the relief
-                // fades to the strand's own round, so that nothing shimmers.
+                // A laid rope's strand (Material.Rope; Edge: along it in metres, round it, its radius, a seed): five
+                // yarns twisted against the strand's lay, so that on the rope's outside they run nearly along it, as in
+                // a real hawser-laid rope. Each yarn is round, between narrow dark grooves, its own tone; on it the
+                // fibres run along the yarn, and the loose hairs catch the light at grazing. The rope's tone wanders
+                // along it, as a natural fibre's does. Where a yarn is under two pixels the relief fades to the
+                // strand's own round, so that nothing shimmers. A negative radius is a rope's whipping instead
+                // (KnotFloor.Whip): rings of twine round it, that far apart.
                 vec3 t = normalize(vTangent - face * dot(vTangent, face));
                 vec3 circum = cross(t, face);
-                float rs = max(vEdge.z, 1e-4);
-                float pitch = rs * 9.0;
-                float phase = 4.0 * vEdge.y + 6.2831853 * vEdge.x / pitch;
+                float rs = max(abs(vEdge.z), 1e-4);
+                float starts = vEdge.z < 0.0 ? 0.0 : 5.0;
+                float pitch = vEdge.z < 0.0 ? rs : rs * 7.0;
+                float phase = starts * vEdge.y + 6.2831853 * vEdge.x / pitch;
                 float detail = 1.0 - smoothstep(0.6, 1.6, fwidth(phase));
-                vec3 slope = circum * (4.0 / rs) + t * (6.2831853 / pitch);
-                n = normalize(face + 0.15 * rs * sin(phase) * slope * detail);
-                float crest = 0.5 + 0.5 * cos(phase);
+                float across = fract(phase / 6.2831853) * 2.0 - 1.0; // from one groove to the next, -1 to 1
+                float height = sqrt(max(1.0 - across * across, 0.0));
+                float lean = clamp(-across / max(height, 0.3), -2.5, 2.5);
+                vec3 slope = normalize(circum * (starts / rs) + t * (6.2831853 / pitch));
+                n = normalize(face + 0.3 * lean * slope * detail);
                 float yarn = floor(phase / 6.2831853);
-                float tone = 0.9 + 0.12 * fract(sin(yarn * 12.9898 + vEdge.w * 78.233) * 43758.5453);
-                float fibre = phase * 6.0 + 1.7 * sin(vEdge.x / rs * 3.1 + vEdge.w);
-                float fibres = 1.0 + 0.09 * sin(fibre) * (1.0 - smoothstep(0.8, 2.0, fwidth(fibre)));
-                base = vColor * mix(1.0, tone * fibres, detail) * mix(0.8, mix(0.6, 1.06, crest), detail);
-                occlusion = mix(1.0, mix(0.72, 1.0, crest), detail);
+                float tone = 0.86 + 0.2 * fract(sin(yarn * 12.9898 + vEdge.w * 78.233) * 43758.5453);
+                float fibre = phase * 9.0 + 2.3 * sin(vEdge.x / rs * 2.3 + yarn * 1.7 + vEdge.w);
+                float fibres = 1.0 + 0.16 * sin(fibre) * (1.0 - smoothstep(0.8, 2.0, fwidth(fibre)));
+                float wander = 1.0 + 0.07 * sin(vEdge.x * 9.0 + vEdge.w * 3.1) * sin(vEdge.x * 23.0 + vEdge.w);
+                float hairs = pow(1.0 - max(dot(face, v), 0.0), 3.0);
+                // The grooves are the fibre in shadow, warmer and deeper than grey.
+                vec3 groove = mix(vec3(0.5, 0.4, 0.3), vec3(1.0), sqrt(height));
+                base = vColor * wander * mix(1.0, tone * fibres, detail) * mix(vec3(0.85), groove * 1.05, detail);
+                base += vColor * vec3(0.28, 0.22, 0.15) * hairs * mix(0.5, 1.0, height);
+                occlusion = mix(1.0, mix(0.6, 1.0, sqrt(height)), detail);
                 m = materials[6];
             }
             else if (vMaterial == 20u)
@@ -2504,6 +2515,21 @@ internal static unsafe class Stage
                 _ => (new SN.Vector3(Gymnasium.Left + 1.2f, 1.8f, 4.6f), new SN.Vector3(Gymnasium.Right - 2f, 1.6f, -4f)),
             };
             camera.GoTo(gymEye, gymTarget, cut: true);
+        }
+
+        // --knots table|near|close|wall: the first knots on the hall's side table (KnotFloor) from the walkway, nearer,
+        // a hand's length from the rope, or the end wall's table and the windows over it; for hidden checks.
+        if (Option(args, "--knots") is { } knotShot)
+        {
+            var top = KnotFloor.TableTop;
+            var (knotEye, knotTarget) = knotShot switch
+            {
+                "close" => (new SN.Vector3(4.52f, top + 0.09f, 0.62f), new SN.Vector3(4.36f, top, 0.56f)),
+                "near" => (new SN.Vector3(4.85f, top + 0.3f, 0.6f), new SN.Vector3(4.35f, top, 0.35f)),
+                "wall" => (new SN.Vector3(4.75f, KnotFloor.Level + FreeCamera.WalkHeight, -1.2f), new SN.Vector3(6.25f, 3.3f, -1.6f)),
+                _ => (new SN.Vector3(5.05f, KnotFloor.Level + FreeCamera.WalkHeight, 0.6f), new SN.Vector3(4.35f, top, -0.6f)),
+            };
+            camera.GoTo(knotEye, knotTarget, cut: true);
         }
         var film = filmDir is null || origamiFilmed ? new Cinematic { ReducedMotion = reducedMotion } : new Cinematic(ArcadeFilm.Shots, ArcadeFilm.Heading); // 0, or --cinematic once the splash is over
         var arcadeFilm = filmDir is null || origamiFilmed ? null : new ArcadeFilm(camera, film);

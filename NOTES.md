@@ -2595,6 +2595,26 @@ hall's right, 34 m by 24 m and 9 m high inside, its front flush with the hall's 
   - Seen hidden with `--gym court|door|stands`, and from the air with `--door wing`, at about 50 fps hidden.
   - Not yet seen: the wing under path tracing, a ride through the door, and the live window.
 
+### Real rope on the knots' floor, and frosted windows onto the gymnasium (2026-11-18)
+
+The user: « arrange moi mes noeuds marins pour avoir de la vraie corde » (with a Blender rope tutorial), then « je veux
+que la fenêtre sur le gymnase ne soit pas transparente ».
+
+- **The rope.** Each strand has 10 sides instead of 7, so that a close look shows no facets. The shader (Material.Rope)
+  draws five round yarns per strand between narrow grooves, warm in their shadow rather than grey, with fibres along
+  each yarn, a tone that wanders along the rope, and loose hairs that catch the light at grazing angles.
+- **Whipped ends.** Each open rope ends in a band of dark tarred twine, 3 radii long, wound round the three strands
+  and carried 0.45 radii past their slanting cuts (KnotFloor.Whip). The shader draws its turns as rings: a negative
+  Edge.z gives it the twine's pitch instead of a strand's radius.
+- **The windows.** The right wall's two windows now give onto the gymnasium. Their panes are frosted, lit like the wall
+  and no longer glowing with daylight (HallShell).
+- **Checks.**
+  - SelfTest: the strands stay within the rope's radius, and both ends are whipped, the twine within 1.15 radii of
+    the path.
+  - Seen hidden with the new `--knots table|near|close|wall` views.
+  - Rope vertices went from 1.18 to 1.69 million. Hidden, with the live window running beside it, the knots in view
+    took the frame rate from 48 to 44 fps.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

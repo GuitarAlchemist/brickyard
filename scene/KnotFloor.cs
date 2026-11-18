@@ -880,7 +880,7 @@ internal static class KnotFloor
                 }
                 else
                 {
-                    Laid(o, [.. shown[r].Points.Select(lay.World)], k.Radius * lay.Scale, (i * 8) + r);
+                    Laid(o, [.. shown[r].Points.Select(lay.World)], k.Radius * lay.Scale, (i * 8) + r, shown[r].Closed);
                 }
             }
         }
@@ -999,13 +999,17 @@ internal static class KnotFloor
     // the path (Z-laid, one turn in 3.1 diameters), each strand's centre 0.42 of the radius off the path and its radius
     // 0.58, so that the strands press into each other and the rope never reaches beyond its radius. Each strand's yarns
     // and fibres are the shader's (Material.Rope: Edge holds the place along the strand and round it, and its radius);
-    // the vertices carry the hemp's colour, darker where the strands meet.
+    // the vertices carry the hemp's colour, darker where the strands meet. An open rope's ends are whipped, as a sailor
+    // finishes them so that they do not fray: a band of tarred twine wound tight round the three strands, 1.5
+    // diameters long, the cut showing at its end (the user, 2026-11-18: « arrange moi mes noeuds marins pour avoir de la
+    // vraie corde »).
     private const float LayPitch = 6.2f; // radii to a strand's full turn
     private const float StrandOffset = 0.42f, StrandRadius = 0.58f;
-    private const int StrandSides = 7;
-    private static readonly SN.Vector3 Hemp = new(0.72f, 0.58f, 0.4f), Oak = new(0.62f, 0.42f, 0.24f);
+    private const int StrandSides = 10;
+    private const float WhipLength = 3f, WhipRadius = 1.03f, TwineTurn = 0.16f; // in rope radii: the band, round it, a turn of twine
+    private static readonly SN.Vector3 Hemp = new(0.72f, 0.58f, 0.4f), Oak = new(0.62f, 0.42f, 0.24f), Twine = new(0.2f, 0.15f, 0.1f);
 
-    internal static void Laid(List<Vertex> o, SN.Vector3[] path, float r, int seed)
+    internal static void Laid(List<Vertex> o, SN.Vector3[] path, float r, int seed, bool closed = false)
     {
         var axis = Resample(Smooth(path), r * LayPitch / 9f);
         if (axis.Length < 2)
@@ -1050,6 +1054,50 @@ internal static class KnotFloor
             Cap(o, centres, rs, Hemp * 0.55f, atEnd: false);
             Cap(o, centres, rs, Hemp * 0.55f, atEnd: true);
         }
+
+        if (!closed && run[^1] > 4 * WhipLength * r)
+        {
+            Whip(o, axis, run, r, seed, atEnd: false);
+            Whip(o, axis, run, r, seed, atEnd: true);
+        }
+    }
+
+    // A whipping at one end of a rope: a tube of twine round the axis's last WhipLength radii, its turns the shader's
+    // ridges (Material.Rope with a radius such that a yarn's pitch is a turn of twine), and the cut across its end.
+    private static void Whip(List<Vertex> o, SN.Vector3[] axis, float[] run, float r, int seed, bool atEnd)
+    {
+        var length = run[^1];
+        var band = axis.Where((_, j) => atEnd ? run[j] >= length - (WhipLength * r) : run[j] <= WhipLength * r).ToArray();
+        if (band.Length < 2)
+        {
+            return;
+        }
+
+        var from = atEnd ? length - (WhipLength * r) : 0f;
+        var places = run.Where(d => atEnd ? d >= from : d <= WhipLength * r).ToArray();
+        // Carried a little past the rope's end, over the strands' slanting cuts.
+        const float past = 0.45f;
+        if (atEnd)
+        {
+            band = [.. band, band[^1] + (SN.Vector3.Normalize(band[^1] - band[^2]) * past * r)];
+            places = [.. places, places[^1] + (past * r)];
+        }
+        else
+        {
+            band = [band[0] + (SN.Vector3.Normalize(band[0] - band[1]) * past * r), .. band];
+            places = [places[0] - (past * r), .. places];
+            from = places[0];
+        }
+        var rw = WhipRadius * r;
+        // A negative radius tells the shader the pitch of a ring of twine instead of a strand's radius.
+        var turns = new SN.Vector4(0f, 0f, -TwineTurn * r, (seed * 3) + 7);
+        Sweep(o, band, closed: false, 14, j =>
+        {
+            // Rounded where the twine starts and ends, on the strands.
+            var d = MathF.Min(places[j] - places[0], places[^1] - places[j]) / r;
+            return rw * (0.93f + (0.07f * MathF.Min(1f, d / 0.25f)));
+        }, (j, angle, _) => (Twine, Material.Rope, turns with { X = places[j] - from, Y = angle }));
+        Cap(o, band, rw, Hemp * 0.5f, atEnd);
     }
 
     // A post or ring in turned oak: a spar straight through its points, carried past its ends; a ring round its own.
@@ -1345,7 +1393,8 @@ internal static class KnotFloor
             var one = new Marins([good.Knots[0]], "");
             var lay = Layout(one)[0];
             var axis = Show(good.Knots[0])[0].Points.Select(lay.World).ToArray();
-            var strands = BuildKnots(one).Where(v => v.Material == Material.Rope).ToArray();
+            var laid = BuildKnots(one).Where(v => v.Material == Material.Rope).ToArray();
+            var (strands, twine) = (laid.Where(v => v.Edge.Z > 0f).ToArray(), laid.Where(v => v.Edge.Z < 0f).ToArray());
             float Off(SN.Vector3 p) => Enumerable.Range(0, 400).Min(i =>
             {
                 var u = i / 399f * (axis.Length - 1);
@@ -1354,6 +1403,13 @@ internal static class KnotFloor
             });
             var farthest = strands.Where((_, i) => i % 97 == 0).Max(v => Off(v.Pos));
             Check(strands.Length > 1000 && farthest <= RopeRadius * 1.05f, $"a rope is three strands within its radius of its path ({farthest * 1000:F2} mm for {RopeRadius * 1000:F0})");
+            // Its two ends whipped: twine round the path's first and last 3 radii, hardly beyond the rope's radius.
+            var (head, tail) = (axis[0], axis[^1]);
+            var whipped = twine.Select(v => MathF.Min(SN.Vector3.Distance(v.Pos, head), SN.Vector3.Distance(v.Pos, tail))).ToArray();
+            var twineOff = twine.Where((_, i) => i % 13 == 0).Max(v => Off(v.Pos));
+            Check(twine.Length > 0 && whipped.Max() <= RopeRadius * (WhipLength + WhipRadius + 0.2f) && twineOff <= RopeRadius * 1.15f
+                && twine.Any(v => SN.Vector3.Distance(v.Pos, head) < 2 * RopeRadius) && twine.Any(v => SN.Vector3.Distance(v.Pos, tail) < 2 * RopeRadius),
+                $"a rope's two ends are whipped, the twine {whipped.Max() / RopeRadius:F2} radii from its end at most and {twineOff / RopeRadius:F2} from its path");
             var lowest = knots.Min(v => v.Pos.Y);
             Check(knots.Any(v => v.Material == Material.Wood) && knots.All(v => float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z) && MathF.Abs(v.Normal.Length() - 1) < 1e-3f)
                 && lowest >= TableTop - 0.001f && lowest < TableTop + 0.002f, $"a hitch's spar is wood, and each knot lies on the table's top ({(lowest - TableTop) * 1000:F2} mm)");
