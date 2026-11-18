@@ -2693,6 +2693,22 @@ alone.
   children do.
 - Each pass is capped in agents. Its branch waits for the user's word to go live.
 
+**Slice 2, written (2026-11-18), not yet run end to end.** `sceneloop fix -repo <checkout> -findings <run>/findings.json
+-n <rank> -exe <base scene.exe> -out <dir>`:
+- It makes a worktree beside the checkout, on a new `loop/<date>-<view>-<title>` branch from HEAD, so the work in
+  progress in the checkout stays out of it.
+- The worker is `claude -p` (opus by default) in that worktree. It has Read, Edit, Write, Glob and Grep only, the run's
+  folder readable, no MCP server and no session kept. It runs on the plan.
+- sceneloop then checks the change:
+  - only scene/ and gallery/, never the lock file, the project file, Google's tiles or GeoTiles, at most 400 lines;
+  - the build and `SELFTEST ok`;
+  - every view rendered before (the base) and after;
+  - a blind judge on the finding's view (a.png and b.png in a random order, the order kept in `order.txt`);
+  - a blind judge on each other view whose picture moved by more than 4/255;
+  - each view at 85% of its frame rate or more.
+- A change that passes is committed on the loop branch. One that fails goes back once with the reasons, from the base;
+  then the pass gives up and writes the reasons in `outcome.json`. The worktree stays for a look either way.
+
 ## The gallery's screen without a lamp through it, and formwork on the concrete (2026-11-18)
 
 The user: « les murs manquent de relief et on a des lampes plantees sur l'ecran de projection ».

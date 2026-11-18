@@ -72,7 +72,7 @@ type Finding struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: sceneloop observe|critique|run [flags]")
+		fmt.Fprintln(os.Stderr, "usage: sceneloop observe|critique|run|fix [flags]")
 		os.Exit(2)
 	}
 
@@ -83,6 +83,10 @@ func main() {
 	model := fs.String("model", "sonnet", "the judge's model")
 	parallel := fs.Int("parallel", 3, "judges at once")
 	seconds := fs.Int("seconds", 24, "seconds each hidden window runs")
+	repo := fs.String("repo", "", "fix: the repository whose HEAD the worktree starts from")
+	findingsPath := fs.String("findings", "", "fix: a run's findings.json")
+	n := fs.Int("n", 1, "fix: which finding, 1 the most severe")
+	workerModel := fs.String("worker-model", "opus", "fix: the worker's model")
 	_ = fs.Parse(os.Args[2:])
 
 	views, err := pick(*only)
@@ -103,6 +107,9 @@ func main() {
 		if _, err = observe(*exe, dir, views, *seconds); err == nil {
 			_, err = critique(dir, *model, *parallel)
 		}
+	case "fix":
+		need(*exe != "" && *out != "" && *repo != "" && *findingsPath != "", "fix needs -exe (the base build), -out, -repo and -findings")
+		err = fixCommand(*repo, *findingsPath, *n, *exe, *out, *workerModel, *model, *seconds, views)
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
