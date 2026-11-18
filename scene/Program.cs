@@ -724,6 +724,9 @@ internal static unsafe class Stage
         """;
 
     private const float Haze = 0.06f; // the haze's density per metre past its first 3 m: about half the light through at 15 m
+    // The streets' haze, much thinner: about half the light through at 290 m. At 0.12 of the hall's (half at 96 m) the
+    // Parliament's towers faded into a white mist (the user, 2026-11-18: « je veux moins de brouillard »).
+    private const float StreetHaze = Haze * 0.04f;
     private static readonly float4 HazeColor = new(0.075f, 0.09f, 0.115f, 1f); // the shader's haze() colour
     private static readonly float4 DaySky = new(0.42f, 0.55f, 0.75f, 1f); // its day colour over the streets of Ottawa (OttawaStreets)
 
@@ -4161,7 +4164,7 @@ internal static unsafe class Stage
             }
 
             videos?.Update(eye, hallGallery.Globes);
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? (outside ? Haze * 0.12f : Haze) : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? (outside ? StreetHaze : Haze) : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
                 videos?.Projected ?? GalleryVideo.Projection.None);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
@@ -4175,7 +4178,7 @@ internal static unsafe class Stage
             if (tracer is not null && pathTracing && !splashing)
             {
                 tracer.Resize(extent.Width, extent.Height);
-                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? (outside ? Haze * 0.12f : Haze) : 0f, materials.Photographed,
+                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? (outside ? StreetHaze : Haze) : 0f, materials.Photographed,
                     hazy && quality == Quality.Low ? new SN.Vector4(0.075f, 0.09f, 0.115f, 0f) : new SN.Vector4(0.006f, 0.005f, 0.005f, 0f));
             }
 
