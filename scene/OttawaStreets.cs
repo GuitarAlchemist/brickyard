@@ -128,7 +128,8 @@ internal static class OttawaStreets
         return a + (t * ab);
     }
 
-    internal sealed record City(Vertex[] Vertices, Placement Placement, int Buildings, int Streets, int Left);
+    // Footprints: the buildings standing on the ground, (x, z) in the hall's frame, which the walking body keeps out of.
+    internal sealed record City(Vertex[] Vertices, Placement Placement, int Buildings, int Streets, int Left, IReadOnlyList<SN.Vector2[]> Footprints);
 
     // The city of an Overpass answer in the hall's frame: each building's walls and roof, each street a ribbon on the
     // ground; Left counts the buildings left out because they reach the hall.
@@ -139,6 +140,7 @@ internal static class OttawaStreets
         var placement = Place([.. ways.Select(w => (w.Tags, w.Points))]);
         var o = new List<Vertex>();
         var (buildings, streets, left) = (0, 0, 0);
+        var footprints = new List<SN.Vector2[]>();
         foreach (var way in ways.Where(w => w.Tags.ContainsKey("highway")))
         {
             var (width, colour, y) = Street(way.Tags["highway"]);
@@ -160,6 +162,7 @@ internal static class OttawaStreets
             ring.RemoveAt(ring.Count - 1);
             if (Reaches(ring)) { left++; continue; }
             var (bottom, top) = Heights(way.Tags);
+            if (bottom < 2) footprints.Add([.. ring]); // what overhangs higher than a head is walked under
             Extrude(o, ring, (float)bottom * FreeCamera.Scale, (float)top * FreeCamera.Scale, Stone(way.Points[0]));
             buildings++;
         }
@@ -167,7 +170,20 @@ internal static class OttawaStreets
         // The ground: a square of pavement a kilometre across, just under the hall's floor.
         var g = new Finish(new(0.3f, 0.3f, 0.29f), Material.Matte);
         Boxes.Add(o, new(HallShell.DoorX, -0.06f, HallShell.Front), new(1200f, 0.1f, 1200f), g);
-        return new([.. o], placement, buildings, streets, left);
+        Plaque(o);
+        return new([.. o], placement, buildings, streets, left, footprints);
+    }
+
+    // The data's attribution, as ODbL asks, on a dark plaque on the hall's front wall beside the door, facing the street,
+    // at eye height: drawn with the streets, so it shows whenever they do.
+    internal static readonly SN.Vector3 PlaqueAt = new(HallShell.DoorX + (HallShell.DoorWidth / 2) + 1.1f, 1.25f, HallShell.Front + 0.16f);
+
+    private static void Plaque(List<Vertex> o)
+    {
+        Boxes.Add(o, PlaqueAt + new SN.Vector3(0f, 0f, 0.012f), new(1.3f, 0.36f, 0.024f), new Finish(new(0.05f, 0.055f, 0.06f), Material.Enamel));
+        var pale = new SN.Vector3(0.86f, 0.87f, 0.9f);
+        HallGallery.Text(o, "Ottawa: © OpenStreetMap contributors", PlaqueAt + new SN.Vector3(0f, 0.07f, 0.026f), 0.09f, 1.2f, pale, 48);
+        HallGallery.Text(o, "openstreetmap.org/copyright (ODbL)", PlaqueAt + new SN.Vector3(0f, -0.08f, 0.026f), 0.07f, 1.2f, pale, 48);
     }
 
     // A street's width, colour and height above the ground by its kind; 0 wide for what is not drawn.
@@ -331,14 +347,16 @@ internal static class OttawaStreets
         check(MathF.Abs(tall - (30f * FreeCamera.Scale)) < 0.01f, $"a building's height is its tag's, at the hall's scale ({tall:F2})");
         var walls = city.Vertices.Where(v => MathF.Abs(v.Normal.Y) < 0.1f).ToList();
         var centreOfBlock = new SN.Vector3(block.X, 0f, block.Z);
-        check(walls.Where(v => SN.Vector3.Distance(new(v.Pos.X, 0f, v.Pos.Z), centreOfBlock) < 60f).All(v =>
+        check(walls.Where(v => v.Pos.Z > HallShell.Front + 1f && SN.Vector3.Distance(new(v.Pos.X, 0f, v.Pos.Z), centreOfBlock) < 60f).All(v =>
                 SN.Vector3.Dot(v.Normal, new SN.Vector3(v.Pos.X, 0f, v.Pos.Z) - centreOfBlock) > 0f),
             "the walls face out of their building");
         var triangles = city.Vertices.Chunk(3).ToList();
         check(triangles.All(t => SN.Vector3.Dot(SN.Vector3.Cross(t[1].Pos - t[0].Pos, t[2].Pos - t[0].Pos), t[0].Normal) > 0f),
             "every triangle winds about its normal");
-        var inHall = city.Vertices.Any(v => v.Pos.Y > 0.1f && InHall(new(v.Pos.X, v.Pos.Z)));
+        var inHall = city.Vertices.Any(v => v.Pos.Y > 0.1f && v.Pos.Z < HallShell.Front && InHall(new(v.Pos.X, v.Pos.Z)));
         check(!inHall, "nothing stands inside the hall");
+        var plaque = city.Vertices.Count(v => v.Pos.Z > HallShell.Front + 0.03f && v.Pos.Z < HallShell.Front + 0.2f && MathF.Abs(v.Pos.X - PlaqueAt.X) < 0.7f && v.Normal.Z > 0.9f);
+        check(plaque > 100 && city.Footprints.Count == 2, $"the attribution's plaque faces the street beside the door ({plaque} vertices), and the two buildings standing stop the walker");
         check(Triangulate([V(0, 0), V(4, 0), V(4, 1), V(1, 1), V(1, 4), V(0, 4)]).Count == 4, "an L-shaped roof is four triangles");
     }
 }

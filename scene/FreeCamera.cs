@@ -31,6 +31,16 @@ internal sealed class FreeCamera
     // Whether the door lets the body through; set by the scene each frame.
     internal bool DoorOpen { get; set; }
 
+    // A building of the streets, its footprint (x, z) and the box round it; the walking body stays Radius out of it.
+    internal sealed record Footprint(SN.Vector2[] Ring, SN.Vector2 Min, SN.Vector2 Max)
+    {
+        internal static Footprint Of(SN.Vector2[] ring) =>
+            new(ring, new(ring.Min(p => p.X), ring.Min(p => p.Y)), new(ring.Max(p => p.X), ring.Max(p => p.Y)));
+    }
+
+    // The streets' buildings, once they are loaded (OttawaStreets).
+    internal IReadOnlyList<Footprint> Footprints { get; set; } = [];
+
     // Whether the eye is out in the streets.
     internal bool Outdoors => position.Z > HallShell.Front;
 
@@ -446,9 +456,63 @@ internal sealed class FreeCamera
                     p = Push(p, (lo + hi) / 2f, 0f, (hi - lo) / 2f, SolidRadius);
                 }
             }
+
+            // Out in the streets, the buildings' walls.
+            if (p.Y > HallShell.Front)
+            {
+                foreach (var f in Footprints)
+                {
+                    p = PushOut(p, f, Radius);
+                }
+            }
         }
 
         return p;
+    }
+
+    // The body at p out of a building's footprint by the nearest wall, its speed into the wall lost: from inside, out
+    // through the nearest wall; from outside, Radius off it.
+    private SN.Vector2 PushOut(SN.Vector2 p, Footprint f, float radius)
+    {
+        if (p.X < f.Min.X - radius || p.X > f.Max.X + radius || p.Y < f.Min.Y - radius || p.Y > f.Max.Y + radius)
+        {
+            return p;
+        }
+
+        var (inside, best, nearest) = (false, float.MaxValue, p);
+        for (int i = 0, j = f.Ring.Length - 1; i < f.Ring.Length; j = i++)
+        {
+            var (a, b) = (f.Ring[j], f.Ring[i]);
+            if ((a.Y > p.Y) != (b.Y > p.Y) && p.X < a.X + ((p.Y - a.Y) / (b.Y - a.Y) * (b.X - a.X)))
+            {
+                inside = !inside;
+            }
+
+            var ab = b - a;
+            var t = ab.LengthSquared() < 1e-8f ? 0f : Math.Clamp(SN.Vector2.Dot(p - a, ab) / ab.LengthSquared(), 0f, 1f);
+            var q = a + (ab * t);
+            var d = SN.Vector2.DistanceSquared(p, q);
+            if (d < best)
+            {
+                (best, nearest) = (d, q);
+            }
+        }
+
+        var distance = MathF.Sqrt(best);
+        if (!inside && distance >= radius)
+        {
+            return p;
+        }
+
+        var away = distance > 1e-5f ? (p - nearest) / distance : SN.Vector2.UnitX;
+        var pushed = nearest + ((inside ? -away : away) * radius);
+        if (SN.Vector2.DistanceSquared(pushed, p) > 1e-12f)
+        {
+            var n = SN.Vector2.Normalize(pushed - p);
+            velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
+        }
+
+        return pushed;
     }
 
     private SN.Vector2 Push(SN.Vector2 p, SN.Vector2 centre, float turn, SN.Vector2 half, float radius)
@@ -794,6 +858,20 @@ internal sealed class FreeCamera
 
     internal static void SelfTest(Action<bool, string> Check)
     {
+        // The streets: through the open door and out, a building's wall stops the body, from outside or from within.
+        var walker = new FreeCamera { DoorOpen = true, Footprints = [Footprint.Of([new(-1f, 10f), new(1f, 10f), new(1f, 12f), new(-1f, 12f)])] };
+        SN.Vector3 WalkTo(float x, float z)
+        {
+            var at = new SN.Vector3(x, 1.1f, 4f);
+            for (var i = 0; i < 200; i++) at = walker.Confine(at, at + new SN.Vector3(0f, 0f, 0.05f));
+            return at;
+        }
+
+        var (through, beside) = (WalkTo(HallShell.DoorX, 14f), WalkTo(3f, 14f));
+        Check(through.Z > 13f && beside.Z <= Max.Z, $"the open door lets the body out through it, and only through it ({through.Z:F2}, {beside.Z:F2})");
+        var (stopped, within) = (walker.Collide(new(0f, 10f - (Radius / 2))), walker.Collide(new(0.2f, 10.4f)));
+        Check(stopped.Y <= 10f - Radius + 1e-4f && within.Y <= 10f - Radius + 1e-4f, $"a building's wall stops the body Radius off it, and puts back out one inside ({stopped.Y:F3}, {within.Y:F3})");
+
         var camera = new FreeCamera();
         var (driftEye, driftTarget) = camera.View(3f);
         Check(!camera.Free && driftEye == DriftEye(3f) && driftTarget == DriftTarget, "at rest the camera drifts as before");

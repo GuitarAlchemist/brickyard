@@ -3655,6 +3655,7 @@ internal static unsafe class Stage
                 if (loaded.IsCompletedSuccessfully && loaded.Result is { } city)
                 {
                     streets = new Mesh(device, physical, city.Vertices);
+                    camera.Footprints = [.. city.Footprints.Select(FreeCamera.Footprint.Of)];
                     Console.WriteLine($"DOOR streets of Ottawa: {city.Buildings} buildings, {city.Streets} streets, {city.Left} left out where the hall stands; {OttawaStreets.Attribution}");
                 }
                 else

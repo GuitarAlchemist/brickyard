@@ -2462,11 +2462,18 @@ the door at once and sets the camera.
 
 *To verify*: walking out by hand.
 
-**Still to do.**
+**Later the same evening, the author away.**
 
-- A visible « © OpenStreetMap contributors » in the street.
-- Collisions with the buildings.
-- Google's tiles on choice: the second slice, a paid API with the key in the environment, never stored.
+- **Attribution.** A dark plaque on the hall's front wall, right of the door, facing the street, reads « Ottawa:
+  © OpenStreetMap contributors » and « openstreetmap.org/copyright (ODbL) ». It is drawn with the streets, so it shows
+  whenever they do. It was seen in a hidden `--door back` render.
+- **Collisions.** Out in the streets, the walking body stays `Radius` off every building that stands on the ground, and
+  one found inside is put back out by the nearest wall. A building beginning higher than 2 m is walked under. Flying
+  passes over and through as before. The selftest walks out through the door and not through the wall beside it, and
+  stops against a wall from outside and from within.
+
+**Still to do:** Google's tiles on choice. That is the second slice: a paid API, with the key in the environment and
+never stored.
 
 ## Known problems
 
