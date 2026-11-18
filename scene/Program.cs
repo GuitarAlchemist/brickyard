@@ -2333,6 +2333,8 @@ internal static unsafe class Stage
             {
                 "street" => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, HallShell.Front + 6f), new SN.Vector3(HallShell.DoorX, 6f, HallShell.Front + 90f)),
                 "back" => (new SN.Vector3(HallShell.DoorX + 4f, FreeCamera.WalkHeight + 1f, HallShell.Front + 14f), new SN.Vector3(HallShell.DoorX, 2f, HallShell.Front)),
+                "air" => (new SN.Vector3(HallShell.DoorX + 30f, 50f, HallShell.Front + 2f), new SN.Vector3(HallShell.DoorX, 8f, HallShell.Front + 120f)),
+                "lawn" => (new SN.Vector3(HallShell.DoorX + 6f, FreeCamera.WalkHeight, HallShell.Front + 80f), new SN.Vector3(HallShell.DoorX - 4f, 30f, HallShell.Front + 140f)),
                 _ => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, 1.5f), new SN.Vector3(HallShell.DoorX, 1.8f, 20f)),
             };
             camera.GoTo(doorEye, doorTarget, cut: true);
