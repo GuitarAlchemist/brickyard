@@ -2693,6 +2693,23 @@ alone.
   children do.
 - Each pass is capped in agents. Its branch waits for the user's word to go live.
 
+## The gallery's screen without a lamp through it, and formwork on the concrete (2026-11-18)
+
+The user: « les murs manquent de relief et on a des lampes plantees sur l'ecran de projection ».
+
+- **The lamp.** The demos' picture light (`lampe-demos`, 2.45 m up, its arms 0.75 m out) crossed the projection
+  screen hung over the globes (`GalleryVideo.Place`). `HallGallery` now leaves that light's boxes out. The Low
+  shader's wash on the wall is unchanged.
+- **The relief.** The cast concrete's walls (`Material.ConcreteCast`, vertical faces, Low shader) now show their
+  formwork, as architectural concrete does:
+  - 1.8 by 0.9 m plywood panels, their edges eased, their joints a dark 3 mm line;
+  - six conical tie holes a panel, 3 cm across;
+  - each panel its own tone of the pour;
+  - the scan's normals twice as deep.
+
+  The formwork fades where a panel's joint would be under a pixel. The path tracer does not draw it.
+- **Seen hidden.** `--view 8`: the screen is clear and the panels and holes read on the wall, 53 fps at 1600x900.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

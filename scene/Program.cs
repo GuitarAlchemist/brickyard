@@ -483,6 +483,36 @@ internal static unsafe class Stage
                 occlusion = arm.x;
                 float r = clamp(arm.y, 0.05, 1.0);
                 m = vec4(0.04, clamp(2.0 / (r * r * r * r) - 2.0, 2.0, 600.0), arm.z, mix(1.0, 0.1, r));
+                if (vMaterial == 10u && abs(face.y) < 0.5)
+                {
+                    // A cast concrete wall shows its formwork, as architectural concrete does (« les murs manquent de
+                    // relief », 2026-11-18): 1.8 by 0.9 m plywood panels (1.165 by 0.582 in the hall's units), their
+                    // edges eased and their joints a dark 3 mm line, six conical tie holes a panel, 3 cm across, and
+                    // each panel its own tone of the pour. The scan's own relief is drawn twice as deep there. All the
+                    // formwork fades where it would be under a pixel, so that a far wall does not shimmer.
+                    vec3 along = abs(face.x) > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+                    vec3 up = vec3(0.0, 1.0, 0.0);
+                    vec2 panel = vec2(1.1646, 0.5823);
+                    vec2 q = vec2(dot(vWorld, along), vWorld.y) / panel;
+                    vec2 cell = fract(q);
+                    vec2 w = fwidth(q);
+                    float detail = 1.0 - smoothstep(0.004, 0.012, max(w.x, w.y));
+                    vec2 d = min(cell, 1.0 - cell);
+                    vec2 halfJoint = 0.00097 / panel;
+                    vec2 inJoint = 1.0 - smoothstep(halfJoint, halfJoint + 1.5 * w, d);
+                    float joint = max(inJoint.x, inJoint.y) * detail;
+                    vec2 ease = (1.0 - smoothstep(halfJoint, halfJoint + 0.006 / panel, d)) * sign(cell - 0.5) * detail * (1.0 - joint);
+                    vec2 h = (fract(cell * vec2(3.0, 2.0)) - 0.5) * panel / vec2(3.0, 2.0);
+                    float rh = length(h), wh = max(fwidth(rh), 1e-5);
+                    float hole = (1.0 - smoothstep(0.0097 - wh, 0.0097 + wh, rh)) * detail;
+                    vec3 toCentre = -(h.x * along + h.y * up) / max(rh, 1e-5);
+                    float cone = hole * smoothstep(0.0035, 0.0097, rh);
+                    n = normalize(t * tn.x * 2.0 + b * tn.y * 2.0 + face * max(tn.z, 0.05));
+                    n = normalize(n + 0.5 * (ease.x * along + ease.y * up) + 1.4 * cone * toCentre);
+                    float pour = fract(sin(dot(floor(q), vec2(12.9898, 78.233))) * 43758.5453);
+                    base *= mix(1.0, 0.95 + 0.1 * pour, detail) * mix(1.0, 0.55, joint) * mix(1.0, 0.4, hole - 0.6 * cone);
+                    occlusion *= mix(1.0, 0.8, joint) * mix(1.0, 0.45, hole);
+                }
             }
             else if (vMaterial == 6u)
             {

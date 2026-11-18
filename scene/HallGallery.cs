@@ -377,8 +377,17 @@ internal sealed class HallGallery : IDisposable
         var furniture = new List<Vertex>();
         var glowing = new Dictionary<SN.Vector4, List<Vertex>>();
         var local = new List<Vertex>();
+
+        // No picture light over the demos: the projection screen hangs there (GalleryVideo.Place), its foot 0.45 m over
+        // the globes, and the light's arms and bar crossed it (« des lampes plantées sur l'écran », 2026-11-18).
+        var overScreen = scene.Draft.Root.Children.Where(n => n.Path.EndsWith("/lampe-demos", StringComparison.Ordinal)).SelectMany(n => n.Boxes).ToHashSet();
         foreach (var box in scene.Boxes)
         {
+            if (overScreen.Contains(box))
+            {
+                continue;
+            }
+
             local.Clear();
             var finish = box.Surface.Code switch
             {
