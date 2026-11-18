@@ -620,6 +620,10 @@ internal static unsafe class Stage
             float catalogue = (1.0 - smoothstep(0.0, 1.0, box(vWorld.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
             pool = max(pool, 0.8 * catalogue);
             float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots);
+            // The streets beyond the front wall's roll-up door (OttawaStreets) are in daylight, every height of them.
+            float street = smoothstep(6.0, 6.4, vWorld.z);
+            pool = max(pool, street);
+            high = max(high, street);
             // A video projected on the gallery's wall (GalleryVideo.Projection): a projector's light, 4:3, on what faces
             // the room within 6 cm of the wall, the wall's own colour showing through; its edges soft over 1 %.
             // The derivatives are taken outside the branch, where every pixel of a quad still runs.
@@ -2316,6 +2320,22 @@ internal static unsafe class Stage
         if (int.TryParse(Option(args, "--view"), out var startView) && !camera.GoTo(startView))
         {
             Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
+        }
+
+        // --door inside|street|back: the roll-up door open from the start, the streets loading, and the camera looking
+        // out through it from the hall, up the street from outside, or back at the hall; for hidden checks.
+        if (Option(args, "--door") is { } doorShot)
+        {
+            streetDoor.OpenNow();
+            streetsLoading = OttawaStreets.Load();
+            camera.DoorOpen = true;
+            var (doorEye, doorTarget) = doorShot switch
+            {
+                "street" => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, HallShell.Front + 6f), new SN.Vector3(HallShell.DoorX, 6f, HallShell.Front + 90f)),
+                "back" => (new SN.Vector3(HallShell.DoorX + 4f, FreeCamera.WalkHeight + 1f, HallShell.Front + 14f), new SN.Vector3(HallShell.DoorX, 2f, HallShell.Front)),
+                _ => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, 1.5f), new SN.Vector3(HallShell.DoorX, 1.8f, 20f)),
+            };
+            camera.GoTo(doorEye, doorTarget, cut: true);
         }
 
         var film = filmDir is null || origamiFilmed ? new Cinematic { ReducedMotion = reducedMotion } : new Cinematic(ArcadeFilm.Shots, ArcadeFilm.Heading); // 0, or --cinematic once the splash is over

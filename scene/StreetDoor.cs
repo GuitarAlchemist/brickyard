@@ -23,6 +23,9 @@ internal sealed class StreetDoor
 
     internal void Toggle() => wanted = Open ? 0 : 1;
 
+    // Open at once, without rolling (--door).
+    internal void OpenNow() => (wanted, openness) = (1, 1);
+
     internal void Step(double dt) =>
         openness = wanted > openness ? Math.Min(wanted, openness + (dt / Roll)) : Math.Max(wanted, openness - (dt / Roll));
 

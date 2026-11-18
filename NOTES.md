@@ -2448,11 +2448,19 @@ Google's photorealistic tiles on choice. This is the first slice, OpenStreetMap 
   roof.
 - `--streets` ran on the real answer.
 
-*To verify, not seen yet* (hidden GPU runs are paused since the crashes):
+**Seen, hidden, at 1600 × 900.** The author lifted the pause on hidden runs for this. `--door inside|street|back` opens
+the door at once and sets the camera.
 
-- the picture through the door;
-- walking out;
-- the sky. It is the haze's colour, a dusk blue.
+- The first render showed the buildings almost black. The Low shader dims what lies outside the hall's pools of light
+  to a tenth, and what stands high. Beyond the front wall (z past 6) the streets are now in daylight at every height.
+- Then all three views were seen:
+  - from inside, the Centre Block and the Peace Tower straight ahead through the door;
+  - from the street, the same, larger;
+  - from the street looking back, the hall's concrete box with its door open and its inside lit.
+- 55 fps, p95 17 ms, as without the streets.
+- The sky is the haze's colour, a dusk blue.
+
+*To verify*: walking out by hand.
 
 **Still to do.**
 

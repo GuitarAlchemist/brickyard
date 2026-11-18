@@ -352,7 +352,7 @@ internal sealed class FreeCamera
         var d = SN.Vector3.Normalize(target - eye);
         yaw = MathF.Atan2(d.X, -d.Z);
         pitch = MathF.Asin(d.Y);
-        position = Confine(position, eye);
+        position = Confine(eye, eye); // a view's eye anywhere the camera may be, else the nearest place in the hall
         var standing = GroundAt(new(position.X, position.Z), position.Y - WalkHeight) + WalkHeight;
         framed = !Flying && MathF.Abs(position.Y - standing) > 0.01f; // a view frames; it never takes off (F does)
         Free = true;
