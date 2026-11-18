@@ -449,7 +449,7 @@ internal sealed class Rides
 
     internal static void SelfTest(Action<bool, string> Check)
     {
-        static FreeCamera Streets() => new() { DoorOpen = true };
+        static FreeCamera Streets() => new() { DoorOpen = true, StreetsOverride = FreeCamera.WideStreets }; // room to run at speed
         var outside = new FreeCamera.Pose(new(HallShell.DoorX, FreeCamera.WalkHeight, HallShell.Front + 20f), new(HallShell.DoorX, FreeCamera.WalkHeight, HallShell.Front + 40f), SN.Vector3.UnitY, FreeCamera.Fov);
         float Run(Rides ride, FreeCamera camera, FreeCamera.Held held, float seconds)
         {
@@ -486,7 +486,7 @@ internal sealed class Rides
 
         // A building's wall stops it and takes most of the speed hit at speed.
         var wall = new FreeCamera.Footprint[] { FreeCamera.Footprint.Of([new(HallShell.DoorX - 20f, HallShell.Front + 45f), new(HallShell.DoorX + 20f, HallShell.Front + 45f), new(HallShell.DoorX + 20f, HallShell.Front + 60f), new(HallShell.DoorX - 20f, HallShell.Front + 60f)]) };
-        camera = new FreeCamera { DoorOpen = true, Footprints = wall };
+        camera = new FreeCamera { DoorOpen = true, Footprints = wall, StreetsOverride = FreeCamera.WideStreets };
         ride = new Rides();
         ride.Start(Kind.Scooter, outside);
         Run(ride, camera, new(1, 0, 0, true), 6f);
@@ -517,6 +517,14 @@ internal sealed class Rides
         ride.ToggleView();
         Check(!ride.Chase && !ride.ModelShown, "O: the view on board, inside the drone");
         Check(ride.Stop() is null && ride.Riding == Kind.None, "landing gives the view back where the pilot stood");
+
+        // In the city, it stays where Google's tiles are: the turbo held for 20 s stops at the far edge.
+        ride = new Rides();
+        camera = new FreeCamera { DoorOpen = true };
+        ride.Start(Kind.Scooter, outside);
+        Run(ride, camera, new(1, 0, 0, true), 20f);
+        var far = ride.World().Translation.Z;
+        Check(far <= FreeCamera.StreetsFar + 1e-3f && far > FreeCamera.StreetsFar - 2f, $"the city's edge stops the scooter, where Google's tiles end (z {far - HallShell.Front:F0} of {FreeCamera.StreetsFar - HallShell.Front:F0})");
 
         // In the hall, it stays inside.
         ride = new Rides();

@@ -595,6 +595,37 @@ internal static unsafe class Stage
                     vec2 far = smoothstep(vec2(0.003), vec2(0.01), fwidth(toEdge));
                     n = normalize(face + lean.x * (1.0 - far.x) * across + lean.y * (1.0 - far.y) * cross(face, across));
                 }
+                else if (vMaterial == 22u)
+                {
+                    // Painted concrete block (Material.Block, Gymnasium): 40 by 20 cm blocks in running bond (0.259 by
+                    // 0.129 in the hall's units), their joints a little recessed and darker, each block's face its own
+                    // tone and porous under the paint, a satin sheen; a blue band at 2.3 m. Joints and pores fade
+                    // where they would be under a pixel, so that a far wall does not shimmer.
+                    vec3 along = abs(face.x) > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+                    vec2 q = vec2(dot(vWorld, along) / 0.2588, vWorld.y / 0.1294);
+                    float course = floor(q.y);
+                    q.x += 0.5 * mod(course, 2.0);
+                    vec2 cell = fract(q);
+                    vec2 w = fwidth(q);
+                    float detail = 1.0 - smoothstep(0.08, 0.25, max(w.x, w.y));
+                    vec2 half_ = vec2(0.019, 0.039); // half a 1 cm joint, of a block's length and height
+                    vec2 d = min(cell, 1.0 - cell);
+                    vec2 inJoint = 1.0 - smoothstep(half_ - w, half_ + w, d);
+                    float mortar = max(inJoint.x, inJoint.y) * detail;
+                    vec2 bevel = (1.0 - smoothstep(half_, half_ + vec2(0.04, 0.08), d)) * sign(cell - 0.5) * detail * (1.0 - mortar);
+                    float fine = 1.0 - smoothstep(0.3, 1.0, length(fwidth(vWorld)) * 220.0);
+                    float pore = noise(vWorld * 260.0);
+                    n = normalize(face + 0.45 * (bevel.x * along + bevel.y * vec3(0.0, 1.0, 0.0)) + 0.08 * fine * (pore - 0.5) * along);
+                    float block = fract(sin(dot(floor(q), vec2(12.9898, 78.233))) * 43758.5453);
+                    float tone = mix(1.0, 0.965 + 0.07 * block, detail);
+                    float y = vWorld.y, wy = fwidth(y);
+                    float band = smoothstep(1.47 - wy, 1.47 + wy, y) * (1.0 - smoothstep(1.6 - wy, 1.6 + wy, y))
+                        * step(box(vWorld.xz - vec2(17.405, -1.75), vec2(10.995, 7.75)), 0.05); // inside only
+                    vec3 paint = mix(vColor, vec3(0.06, 0.13, 0.36), band);
+                    base = paint * tone * mix(1.0, 0.93 + 0.12 * pore, fine) * mix(1.0, 0.72, mortar);
+                    occlusion = mix(1.0, 0.8, mortar);
+                    m = vec4(0.04, 18.0, 0.0, 0.3);
+                }
                 else if (vMaterial == 2u || vMaterial == 3u)
                 {
                     // Worn metal: its polish varies over centimetres and over millimetres, duller where hands have
@@ -1880,10 +1911,12 @@ internal static unsafe class Stage
         var rideHintAt = double.NegativeInfinity;
         OttawaStreets.Placement? streetsPlacement = null;
         IReadOnlyList<FreeCamera.Footprint> streetFootprints = [];
-        // Google's 3D tiles in place of OpenStreetMap's buildings (G, or --google-tiles; GoogleStreets): fetched once a
-        // run, at most GoogleStreets.MostRequests requests, kept in memory only. While they are chosen nothing of
-        // OpenStreetMap is drawn beside them (Google's terms, 3.2.3 (e)) and the buildings do not stop the walker.
-        var googleChosen = args.Contains("--google-tiles");
+        // Google's 3D tiles in place of OpenStreetMap's buildings (GoogleStreets): chosen from the start since the user
+        // asked for them (2026-11-18: « Je veux Google 3d tiles, pas OpenStreetMap »), G or --osm goes back to
+        // OpenStreetMap. Fetched once a run, at most GoogleStreets.MostRequests requests, kept in memory only. While
+        // they are chosen nothing of OpenStreetMap is drawn beside them (Google's terms, 3.2.3 (e)) and the buildings do
+        // not stop the walker. Without a key, OpenStreetMap stays.
+        var googleChosen = GoogleStreets.Keyed && !args.Contains("--osm");
         var googleTried = false;
         Task<GoogleStreets.Tiles?>? googleLoading = null;
         Mesh? aerial = null;

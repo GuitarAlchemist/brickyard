@@ -853,7 +853,16 @@ internal sealed unsafe class PathTracer : IDisposable
             pool = max(pool, 0.8 * gallery);
             float catalogue = (1.0 - smoothstep(0.0, 1.0, beamBox(p.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, p.y));
             pool = max(pool, 0.8 * catalogue);
-            float high = max(1.0 - 0.6 * smoothstep(1.6, 4.5, p.y), knots);
+            // The gymnasium (Gymnasium) under its high-bay lamps and its windows, and the building's outside in
+            // daylight, as the Low shader has them: traced without them, the wing was left in the dark (the user,
+            // 2026-11-18: « les lumière en ray trace ne sont pas réalistes »).
+            float gym = 1.0 - smoothstep(0.0, 0.08, beamBox(p.xz - vec2(17.405, -1.75), vec2(10.995, 7.75)));
+            pool = max(pool, gym);
+            vec3 outHall = max(abs(p - vec3(0.0, 2.425, 1.275)) - vec3(6.25, 2.425, 4.725), 0.0);
+            vec3 outGym = max(abs(p - vec3(17.405, 2.9, -1.75)) - vec3(10.995, 2.9, 7.75), 0.0);
+            float street = max(smoothstep(6.0, 6.4, p.z), smoothstep(0.1, 0.15, min(length(outHall), length(outGym))));
+            pool = max(pool, street);
+            float high = max(max(max(1.0 - 0.6 * smoothstep(1.6, 4.5, p.y), knots), gym), street);
             return (0.1 + 0.9 * pool) * high;
         }
 

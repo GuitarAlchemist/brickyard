@@ -2615,6 +2615,35 @@ que la fenêtre sur le gymnase ne soit pas transparente ».
   - Rope vertices went from 1.18 to 1.69 million. Hidden, with the live window running beside it, the knots in view
     took the frame rate from 48 to 44 fps.
 
+### The gymnasium in painted block, lit when traced; Google's tiles by default, the city's edge (2026-11-18)
+
+The user: « le rendu du gymnase est pas terrible … peut être fait du comfyui / blender ? », « les lumière en ray trace
+ne sont pas réalistes », « je veux pouvoir me balader en scooter dans la ville », « Je veux Google 3d tiles, pas
+OpenStreetMap ».
+
+- **Walls.** The wing's own walls are painted concrete block (Material.Block, drawn by the Low shader). The blocks are
+  40 by 20 cm in running bond, with recessed darker joints, a porous face under satin paint, and a blue band at
+  2.3 m, inside only. The hall's wall is lined with it on the gymnasium's side, round the door.
+  - The roof's underside is a grey deck.
+  - The floor's strips vary less in tone.
+  - No ComfyUI or Blender: the cast-concrete scan, stretched over 30 m walls, made the stains. A wall drawn by the
+    shader has no tiling and no download.
+- **Traced light.** The path tracer's light pools (PathTracer `beam`) had no gymnasium, so the wing stayed at a tenth
+  of the light. They now have the wing and the building's outside in daylight, as the Low shader does. The block's
+  joints and band are the Low shader's alone: traced, the walls are their colour.
+- **Google by default.** With a key, the streets are Google's 3D tiles from the start; G or `--osm` goes back to
+  OpenStreetMap. OpenStreetMap is still fetched for the door's place.
+  - It shows while the tiles load, about 25 s after the door opens, then gives way to them.
+- **The city's edge.** The streets' space was ±400 by 400 units (±620 m by 620 m), beyond what the tiles cover. The
+  scooter rode out into an empty plain.
+  - It is now the square inside the tiles' circle (Reach round a point Ahead of the door): ±150 units across, and
+    out to 244 units from the door.
+  - The rides' tests run on a wider field (`StreetsOverride`). A new check holds the turbo for 20 s and stops at the
+    edge.
+- **Seen hidden.**
+  - `--gym door|court`, and `--gym court --path-tracing`.
+  - `--door inside --ride scooter`: OpenStreetMap at first, Google's tiles after 25 s, 430 requests.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

@@ -26,8 +26,13 @@ internal sealed class FreeCamera
     private static readonly (SN.Vector3 Min, SN.Vector3 Max) Doorway =
         (new(HallShell.DoorX - (HallShell.DoorWidth / 2) + 0.35f, Min.Y, Max.Z - 0.5f), new(HallShell.DoorX + (HallShell.DoorWidth / 2) - 0.35f, HallShell.DoorHeight - 0.3f, HallShell.Front + 0.9f));
 
-    // Up to 150 m over them, where the drone may climb (Rides).
-    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Streets = (new(-400f, Min.Y, HallShell.Front + 0.6f), new(400f, 150f * Scale, 400f));
+    // Up to 150 m over them, where the drone may climb (Rides); as far as Google's tiles reach (GoogleStreets: Reach
+    // round a point Ahead of the door), so that the scooter does not ride out of the city into the void (2026-11-18):
+    // the box's far corners are within the tiles' circle. OpenStreetMap's buildings reach further.
+    private static readonly float StreetsHalf = (float)(GoogleStreets.Reach * Scale / 1.42);
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Streets = (
+        new(HallShell.DoorX - StreetsHalf, Min.Y, HallShell.Front + 0.6f),
+        new(HallShell.DoorX + StreetsHalf, 150f * Scale, HallShell.Front + (float)(GoogleStreets.Ahead * Scale) + StreetsHalf));
 
     // Through the hall's right wall into the gymnasium (Gymnasium): the door's opening, overlapping the hall and the
     // wing, and the wing itself; always open.
@@ -43,6 +48,13 @@ internal sealed class FreeCamera
 
     // Whether the door lets the body through; set by the scene each frame.
     internal bool DoorOpen { get; set; }
+
+    // The streets as far as the city reaches; a wider field for the rides' tests, which run at speed for seconds.
+    internal (SN.Vector3 Min, SN.Vector3 Max)? StreetsOverride { get; init; }
+
+    internal static float StreetsFar => Streets.Max.Z;
+
+    internal static (SN.Vector3 Min, SN.Vector3 Max) WideStreets => (new(-2000f, Min.Y, HallShell.Front + 0.6f), new(2000f, 150f * Scale, 2000f));
 
     // A building of the streets, its footprint (x, z) and the box round it; the walking body stays Radius out of it.
     internal sealed record Footprint(SN.Vector2[] Ring, SN.Vector2 Min, SN.Vector2 Max)
@@ -62,7 +74,7 @@ internal sealed class FreeCamera
     // it started outside them all (a view's cut).
     internal SN.Vector3 Confine(SN.Vector3 from, SN.Vector3 to)
     {
-        var spaces = DoorOpen ? OpenSpaces : ClosedSpaces;
+        var spaces = !DoorOpen ? ClosedSpaces : StreetsOverride is { } wide ? [.. OpenSpaces[..^1], wide] : OpenSpaces;
         static bool In((SN.Vector3 Min, SN.Vector3 Max) s, SN.Vector3 p) => SN.Vector3.Clamp(p, s.Min, s.Max) == p;
         foreach (var s in spaces)
         {

@@ -152,6 +152,11 @@ internal enum Material : uint
     // A projection screen's matte white cloth (GalleryVideo.ScreenModel): the Low shader projects the video on it alone,
     // in the projector's light rather than tinted by what it falls on. Flat and the path tracer draw it white.
     Screen = 21,
+
+    // Painted concrete block (Gymnasium's walls): the Low shader lays 40 by 20 cm blocks in running bond by their place
+    // in the world, the joints recessed and darker, the block's pores under a satin paint in its colour, and a blue band
+    // at 2.3 m. Flat and the path tracer draw its colour.
+    Block = 22,
 }
 
 // A surface's colour and what it is made of.

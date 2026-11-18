@@ -58,12 +58,11 @@ internal static class Gymnasium
     public static (Vertex[] Shell, Vertex[] Glass, Vertex[] Bulbs, Vertex[] Inside) Build(bool photographed)
     {
         var (shell, glass, bulbs, inside) = (new List<Vertex>(), new List<Vertex>(), new List<Vertex>(), new List<Vertex>());
-        var concrete = photographed ? new Finish(new(0.9f), Material.ConcreteCast) : new Finish(new(0.38f, 0.37f, 0.35f), Material.Matte);
         var steel = new Finish(new(0.11f, 0.12f, 0.13f), Material.Steel);
         var paint = photographed ? new Finish(new(0.75f), Material.PaintedSteel) : new Finish(new(0.16f, 0.27f, 0.23f), Material.Enamel);
         var pane = new Finish(new(0.55f, 0.62f, 0.7f), Material.Glass);
 
-        Walls(shell, concrete);
+        Walls(shell);
         Windows(shell, glass, steel, pane);
         Pads(shell);
         Scoreboard(shell, bulbs);
@@ -81,16 +80,26 @@ internal static class Gymnasium
 
     // The walls the hall does not already give, and the roof. The hall's right wall (HallShell, KnotFloor's end wall)
     // is the wing's left one up to the hall's ceiling; over it, and behind the hall, the wing's own.
-    private static void Walls(List<Vertex> o, Finish concrete)
+    // Its own walls are painted concrete block (Material.Block), as a school's gymnasium is (the user, 2026-11-18: « le
+    // rendu du gymnase est pas terrible »), and the hall's wall is lined with it on the wing's side; the roof's
+    // underside is a painted steel deck.
+    private static void Walls(List<Vertex> o)
     {
+        var concrete = new Finish(new(0.8f, 0.78f, 0.72f), Material.Block);
         var x = HallShell.Right + (Thick / 2);
         var ceiling = HallShell.Top + Thick;
+        // The lining over the hall's wall, a centimetre thick, round the door.
+        var (lining, liningX) = (0.01f, HallShell.Right + Thick + 0.005f);
+        var (doorFrom, doorTo) = (DoorZ - (DoorWidth / 2), DoorZ + (DoorWidth / 2));
+        Boxes.Add(o, new(liningX, ceiling / 2, (HallShell.Back + doorFrom) / 2), new(lining, ceiling, doorFrom - HallShell.Back), concrete);
+        Boxes.Add(o, new(liningX, ceiling / 2, (doorTo + Front) / 2), new(lining, ceiling, Front - doorTo), concrete);
+        Boxes.Add(o, new(liningX, (DoorHeight + ceiling) / 2, DoorZ), new(lining, ceiling - DoorHeight, DoorWidth), concrete);
         Boxes.Add(o, new(x, (ceiling + Top) / 2, (HallShell.Back + Front + Thick) / 2), new(Thick, Top - ceiling, Front + Thick - HallShell.Back), concrete);
         Boxes.Add(o, new(x, Top / 2, (Back - Thick + HallShell.Back) / 2), new(Thick, Top, HallShell.Back - Back + Thick), concrete);
         Boxes.Add(o, new((HallShell.Right + Right + Thick) / 2, Top / 2, Back - (Thick / 2)), new(Right + Thick - HallShell.Right, Top, Thick), concrete);
         Boxes.Add(o, new(Right + (Thick / 2), Top / 2, (Back + Front) / 2), new(Thick, Top, Front - Back + (2 * Thick)), concrete);
         Boxes.Add(o, new((Left + Right + Thick) / 2, Top / 2, Front + (Thick / 2)), new(Right + Thick - Left, Top, Thick), concrete);
-        Boxes.Add(o, new((HallShell.Right + Right + Thick) / 2, Top + (Thick / 2), (Back + Front) / 2), new(Right + Thick - HallShell.Right, Thick, Front - Back + (2 * Thick)), concrete);
+        Boxes.Add(o, new((HallShell.Right + Right + Thick) / 2, Top + (Thick / 2), (Back + Front) / 2), new(Right + Thick - HallShell.Right, Thick, Front - Back + (2 * Thick)), new Finish(new(0.46f, 0.47f, 0.48f), Material.Matte));
     }
 
     // Clerestories high in the back wall and the front one, and two in the right wall on either side of the scoreboard,
@@ -195,7 +204,7 @@ internal static class Gymnasium
                 if (b - a < 0.02f) continue;
                 var centre = (a + b) / 2;
                 var keyed = inKeys && (Between(centre, cuts[0], cuts[1]) || Between(centre, cuts[2], cuts[3]));
-                var tone = 0.92f + (0.14f * Hash(row * 31, i));
+                var tone = 0.96f + (0.07f * Hash(row * 31, i)); // a strip's tone: maple sanded and sealed is even
                 var colour = keyed ? new SN.Vector3(0.12f, 0.2f, 0.42f) * tone : new SN.Vector3(0.78f, 0.6f, 0.4f) * tone;
                 Boxes.Add(o, new(centre, FloorTop - 0.02f, mid), new(b - a, 0.04f, z1 - z), new Finish(colour, Material.Oak));
             }
