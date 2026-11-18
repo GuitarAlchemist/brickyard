@@ -636,6 +636,7 @@ internal sealed class Link(Func<double> clock)
         MaterialTextures.SelfTest(Check);
         GalleryVideo.SelfTest(Check);
         OfficeSpin.SelfTest(Check);
+        SessionQuestion.SelfTest(Check);
         Streamline.SelfTest(Check);
         Cinematic.SelfTest(Check);
         ToolWheel.SelfTest(Check);

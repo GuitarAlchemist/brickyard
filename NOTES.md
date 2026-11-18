@@ -2339,6 +2339,44 @@ first video: colossus.mp4, 1280 × 536, cut 4:3 from the middle like its picture
 
 *To verify*: the coast by hand in the live window.
 
+## Answering a waiting session from the scene (2026-11-17)
+
+The author agreed to the design (« Tu as mon accord »): read the question from the session's transcript and answer
+it in its pane through wmux.
+
+**Opening it.** A click on a robot under its « ? » opens the shelf on that session's question (SessionQuestion). Its
+pane is known to wmux; other clicks select and show the pane as before.
+
+**The question.** It is read from `~/.claude/projects/*/<session>.jsonl`, the last 512 KB only, never written.
+
+- The question is the last tool call with no result yet.
+- An AskUserQuestion with one single-choice question shows its text and options. Option n sends the key n.
+- Several questions, or several answers at once, are left to the pane, and the shelf says so.
+- Any other tool is a permission: the tool, then what it would do (its command, file, address or description).
+  - Yes sends `1`; No sends Escape.
+  - The pane's « don't ask again » is not offered: it widens a permission.
+- Words that look like secrets are masked: `name=value` and `name: value` for token, key, secret, password and pwd,
+  `Bearer …`, and known token shapes.
+
+**The answer.** It goes through wmux.
+
+- When the agent gave wmux its own choices (`report-agent --choices`), they are offered instead and sent with
+  `answer-agent`.
+- Otherwise the key goes to the pane with `send-key <key> --surface <id>`. The surface is always named, never the
+  scene's own.
+- « Go to this session » shows the pane.
+- Answering closes the shelf. The « ? » goes when wmux sees the pane working again.
+
+**Checked:**
+
+- The selftest covers the pending call, a resolved transcript, the numbered options, Yes/No, masking, several
+  questions and wrapping.
+- `scene --question <session> <surface>` prints what the shelf would show, and sends nothing. On a live transcript
+  (this session) it gave « Permission: PowerShell », the command, then Yes (key 1) and No (key esc).
+
+*To verify*: a real answer by hand. That Claude Code takes the number key in a permission prompt and in
+AskUserQuestion is from the wmux skill's own choices (`key: "1"`), not yet seen here.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

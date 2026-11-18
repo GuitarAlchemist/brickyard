@@ -683,6 +683,16 @@ internal static unsafe class Stage
             return Link.SelfTest();
         }
 
+        // --question SESSION SURFACE: what the shelf would show for that waiting session, printed, nothing sent.
+        if (Option(args, "--question") is { } questioned)
+        {
+            var asked = SessionQuestion.Ask(questioned, args.SkipWhile(a => a != "--question").Skip(2).FirstOrDefault() ?? "");
+            Console.WriteLine($"QUESTION {asked.Title}: {asked.Text.ReplaceLineEndings(" ")[..Math.Min(100, asked.Text.Length)]}");
+            foreach (var c in asked.Choices) Console.WriteLine($"QUESTION choice {c.Label} ({(c.WmuxChoice is { } reported ? "wmux " + reported : "key " + c.Key)})");
+            if (asked.Note is { } note) Console.WriteLine($"QUESTION note {note}");
+            return 0;
+        }
+
         var clock = Stopwatch.StartNew();
         var limit = double.TryParse(Option(args, "--seconds"), out var seconds) ? seconds : double.PositiveInfinity;
         var demo = args.Contains("--demo");
@@ -2775,7 +2785,16 @@ internal static unsafe class Stage
         {
             if (officeFeed is null) return;
             var now = clock.Elapsed.TotalSeconds;
-            var started = officeFeed.Sessions.FirstOrDefault(s => s.Id == session)?.Started ?? 0;
+            var clicked = officeFeed.Sessions.FirstOrDefault(s => s.Id == session);
+            // A session that waits for the user (the « ? »): the shelf shows what it asks and answers it (SessionQuestion).
+            if (clicked is { Activity: Delta.SceneModules.OfficeActivity.Waiting } && officeFeed.Surface(session) is { } asking)
+            {
+                Console.WriteLine($"WIDGETS agent-office shows session {session}'s question");
+                shelf.Show(now, $"« ? » {clicked.Name}", () => SessionQuestion.Rows(session, asking, () => shelf.Hide()));
+                return;
+            }
+
+            var started = clicked?.Started ?? 0;
             var outcome = officeSelection.Click(session, started, now);
             if (outcome != OfficeSelection.Outcome.Open)
             {
