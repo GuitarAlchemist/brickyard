@@ -2750,6 +2750,37 @@ l'orientation des ecrans de petits robots et donne leur 2 ecrans chacun ».
     face the robots, and the planet is drawn in its place.
   - Not checked: a drag by hand in the live window.
 
+## Google's tiles nearer the eye: spikes laid flat, a smaller place, refined along the ride (2026-11-18)
+
+The user, on a street-level picture full of blades and blobs: « comment ameliorer la vue d'ottawa et des google 3d
+tiles ?? », then « Fait tout ca » to four proposals, the paid one among them. Google bills each request that returns a
+3D tile: 1,000 free a month, then 6 USD a thousand (SKU "Photorealistic 3D Tiles", read on 2026-11-18).
+
+- **Spikes laid flat (A).**
+  - The ground of each 8 m cell is its lowest vertex.
+  - In a tile coarser than 3 m, a vertex less than 8 m over that ground comes down to 15 cm over it, with its
+    photograph. The melted cars, trees and people then lie on the street instead of standing up.
+  - Walls and roofs over 8 m and the fine tiles keep their heights. The mesh stays whole, with no hole.
+  - The geometric error rides on GeoTiles' `Batch.Error`.
+- **A smaller place, nearer the door (B).** Ahead 110 m and Reach 260 m (150 and 330 before). The error is judged on a
+  1440-pixel screen. The city's edge for the walker and the rides shrinks with it.
+- **A balcony (C).** `--door balcony`, 12 m up over the door. The drone (X) also rises over the street.
+- **Refined along the ride (D).**
+  - Past 70 m from every place refined for, the tiles are chosen again with the eye's places as the selection's
+    `Path`, at most 220 meshes.
+  - What was fetched comes from this run's memory (`Fetched`, never the disk), the root among them, so the session
+    and the URLs stay the same and only new tiles are asked for.
+  - The run stops at 450 + 300 requests in all.
+- **Measured hidden** (two runs, 1,023 requests):
+  - `--door inside --ride scooter`: the opening took 430 requests, 159 tiles, 130,213 vertices laid flat. One
+    refinement for the ride took 163 new requests (593 in the run), 220 tiles; the trees near the rider were sharper.
+    The automatic ride stopped under a structure, a poor view.
+  - `--door street`: the Centre Block is sharp, fewer small blades. Coarse posts taller than 8 m (the gates) and a
+    coarse blob at the eye remain.
+  - 52 fps.
+- **To do:** `--door balcony` is not yet seen. The opening is still at its cap (270 nested tilesets, 159 meshes):
+  finer tiles at the door need more requests per opening, which is the user's call.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

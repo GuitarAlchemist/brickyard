@@ -83,6 +83,10 @@ internal static class OttawaStreets
             var d = (en - Door) * FreeCamera.Scale;
             return new(HallShell.DoorX + SN.Vector2.Dot(d, Left), y * FreeCamera.Scale, HallShell.Front + 0.16f + SN.Vector2.Dot(d, Out));
         }
+
+        // ToHall's inverse on the ground: the east-north metres under a point of the hall's frame.
+        internal SN.Vector2 FromHall(SN.Vector3 hall) =>
+            Door + ((((hall.X - HallShell.DoorX) * Left) + ((hall.Z - HallShell.Front - 0.16f) * Out)) / FreeCamera.Scale);
     }
 
     private sealed record Way(Dictionary<string, string> Tags, List<SN.Vector2> Points);

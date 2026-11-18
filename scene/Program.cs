@@ -1951,6 +1951,8 @@ internal static unsafe class Stage
         Task<GoogleStreets.Tiles?>? googleLoading = null;
         Mesh? aerial = null;
         IReadOnlyList<string> aerialProviders = [];
+        var googlePath = new List<SN.Vector2>(); // the places out in the streets the tiles were refined for, past the door
+        var lastEye = SN.Vector3.Zero;
         // The gallery on the left wall (HallGallery): the learn site's courses, demos and artifacts, from gallery.json
         // (--gallery FILE), drawn from Lego's blocks and redrawn when the file changes; a click on one opens its page.
         // What the demos and artifacts show inside their glasses (GalleryPictures, --pictures DIR), read first.
@@ -2555,7 +2557,7 @@ internal static unsafe class Stage
             Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
         }
 
-        // --door inside|street|back|air|lawn|wing: the roll-up door open from the start, the streets loading, and the camera looking
+        // --door inside|street|back|balcony|air|lawn|wing: the roll-up door open from the start, the streets loading, and the camera looking
         // out through it from the hall, up the street from outside, or back at the hall; for hidden checks.
         if (Option(args, "--door") is { } doorShot)
         {
@@ -2566,6 +2568,8 @@ internal static unsafe class Stage
             {
                 "street" => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, HallShell.Front + 6f), new SN.Vector3(HallShell.DoorX, 6f, HallShell.Front + 90f)),
                 "back" => (new SN.Vector3(HallShell.DoorX + 4f, FreeCamera.WalkHeight + 1f, HallShell.Front + 14f), new SN.Vector3(HallShell.DoorX, 2f, HallShell.Front)),
+                // 12 m up, as from a balcony over the door: Google's photographed city reads best a little above the street.
+                "balcony" => (new SN.Vector3(HallShell.DoorX, 12f * FreeCamera.Scale, HallShell.Front + 3f), new SN.Vector3(HallShell.DoorX, 5f, HallShell.Front + 90f)),
                 "air" => (new SN.Vector3(HallShell.DoorX + 30f, 50f, HallShell.Front + 2f), new SN.Vector3(HallShell.DoorX, 8f, HallShell.Front + 120f)),
                 "lawn" => (new SN.Vector3(HallShell.DoorX + 6f, FreeCamera.WalkHeight, HallShell.Front + 80f), new SN.Vector3(HallShell.DoorX - 4f, 30f, HallShell.Front + 140f)),
                 "wing" => (new SN.Vector3(Gymnasium.Right + 8f, 16f, HallShell.Front + 22f), new SN.Vector3(10f, 2f, -2f)), // the building and its gymnasium from the air
@@ -4074,21 +4078,37 @@ internal static unsafe class Stage
                 googleLoading = GoogleStreets.Load(placed, line => Console.WriteLine($"GOOGLE {line}"));
             }
 
+            // Out among Google's tiles, the eye more than RefineStep metres from every place they were refined for: they
+            // are chosen again for its path too, within the run's ride requests (GoogleStreets.RideRequests).
+            if (googleChosen && aerial is not null && googleLoading is null && (camera.Outdoors || rides.Outdoors) && streetsPlacement is { } around && GoogleStreets.MayRefine)
+            {
+                var at = around.FromHall(lastEye);
+                if (SN.Vector2.Distance(at, around.Door) > GoogleStreets.RefineStep && googlePath.TrueForAll(q => SN.Vector2.Distance(q, at) > GoogleStreets.RefineStep))
+                {
+                    googlePath.Add(at);
+                    Console.WriteLine($"GOOGLE refining the tiles for the eye's path ({googlePath.Count} places), {GoogleStreets.RunRequests} requests so far this run");
+                    googleLoading = GoogleStreets.Load(around, line => Console.WriteLine($"GOOGLE {line}"), [.. googlePath]);
+                }
+            }
+
             if (googleLoading is { IsCompleted: true } fetched)
             {
                 googleLoading = null;
                 if (fetched.IsCompletedSuccessfully && fetched.Result is { Vertices.Length: > 0 } tiles)
                 {
+                    var drawnBefore = aerial;
+                    if (drawnBefore is not null) device.WaitIdle();
                     aerial = new Mesh(device, physical, tiles.Vertices, resident: true);
+                    drawnBefore?.Dispose();
                     if (tiles.Layers.Length > 0) UploadAerial(tiles.Layers);
                     aerialProviders = tiles.Attributions;
                     aerialCardSize = (0, 0);
-                    Console.WriteLine($"GOOGLE {tiles.Meshes} tiles, {tiles.Vertices.Length / 3} triangles, {tiles.Layers.Length} images, {tiles.Requests} requests{(tiles.Truncated ? ", stopped at the cap of tiles" : "")}; "
-                        + $"the ground {tiles.Ground:F1} m over the ellipsoid; Google Maps: {string.Join("; ", tiles.Attributions)}");
+                    Console.WriteLine($"GOOGLE {tiles.Meshes} tiles, {tiles.Vertices.Length / 3} triangles, {tiles.Layers.Length} images, {tiles.Requests} requests ({GoogleStreets.RunRequests} this run){(tiles.Truncated ? ", stopped at the cap of tiles" : "")}; "
+                        + $"{tiles.Flattened} spike vertices laid flat; the ground {tiles.Ground:F1} m over the ellipsoid; Google Maps: {string.Join("; ", tiles.Attributions)}");
                 }
                 else
                 {
-                    Console.Error.WriteLine($"GOOGLE no tiles drawn: {fetched.Exception?.InnerException?.Message ?? "none fetched"}; OpenStreetMap's buildings stay");
+                    Console.Error.WriteLine($"GOOGLE no tiles drawn: {fetched.Exception?.InnerException?.Message ?? "none fetched"}; {(aerial is null ? "OpenStreetMap's buildings stay" : "the tiles drawn stay")}");
                 }
             }
 
@@ -4102,6 +4122,7 @@ internal static unsafe class Stage
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
             officeView = splashing ? null : viewProj;
             gaiaEye = eye;
+            lastEye = eye;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
             if (wallTest && !splashing) WallTest(linkNow);

@@ -17,10 +17,38 @@ internal static class GoogleStreets
     internal const int Side = 512; // each tile's image, stretched to a square layer of the array
     internal const int MostTiles = 160, MostRequests = 450, MostImages = 320; // 320 layers: 430 MB on the GPU with their mipmaps
     // Metres: the place looked at, out from the door; around it; the eye over the ellipsoid, as a walker's at the door
-    // (Wellington Street there is 45.3 m over it, measured on 2026-11-18).
-    internal const double Ahead = 150, Reach = 330, EyeHeight = 47;
+    // (Wellington Street there is 45.3 m over it, measured on 2026-11-18). Since « beurk » (2026-11-18) the place is
+    // smaller and nearer the door (330 and 150 m before), so that the requests refine what is near the eye; the
+    // selection judges the error on a 1440-pixel screen (1080 before), which refines further.
+    internal const double Ahead = 110, Reach = 260, EyeHeight = 47;
 
-    internal sealed record Tiles(Vertex[] Vertices, byte[][] Layers, IReadOnlyList<string> Attributions, int Requests, int Meshes, bool Truncated, double Ground);
+    // The ride's own requests, past the opening's (« fait tout ça », 2026-11-18, the paid option among them): as the eye
+    // goes more than RefineStep metres from every place the tiles were refined for, they are chosen again for its path
+    // as well, at most RideTiles meshes. What was fetched already comes from memory (this run's, never the disk), so
+    // only the new tiles cost; all the run's requests together stop at MostRequests + RideRequests.
+    internal const int RideRequests = 300, RideTiles = 220;
+    internal const double RefineStep = 70;
+
+    // A coarse tile's spikes (melted cars, trees and people a few metres tall): a triangle of a tile coarser than
+    // SpikeError metres lying wholly under SpikeHeight metres over the ground there is flattened onto that ground, with
+    // its photograph, rather than stand up as a blade or a blob near the eye.
+    internal const double SpikeError = 3, SpikeHeight = 8, GroundCell = 12;
+
+    internal sealed record Tiles(Vertex[] Vertices, byte[][] Layers, IReadOnlyList<string> Attributions, int Requests, int Meshes, bool Truncated, double Ground)
+    {
+        public int Flattened { get; init; }
+    }
+
+    // This run's memory of what Google answered, by URL, so that a second choice of tiles asks only for what is new; and
+    // the one source that keeps the session. Never written to disk.
+    private static readonly Dictionary<string, byte[]> Fetched = new(StringComparer.Ordinal);
+    private static GoogleTileSource? google;
+    private static HttpClient? http;
+
+    // How many requests this run has made, all choices together.
+    internal static int RunRequests => google?.Requests ?? 0;
+
+    internal static bool MayRefine => google is not null && RunRequests < MostRequests + RideRequests - 40;
 
     // The key, from the process's environment or else the user's; null without one. Never printed.
     private static string? Key() =>
@@ -30,8 +58,9 @@ internal static class GoogleStreets
 
     internal static bool Keyed => Key() is not null;
 
-    // The tiles around the door, off the render thread; null without a key or when the fetch fails (logged).
-    internal static Task<Tiles?> Load(OttawaStreets.Placement placement, Action<string> log) => Task.Run(async () =>
+    // The tiles around the door, off the render thread; null without a key or when the fetch fails (logged). path: the
+    // other places the eye has been (east-north metres, OttawaStreets.Local's), for which the tiles are refined too.
+    internal static Task<Tiles?> Load(OttawaStreets.Placement placement, Action<string> log, IReadOnlyList<SN.Vector2>? path = null) => Task.Run(async () =>
     {
         if (Key() is not { } key)
         {
@@ -41,43 +70,72 @@ internal static class GoogleStreets
 
         var (lat, lon) = OttawaStreets.LatLon(placement.Door);
         var frame = new EnuFrame(lat, lon, 0);
+        var riding = path is { Count: > 0 };
         var options = new SelectionOptions
         {
             Camera = frame.ToEcef(new Vec3d(0, 0, EyeHeight)),
+            Path = riding ? [.. path!.Select(p => frame.ToEcef(new Vec3d(p.X - placement.Door.X, p.Y - placement.Door.Y, EyeHeight)))] : [],
             Target = frame.ToEcef(new Vec3d(placement.Out.X * Ahead, placement.Out.Y * Ahead, EyeHeight)),
             Radius = Reach,
-            ScreenHeight = 1080,
-            MaxTiles = MostTiles,
-            MaxTilesets = MostRequests - MostTiles - 20, // the rest of the requests, but for the root and a margin
+            ScreenHeight = 1440,
+            MaxTiles = riding ? RideTiles : MostTiles,
+            MaxTilesets = MostRequests + RideRequests, // the run's cap below stops it first
         };
-        using var http = new HttpClient();
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("delta-scene/1.0");
-        var google = new GoogleTileSource(http, key);
-        var source = new Capped(google, MostRequests);
+        if (http is null)
+        {
+            http = new HttpClient();
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("delta-scene/1.0");
+        }
+
+        google ??= new GoogleTileSource(http, key);
+        var source = new Remembered(new Capped(google, MostRequests + RideRequests));
+        var before = google.Requests;
         using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(4));
         try
         {
             var scene = await SceneLoader.LoadAsync(source, frame, options, Decode, log, cancel.Token);
-            return Build(scene, placement, lat, google.Requests);
+            return Build(scene, placement, lat, google.Requests - before);
         }
         catch (Exception e) when (e is HttpRequestException or InvalidOperationException or InvalidDataException or OperationCanceledException or System.Text.Json.JsonException)
         {
-            log($"failed after {google.Requests} requests: {e.Message}"); // GeoTiles' messages leave the key out
+            log($"failed after {google.Requests - before} requests: {e.Message}"); // GeoTiles' messages leave the key out
             return null;
         }
     });
 
-    // Asks at most `most` times: past that the load stops, so a mistake costs a bounded number of requests.
+    // Asks at most `most` times in all: past that the load stops, so a mistake costs a bounded number of requests.
     private sealed class Capped(ITileSource inner, int most) : ITileSource
     {
-        private int asked;
-
         public Uri Root => inner.Root;
 
         public Task<byte[]> GetAsync(Uri uri, CancellationToken cancel = default) =>
-            Interlocked.Increment(ref asked) > most
-                ? throw new InvalidOperationException($"more than {most} requests asked: stopped")
+            RunRequests >= most
+                ? throw new InvalidOperationException($"more than {most} requests this run: stopped")
                 : inner.GetAsync(uri, cancel);
+    }
+
+    // What was fetched already this run comes from memory, the root among them, so that the session and the tiles' URLs
+    // stay the same and only new tiles are asked for.
+    private sealed class Remembered(ITileSource inner) : ITileSource
+    {
+        public Uri Root => inner.Root;
+
+        public async Task<byte[]> GetAsync(Uri uri, CancellationToken cancel = default)
+        {
+            var name = uri.ToString();
+            lock (Fetched)
+            {
+                if (Fetched.TryGetValue(name, out var known)) return known;
+            }
+
+            var bytes = await inner.GetAsync(uri, cancel);
+            lock (Fetched)
+            {
+                Fetched[name] = bytes;
+            }
+
+            return bytes;
+        }
     }
 
     private static GeoTiles.Pixels? Decode(byte[] bytes)
@@ -106,8 +164,9 @@ internal static class GoogleStreets
         var kN = 110_574.0 / (a * (1 - e2) / Math.Pow(w, 1.5) * Math.PI / 180);
         var p = scene.Positions;
         var ground = Ground(p);
+        var (heights, flattened) = Flatten(scene);
         SN.Vector3 Hall(int i) => placement.ToHall(
-            placement.Door + new SN.Vector2((float)(p[3 * i] * kE), (float)(-p[(3 * i) + 2] * kN)), (float)(p[(3 * i) + 1] - ground));
+            placement.Door + new SN.Vector2((float)(p[3 * i] * kE), (float)(-p[(3 * i) + 2] * kN)), (float)(heights[i] - ground));
 
         // The map turns the frame's handedness or not: a triangle's corners are swapped when it does, so that its front
         // stays its front.
@@ -153,7 +212,42 @@ internal static class GoogleStreets
             }
         }
 
-        return new Tiles([.. vertices], [.. layers], scene.Attributions, requests, scene.Tiles, scene.Truncated, ground);
+        return new Tiles([.. vertices], [.. layers], scene.Attributions, requests, scene.Tiles, scene.Truncated, ground) { Flattened = flattened };
+    }
+
+    // Each vertex's height, the coarse tiles' spikes brought down to the ground: the ground of a GroundCell-metre cell is
+    // its lowest vertex, of any tile; a vertex of a tile coarser than SpikeError that stands under SpikeHeight over it is
+    // brought down to 15 cm over it, so that the blades and blobs it lifted lie flat with their photograph. Taller things
+    // (walls, roofs) and the fine tiles keep their heights. How many vertices came down by more than 30 cm.
+    internal static (float[] Heights, int Flattened) Flatten(GeoTiles.Scene scene)
+    {
+        var p = scene.Positions;
+        var count = p.Length / 3;
+        var heights = new float[count];
+        var lowest = new Dictionary<(int, int), float>();
+        (int, int) Cell(int i) => ((int)Math.Floor(p[3 * i] / GroundCell), (int)Math.Floor(p[(3 * i) + 2] / GroundCell));
+        for (var i = 0; i < count; i++)
+        {
+            heights[i] = p[(3 * i) + 1];
+            var cell = Cell(i);
+            lowest[cell] = lowest.TryGetValue(cell, out var low) ? Math.Min(low, heights[i]) : heights[i];
+        }
+
+        var flattened = 0;
+        foreach (var batch in scene.Batches)
+        {
+            if (batch.Error <= SpikeError) continue;
+            for (var i = batch.First; i < batch.First + batch.Count && i < count; i++)
+            {
+                var floor = lowest[Cell(i)];
+                if (heights[i] >= floor + SpikeHeight) continue;
+                var down = Math.Min(heights[i], floor + 0.15f);
+                if (heights[i] - down > 0.3f) flattened++;
+                heights[i] = down;
+            }
+        }
+
+        return (heights, flattened);
     }
 
     // The ground's height at the door: the lowest tenth of what lies within 10 m of it (the street, under its cars and
@@ -203,6 +297,8 @@ internal static class GoogleStreets
     {
         var placement = new OttawaStreets.Placement(new SN.Vector2(200f, -40f), SN.Vector2.Normalize(new SN.Vector2(-0.5f, 0.85f)));
         var (lat, lon) = OttawaStreets.LatLon(placement.Door);
+        var somewhere = new SN.Vector2(230f, 15f);
+        check(SN.Vector2.Distance(placement.FromHall(placement.ToHall(somewhere, 3f)), somewhere) < 0.01f, "a point of the streets comes back from the hall's frame");
         var back = OttawaStreets.Local(lat, lon);
         check(SN.Vector2.Distance(back, placement.Door) < 0.01f, $"Google's tiles: a point's latitude and longitude lead back to it ({back.X:F3}, {back.Y:F3})");
 
@@ -228,6 +324,21 @@ internal static class GoogleStreets
             $"a wall 100 m out of the door is straight ahead at the hall's scale ({wall.X:F2}, {wall.Z:F2})");
         check(tiles.Vertices.Length == 3 && tiles.Vertices[0].Normal.Z < -0.9f, $"the wall faces the door, as it faced it in Google's frame ({(tiles.Vertices.Length == 3 ? tiles.Vertices[0].Normal.Z : 0f):F2})");
         check(tiles.Vertices.All(v => v.Material == Material.Aerial), "the wall is painted with its image (Material.Aerial)");
+        // A coarse tile's spike lies down on the street; a fine tile's stays, and so does a coarse tile's tall wall.
+        float[] spiky =
+        [
+            0f, 36f, 0f, 4f, 36f, 0f, 2f, 40f, 1f,       // coarse: a blade 4 m tall on the street
+            20f, 36f, 0f, 24f, 36f, 0f, 22f, 60f, 1f,    // coarse: a wall 24 m tall
+            0f, 36f, 2f, 4f, 36f, 2f, 2f, 39f, 3f,       // fine: a car 3 m tall
+        ];
+        var lumpy = new GeoTiles.Scene(spiky, new float[spiky.Length], new float[spiky.Length], [], 1, 1, false)
+        {
+            Batches = [new Batch(0, 6, null) { Error = 10 }, new Batch(6, 3, null) { Error = 1 }],
+        };
+        var (lain, down) = Flatten(lumpy);
+        check(MathF.Abs(lain[2] - 36.15f) < 1e-4f && MathF.Abs(lain[5] - 60f) < 1e-4f && MathF.Abs(lain[8] - 39f) < 1e-4f && down == 1,
+            $"a coarse tile's spike lies on the street, its tall wall stands, a fine tile's car stays ({lain[2]:F2}, {lain[5]:F1}, {lain[8]:F1}; {down} down)");
+
         var square = Square(new GeoTiles.Pixels(2, 1, 3, [255, 0, 0, 0, 0, 255]), 4);
         check(square.Length == 64 && square[0] == 255 && square[2] == 0 && square[3] == 255 && square[(3 * 4) + 2] == 255, "an image is stretched to a square, opaque, its ends kept");
         check(!Keyed || Key()!.Length > 0, "the key is read from the environment only"); // never printed

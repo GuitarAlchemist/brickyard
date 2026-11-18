@@ -21,7 +21,11 @@ public sealed record Scene(float[] Positions, float[] Normals, float[] Colors, I
 
 /// <summary><paramref name="Count"/> vertices from <paramref name="First"/>, drawn with <paramref name="Image"/>
 /// at their texture coordinates, or with their colours when it is null.</summary>
-public sealed record Batch(int First, int Count, Pixels? Image);
+public sealed record Batch(int First, int Count, Pixels? Image)
+{
+    /// <summary>Its tile's geometric error in metres (Delta: GoogleStreets flattens the coarse tiles' spikes).</summary>
+    public double Error { get; init; }
+}
 
 public static class SceneLoader
 {
@@ -117,7 +121,7 @@ public static class SceneLoader
 
                     if (positions.Count / 3 > first)
                     {
-                        batches.Add(new Batch(first, positions.Count / 3 - first, p.Uvs is null ? null : pixels));
+                        batches.Add(new Batch(first, positions.Count / 3 - first, p.Uvs is null ? null : pixels) { Error = tile.GeometricError });
                     }
                 }
             }
