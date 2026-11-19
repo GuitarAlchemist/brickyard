@@ -2925,6 +2925,27 @@ off » under -tv-port 0). The user, in this session: « 1 - oui ».
   parses the line; a hidden render shows the button. Not tested: a real Chromecast, the live brain (it needs a
   release), Remote's gateway deployed with -tv-port.
 
+## The rope as real as it can be (2026-11-18)
+
+The user: « Rends la corde aussi réaliste que possible ». Close up (`--knots close`), the rope read as plastic or
+paper: smooth strands whose shaded side was the fill's blue-grey under a hard shadow edge, no loose fibre, and
+whippings like brown plugs wider than the rope, carried past its end.
+- **Loose fibres** (`KnotFloor.Fuzz`, `Tuft`, `Hair`): 108,000 thin ribbons, 1,600 a metre of strand on its visible
+  side, most short, a few as long as the rope is thick, curled, lying back along the rope; a tuft out of each cut
+  strand. They are their own mesh, drawn only within 1.6 m of the tables (`KnotFloor.Near`), where they are more than a
+  pixel's sparkle; the shader knows one by Edge.Z = 0 (lit as the rope's surface it springs from, lighter at its tip,
+  light through it from behind).
+- **Fibre light**: on rope the key light wraps past the terminator, warm (light scattered in the fibres), the shadow
+  a neighbouring strand casts is softened (never below 0.35), the fill warmer; the highlight is stretched along the
+  yarns, or round the whipping's twine, as hair's is (`lobe` with the yarn's run as its brush). Deeper yarn relief.
+- **Strands**: 12 sides instead of 10; darker only in the narrow lay where two strands press together.
+- **Whipping**: the band ends 0.35 radii short of the rope's end, as wide as the rope, and the cut strands show past
+  it, a little open, their faces fibres' ends.
+- Measured, hidden 1600x900 `--knots close`, two alternating runs each: GPU p50 23.3 and 23.0 ms before, 27.4 and
+  28.0 after (the live window shares the GPU); 2.0 million vertices of rope (1.68 before) and 1.3 million of fibres.
+- Not done: the path tracer has no fibres (they are not in the traced structure) and its rope was not looked at; the
+  knots' shapes (the heaving line knot's loose turns) are IX's, untouched.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

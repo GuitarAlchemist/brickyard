@@ -853,11 +853,19 @@ internal static class KnotFloor
         return true;
     }
 
+    // Whether the eye is near enough the knots' box for their loose fibres to be drawn: farther, a fibre is under a
+    // pixel and would only sparkle.
+    internal const float HairsWithin = 1.6f;
+
+    internal static bool Near(SN.Vector3 eye, (SN.Vector3 Min, SN.Vector3 Max) box) =>
+        SN.Vector3.Distance(eye, SN.Vector3.Clamp(eye, box.Min, box.Max)) <= HairsWithin;
+
     // How full the fuller table is, of its length, after the last Layout: knots and the least gap between them.
     internal static float Fill { get; private set; }
 
     // The knots as rope on the tables: each rope laid, each post or ring turned in wood. Language-free.
-    public static Vertex[] BuildKnots(Marins m)
+    // With hairs, each rope's loose fibres are added to it (Fuzz), apart from the rope.
+    public static Vertex[] BuildKnots(Marins m, List<Vertex>? hairs = null)
     {
         var o = new List<Vertex>();
         if (m.Knots.Length == 0)
@@ -880,7 +888,7 @@ internal static class KnotFloor
                 }
                 else
                 {
-                    Laid(o, [.. shown[r].Points.Select(lay.World)], k.Radius * lay.Scale, (i * 8) + r, shown[r].Closed);
+                    Laid(o, [.. shown[r].Points.Select(lay.World)], k.Radius * lay.Scale, (i * 8) + r, shown[r].Closed, hairs);
                 }
             }
         }
@@ -1005,11 +1013,19 @@ internal static class KnotFloor
     // vraie corde »).
     private const float LayPitch = 6.2f; // radii to a strand's full turn
     private const float StrandOffset = 0.42f, StrandRadius = 0.58f;
-    private const int StrandSides = 10;
-    private const float WhipLength = 3f, WhipRadius = 1.03f, TwineTurn = 0.16f; // in rope radii: the band, round it, a turn of twine
+    private const int StrandSides = 12;
+    // In rope radii: the whipping's band, round it, a turn of twine, and the cut strands left past it, a little splayed.
+    private const float WhipLength = 3f, WhipRadius = 1.04f, TwineTurn = 0.16f, Stub = 0.35f, Splay = 0.1f;
     private static readonly SN.Vector3 Hemp = new(0.72f, 0.58f, 0.4f), Oak = new(0.62f, 0.42f, 0.24f), Twine = new(0.2f, 0.15f, 0.1f);
 
-    internal static void Laid(List<Vertex> o, SN.Vector3[] path, float r, int seed, bool closed = false)
+    // Loose fibres (the user, 2026-11-18: « Rends la corde aussi réaliste que possible »): a natural-fibre rope is hairy,
+    // its fibres' ends standing out of the yarns all along it, most short, a few long, lying back along the rope; that
+    // halo, more than anything, tells hemp from a plastic tube. Each is a thin ribbon of two pieces, on the strand's
+    // visible side, a strand's HairsPerMetre; a cut strand's end is a tuft of them. They go to their own mesh, drawn only
+    // near the tables, where they are more than a pixel's sparkle.
+    private const float HairsPerMetre = 1600f, TuftPerEnd = 40f;
+
+    internal static void Laid(List<Vertex> o, SN.Vector3[] path, float r, int seed, bool closed = false, List<Vertex>? hairs = null)
     {
         var axis = Resample(Smooth(path), r * LayPitch / 9f);
         if (axis.Length < 2)
@@ -1017,13 +1033,15 @@ internal static class KnotFloor
             return;
         }
 
-        var (_, n, b) = Frames(axis);
+        var (ta, n, b) = Frames(axis);
         var run = new float[axis.Length];
         for (var j = 1; j < axis.Length; j++)
         {
             run[j] = run[j - 1] + SN.Vector3.Distance(axis[j - 1], axis[j]);
         }
 
+        var whipped = !closed && run[^1] > 4 * (WhipLength + Stub) * r;
+        var rng = new Random(seed * 7919 + 17);
         var tone = 0.94f + (0.06f * MathF.Sin(seed * 2.1f));
         for (var k = 0; k < 3; k++)
         {
@@ -1033,7 +1051,10 @@ internal static class KnotFloor
             {
                 var turn = (MathF.Tau * run[j] / (LayPitch * r)) + (k * MathF.Tau / 3);
                 outward[j] = (MathF.Cos(turn) * n[j]) + (MathF.Sin(turn) * b[j]);
-                centres[j] = axis[j] + (StrandOffset * r * outward[j]);
+                // Past a whipping the cut strands open a little, as a cut rope's do.
+                var end = whipped ? MathF.Min(run[j], run[^1] - run[j]) / (Stub * r) : 1f;
+                var open = end < 1f ? Splay * (1 - end) * (1 - end) : 0f;
+                centres[j] = axis[j] + ((StrandOffset + open) * r * outward[j]);
             }
 
             var along = new float[axis.Length];
@@ -1046,58 +1067,141 @@ internal static class KnotFloor
             var shade = tone * (k switch { 0 => 1f, 1 => 0.94f, _ => 1.05f });
             Sweep(o, centres, closed: false, StrandSides, _ => rs, (j, angle, normal) =>
             {
-                // Darker where the strand presses into the next, lighter on the rope's outside.
-                var g = Math.Clamp((SN.Vector3.Dot(normal, outward[j]) + 0.55f) / 1.3f, 0f, 1f);
-                var c = Hemp * shade * (0.42f + (0.58f * g * g * (3 - (2 * g))));
+                // Darker only in the narrow lay between two strands, where they press together; the shader's
+                // occlusion does the yarns' own grooves.
+                var g = Math.Clamp((SN.Vector3.Dot(normal, outward[j]) + 0.75f) / 0.85f, 0f, 1f);
+                var c = Hemp * shade * (0.36f + (0.64f * g * g * (3 - (2 * g))));
                 return (c, Material.Rope, new SN.Vector4(along[j], angle, rs, (seed * 3) + k));
             });
-            Cap(o, centres, rs, Hemp * 0.55f, atEnd: false);
-            Cap(o, centres, rs, Hemp * 0.55f, atEnd: true);
+            // A strand's cut end is fresh fibre, lighter than its weathered outside, its fibres' ends facing out.
+            Cap(o, centres, rs, Hemp * shade * 0.9f, atEnd: false, fibres: true);
+            Cap(o, centres, rs, Hemp * shade * 0.9f, atEnd: true, fibres: true);
+            if (hairs is not null)
+            {
+                // None out of the whipping's twine.
+                bool Bare(int j) => !whipped || (MathF.Min(run[j], run[^1] - run[j]) is var e && (e < Stub * r || e > (Stub + WhipLength + 0.2f) * r));
+                Fuzz(hairs, centres, outward, ta, rs, r, along[^1], Hemp * shade, rng, Bare);
+                if (!closed)
+                {
+                    Tuft(hairs, centres, rs, r, Hemp * shade, rng, atEnd: false);
+                    Tuft(hairs, centres, rs, r, Hemp * shade, rng, atEnd: true);
+                }
+            }
         }
 
-        if (!closed && run[^1] > 4 * WhipLength * r)
+        if (whipped)
         {
             Whip(o, axis, run, r, seed, atEnd: false);
             Whip(o, axis, run, r, seed, atEnd: true);
         }
     }
 
-    // A whipping at one end of a rope: a tube of twine round the axis's last WhipLength radii, its turns the shader's
-    // ridges (Material.Rope with a radius such that a yarn's pitch is a turn of twine), and the cut across its end.
+    // A whipping near one end of a rope: a tube of twine round the axis, WhipLength radii of it ending Stub radii short of
+    // the rope's end, so that the cut strands show past it as on a sailor's rope; its turns are the shader's ridges
+    // (Material.Rope with a radius such that a yarn's pitch is a turn of twine), and its two ends the twine's faces.
     private static void Whip(List<Vertex> o, SN.Vector3[] axis, float[] run, float r, int seed, bool atEnd)
     {
         var length = run[^1];
-        var band = axis.Where((_, j) => atEnd ? run[j] >= length - (WhipLength * r) : run[j] <= WhipLength * r).ToArray();
-        if (band.Length < 2)
+        var (from, to) = atEnd ? (length - ((Stub + WhipLength) * r), length - (Stub * r)) : (Stub * r, (Stub + WhipLength) * r);
+        var inBand = Enumerable.Range(0, axis.Length).Where(j => run[j] >= from && run[j] <= to).ToArray();
+        if (inBand.Length < 2)
         {
             return;
         }
 
-        var from = atEnd ? length - (WhipLength * r) : 0f;
-        var places = run.Where(d => atEnd ? d >= from : d <= WhipLength * r).ToArray();
-        // Carried a little past the rope's end, over the strands' slanting cuts.
-        const float past = 0.45f;
-        if (atEnd)
-        {
-            band = [.. band, band[^1] + (SN.Vector3.Normalize(band[^1] - band[^2]) * past * r)];
-            places = [.. places, places[^1] + (past * r)];
-        }
-        else
-        {
-            band = [band[0] + (SN.Vector3.Normalize(band[0] - band[1]) * past * r), .. band];
-            places = [places[0] - (past * r), .. places];
-            from = places[0];
-        }
+        var band = inBand.Select(j => axis[j]).ToArray();
+        var places = inBand.Select(j => run[j]).ToArray();
         var rw = WhipRadius * r;
         // A negative radius tells the shader the pitch of a ring of twine instead of a strand's radius.
         var turns = new SN.Vector4(0f, 0f, -TwineTurn * r, (seed * 3) + 7);
-        Sweep(o, band, closed: false, 14, j =>
+        Sweep(o, band, closed: false, 16, j =>
         {
-            // Rounded where the twine starts and ends, on the strands.
+            // Rounded where the twine starts and ends, pulled into the strands.
             var d = MathF.Min(places[j] - places[0], places[^1] - places[j]) / r;
-            return rw * (0.93f + (0.07f * MathF.Min(1f, d / 0.25f)));
+            return rw * (0.97f + (0.03f * MathF.Min(1f, d / 0.3f)));
         }, (j, angle, _) => (Twine, Material.Rope, turns with { X = places[j] - from, Y = angle }));
-        Cap(o, band, rw, Hemp * 0.5f, atEnd);
+        Cap(o, band, rw * 0.97f, Twine * 0.8f, atEnd: false);
+        Cap(o, band, rw * 0.97f, Twine * 0.8f, atEnd: true);
+    }
+
+    // A strand's loose fibres, on its side that shows (not where it presses into the others), each leaning out of the
+    // yarn along the rope, one way or the other.
+    private static void Fuzz(List<Vertex> hairs, SN.Vector3[] centres, SN.Vector3[] outward, SN.Vector3[] tangent, float rs, float r,
+        float length, SN.Vector3 colour, Random rng, Func<int, bool> bare)
+    {
+        var (_, sn, sb) = Frames(centres);
+        var count = (int)(length * HairsPerMetre);
+        for (var i = 0; i < count; i++)
+        {
+            var j = rng.Next(centres.Length);
+            var a = rng.NextSingle() * MathF.Tau;
+            var o = (MathF.Cos(a) * sn[j]) + (MathF.Sin(a) * sb[j]);
+            if (SN.Vector3.Dot(o, outward[j]) < -0.15f || !bare(j))
+            {
+                continue;
+            }
+
+            var u = rng.NextSingle();
+            var len = r * (0.12f + (1.2f * u * u * u)); // most short, a few as long as the rope is thick
+            var lift = 0.3f + (0.9f * rng.NextSingle());
+            var way = rng.Next(2) == 0 ? 1f : -1f;
+            Hair(hairs, centres[j] + (o * rs * 0.96f), (way * tangent[j]) + (o * lift), o, len, r, colour, rng);
+        }
+    }
+
+    // The tuft at a cut strand's end: short fibres out of its face, spread a little.
+    private static void Tuft(List<Vertex> hairs, SN.Vector3[] centres, float rs, float r, SN.Vector3 colour, Random rng, bool atEnd)
+    {
+        if (centres.Length < 2)
+        {
+            return;
+        }
+
+        var (_, sn, sb) = Frames(centres);
+        var j = atEnd ? centres.Length - 1 : 0;
+        var outward = SN.Vector3.Normalize(atEnd ? centres[^1] - centres[^2] : centres[0] - centres[1]);
+        for (var i = 0; i < TuftPerEnd; i++)
+        {
+            var (a, d) = (rng.NextSingle() * MathF.Tau, rs * 0.9f * MathF.Sqrt(rng.NextSingle()));
+            var across = (MathF.Cos(a) * sn[j]) + (MathF.Sin(a) * sb[j]);
+            var len = r * (0.12f + (0.35f * rng.NextSingle()));
+            Hair(hairs, centres[j] + (across * d), outward + (across * (0.25f + (0.5f * d / rs))), outward, len, r, colour * 1.08f, rng);
+        }
+    }
+
+    // One fibre: a ribbon from root along way, in two pieces bending back towards the rope's run, thinning to its tip,
+    // never below the table's top. Its normal is the surface it springs from (so it takes the rope's light there), its
+    // Edge.Z zero (the shader's sign of a fibre), Edge.X how far along it.
+    private static void Hair(List<Vertex> hairs, SN.Vector3 root, SN.Vector3 way, SN.Vector3 normal, float len, float r, SN.Vector3 colour, Random rng)
+    {
+        SN.Vector3 Jitter() => new(rng.NextSingle() - 0.5f, rng.NextSingle() - 0.5f, rng.NextSingle() - 0.5f);
+        var d0 = SN.Vector3.Normalize(SN.Vector3.Normalize(way) + (Jitter() * 0.5f));
+        // Curled: a fibre bends as it dries, seldom straight.
+        var d1 = SN.Vector3.Normalize(d0 + (Jitter() * 1.4f) - (normal * 0.35f * SN.Vector3.Dot(d0, normal)));
+        var floor = TableTop + 0.0003f;
+        SN.Vector3 Above(SN.Vector3 p) => p with { Y = MathF.Max(p.Y, floor) };
+        var mid = Above(root + (d0 * len * 0.5f));
+        var tip = Above(mid + (d1 * len * 0.5f));
+        var side = SN.Vector3.Cross(d0, normal);
+        side = side.LengthSquared() > 1e-10f ? SN.Vector3.Normalize(side) : SN.Vector3.Normalize(SN.Vector3.Cross(d0, SN.Vector3.UnitY + new SN.Vector3(0.3f, 0f, 0.2f)));
+        var (w0, w1, w2) = (0.025f * r, 0.015f * r, 0.004f * r);
+        var c = colour * (1.0f + (0.25f * rng.NextSingle()));
+        var seed = rng.NextSingle() * 97f;
+        void Piece(SN.Vector3 a, float wa, float ta, SN.Vector3 bq, float wb, float tb)
+        {
+            var dir = SN.Vector3.Normalize(bq - a);
+            Vertex V(SN.Vector3 p, float t) => new(p, normal, c, Material.Rope, dir, new SN.Vector4(t, 0f, 0f, seed));
+            var (a0, a1, b0, b1) = (a - (side * wa), a + (side * wa), bq - (side * wb), bq + (side * wb));
+            hairs.Add(V(a0, ta));
+            hairs.Add(V(a1, ta));
+            hairs.Add(V(b1, tb));
+            hairs.Add(V(a0, ta));
+            hairs.Add(V(b1, tb));
+            hairs.Add(V(b0, tb));
+        }
+
+        Piece(root, w0, 0f, mid, w1, 0.5f);
+        Piece(mid, w1, 0.5f, tip, w2, 1f);
     }
 
     // A post or ring in turned oak: a spar straight through its points, carried past its ends; a ring round its own.
@@ -1278,8 +1382,9 @@ internal static class KnotFloor
     private static void Corner(List<Vertex> o, (SN.Vector3 P, SN.Vector3 N, SN.Vector3 C, Material M, SN.Vector4 E) v, SN.Vector3 tangent) =>
         o.Add(new(v.P, v.N, v.C, v.M, tangent, v.E));
 
-    // An end cut square across the tube: a disc facing out along it.
-    private static void Cap(List<Vertex> o, SN.Vector3[] centres, float r, SN.Vector3 colour, bool atEnd)
+    // An end cut square across the tube: a disc facing out along it; with fibres, shaded as fibres' ends (the shader's
+    // loose fibre, half its length out).
+    private static void Cap(List<Vertex> o, SN.Vector3[] centres, float r, SN.Vector3 colour, bool atEnd, bool fibres = false)
     {
         if (centres.Length < 2)
         {
@@ -1289,7 +1394,8 @@ internal static class KnotFloor
         var (_, n, b) = Frames(centres);
         var j = atEnd ? centres.Length - 1 : 0;
         var outward = SN.Vector3.Normalize(atEnd ? centres[^1] - centres[^2] : centres[0] - centres[1]);
-        var flat = new SN.Vector4(0f, 0f, 1f, 1f);
+        var flat = fibres ? new SN.Vector4(0.6f, 0f, 0f, 1f) : new SN.Vector4(0f, 0f, 1f, 1f);
+        var material = fibres ? Material.Rope : Material.Matte;
         const int sides = 12;
         for (var s = 0; s < sides; s++)
         {
@@ -1297,9 +1403,9 @@ internal static class KnotFloor
             var p0 = centres[j] + (r * ((MathF.Cos(a0) * n[j]) + (MathF.Sin(a0) * b[j])));
             var p1 = centres[j] + (r * ((MathF.Cos(a1) * n[j]) + (MathF.Sin(a1) * b[j])));
             var (qa, qb) = SN.Vector3.Dot(SN.Vector3.Cross(p0 - centres[j], p1 - centres[j]), outward) > 0 ? (p0, p1) : (p1, p0);
-            o.Add(new(centres[j], outward, colour, Material.Matte, n[j], flat));
-            o.Add(new(qa, outward, colour, Material.Matte, n[j], flat));
-            o.Add(new(qb, outward, colour, Material.Matte, n[j], flat));
+            o.Add(new(centres[j], outward, colour, material, n[j], flat));
+            o.Add(new(qa, outward, colour, material, n[j], flat));
+            o.Add(new(qb, outward, colour, material, n[j], flat));
         }
     }
 
@@ -1393,7 +1499,8 @@ internal static class KnotFloor
             var one = new Marins([good.Knots[0]], "");
             var lay = Layout(one)[0];
             var axis = Show(good.Knots[0])[0].Points.Select(lay.World).ToArray();
-            var laid = BuildKnots(one).Where(v => v.Material == Material.Rope).ToArray();
+            var hairs = new List<Vertex>();
+            var laid = BuildKnots(one, hairs).Where(v => v.Material == Material.Rope).ToArray();
             var (strands, twine) = (laid.Where(v => v.Edge.Z > 0f).ToArray(), laid.Where(v => v.Edge.Z < 0f).ToArray());
             float Off(SN.Vector3 p) => Enumerable.Range(0, 400).Min(i =>
             {
@@ -1401,10 +1508,18 @@ internal static class KnotFloor
                 var j = Math.Min((int)u, axis.Length - 2);
                 return SN.Vector3.Distance(p, SN.Vector3.Lerp(axis[j], axis[j + 1], u - j));
             });
-            var farthest = strands.Where((_, i) => i % 97 == 0).Max(v => Off(v.Pos));
-            Check(strands.Length > 1000 && farthest <= RopeRadius * 1.05f, $"a rope is three strands within its radius of its path ({farthest * 1000:F2} mm for {RopeRadius * 1000:F0})");
-            // Its two ends whipped: twine round the path's first and last 3 radii, hardly beyond the rope's radius.
             var (head, tail) = (axis[0], axis[^1]);
+            bool Inside(SN.Vector3 p) => MathF.Min(SN.Vector3.Distance(p, head), SN.Vector3.Distance(p, tail)) > (Stub + 1.2f) * RopeRadius;
+            var farthest = strands.Where((v, i) => i % 97 == 0 && Inside(v.Pos)).Max(v => Off(v.Pos));
+            var splayed = strands.Where((v, i) => i % 7 == 0 && !Inside(v.Pos)).Max(v => Off(v.Pos));
+            Check(strands.Length > 1000 && farthest <= RopeRadius * 1.05f && splayed <= RopeRadius * (1.05f + Splay),
+                $"a rope is three strands within its radius of its path ({farthest * 1000:F2} mm for {RopeRadius * 1000:F0}), its cut ends a little open ({splayed / RopeRadius:F2} radii)");
+            // Its loose fibres: thin, on the rope, lying close round it, none under the table's top, a tuft at each end.
+            var hairOff = hairs.Where((_, i) => i % 11 == 0).Max(v => Off(v.Pos));
+            Check(hairs.Count > 12 * 150 && hairs.All(v => v.Edge.Z == 0f && v.Pos.Y >= TableTop && float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z))
+                && hairOff <= RopeRadius * 3.2f && hairs.Count(v => SN.Vector3.Distance(v.Pos, tail) < 1.6f * RopeRadius) > 60,
+                $"a rope's loose fibres ({hairs.Count / 12} of them) stand within {hairOff / RopeRadius:F2} radii of it, a tuft at its end");
+            // Its two ends whipped: twine round 3 radii near each end, hardly beyond the rope's radius.
             var whipped = twine.Select(v => MathF.Min(SN.Vector3.Distance(v.Pos, head), SN.Vector3.Distance(v.Pos, tail))).ToArray();
             var twineOff = twine.Where((_, i) => i % 13 == 0).Max(v => Off(v.Pos));
             Check(twine.Length > 0 && whipped.Max() <= RopeRadius * (WhipLength + WhipRadius + 0.2f) && twineOff <= RopeRadius * 1.15f
@@ -1422,6 +1537,12 @@ internal static class KnotFloor
                 && !Seen(SN.Matrix4x4.CreateLookAt(new(0f, 1.2f, 1.5f), new(0f, 0.9f, 4f), SN.Vector3.UnitY) * projection, box)
                 && !Seen(SN.Matrix4x4.Identity, Box()),
                 "the knots are drawn when the picture looks at them, not when it looks away");
+            float To(SN.Vector3 e) => SN.Vector3.Distance(e, SN.Vector3.Clamp(e, box.Min, box.Max));
+            // From the walkway, a little over the table and in front of the knots, as --knots near looks.
+            var over = new SN.Vector3((box.Min.X + box.Max.X) / 2, TableTop + 0.3f, box.Max.Z + 0.6f);
+            var (hall, away) = (new SN.Vector3(0f, 1.2f, 1.5f), stair + new SN.Vector3(0f, 0f, 3f));
+            Check(Near(over, box) && !Near(hall, box) && !Near(away, box),
+                $"their loose fibres only near the tables ({To(over):F2}, {To(hall):F2} and {To(away):F2} m from them; box {box.Min} to {box.Max})");
 
             var en = BuildCards(good, fr: false);
             var empty = BuildCards(new([], "absent"), fr: false);

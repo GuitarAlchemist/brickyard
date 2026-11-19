@@ -442,6 +442,8 @@ internal static unsafe class Stage
             float occlusion = 1.0;
             float skyGlass = 0.0; // a city window's glass, which mirrors the sky (Material.Facade)
             float aerial = 0.0;   // Google's photographs, which carry their own light (Material.Aerial)
+            vec3 fibreDir = vec3(1.0, 0.0, 0.0); // a rope's fibres' run, along which its highlight stretches
+            float fibreAniso = 0.0;
             vec3 n;
             vec4 m;
             if (vMaterial == 16u)
@@ -514,6 +516,19 @@ internal static unsafe class Stage
                     occlusion *= mix(1.0, 0.8, joint) * mix(1.0, 0.45, hole);
                 }
             }
+            else if (vMaterial == 6u && vEdge.z == 0.0)
+            {
+                // A loose fibre (KnotFloor.Hair; Edge.X how far along it): its normal is the rope's surface it springs
+                // from, so that it takes the rope's light there; shadowed at its root, lighter towards its tip, where
+                // the light comes through it from behind; its sheen along it.
+                n = face;
+                base = vColor * mix(0.85, 1.15, vEdge.x);
+                base += vColor * vec3(0.5, 0.42, 0.3) * pow(max(dot(-v, normalize(vec3(-0.45, 0.8, 0.55))), 0.0), 3.0) * vEdge.x; // the hall's key light
+                occlusion = mix(0.55, 1.0, sqrt(vEdge.x));
+                m = vec4(0.04, 30.0, 0.0, 0.6);
+                fibreDir = normalize(vTangent);
+                fibreAniso = 0.85;
+            }
             else if (vMaterial == 6u)
             {
                 // A laid rope's strand (Material.Rope; Edge: along it in metres, round it, its radius, a seed): five
@@ -534,7 +549,7 @@ internal static unsafe class Stage
                 float height = sqrt(max(1.0 - across * across, 0.0));
                 float lean = clamp(-across / max(height, 0.3), -2.5, 2.5);
                 vec3 slope = normalize(circum * (starts / rs) + t * (6.2831853 / pitch));
-                n = normalize(face + 0.3 * lean * slope * detail);
+                n = normalize(face + 0.55 * lean * slope * detail);
                 float yarn = floor(phase / 6.2831853);
                 float tone = 0.86 + 0.2 * fract(sin(yarn * 12.9898 + vEdge.w * 78.233) * 43758.5453);
                 float fibre = phase * 9.0 + 2.3 * sin(vEdge.x / rs * 2.3 + yarn * 1.7 + vEdge.w);
@@ -542,11 +557,17 @@ internal static unsafe class Stage
                 float wander = 1.0 + 0.07 * sin(vEdge.x * 9.0 + vEdge.w * 3.1) * sin(vEdge.x * 23.0 + vEdge.w);
                 float hairs = pow(1.0 - max(dot(face, v), 0.0), 3.0);
                 // The grooves are the fibre in shadow, warmer and deeper than grey.
-                vec3 groove = mix(vec3(0.5, 0.4, 0.3), vec3(1.0), sqrt(height));
+                vec3 groove = mix(vec3(0.42, 0.3, 0.2), vec3(1.0), sqrt(height));
                 base = vColor * wander * mix(1.0, tone * fibres, detail) * mix(vec3(0.85), groove * 1.05, detail);
                 base += vColor * vec3(0.28, 0.22, 0.15) * hairs * mix(0.5, 1.0, height);
-                occlusion = mix(1.0, mix(0.6, 1.0, sqrt(height)), detail);
+                occlusion = mix(1.0, mix(0.4, 1.0, sqrt(height)), detail);
                 m = materials[6];
+                // Fibre's sheen: a highlight stretched along the yarns (or round the whipping's twine, tarred and
+                // glossier), as hair's is, rather than a round spot.
+                vec3 yarnDir = vEdge.z < 0.0 ? circum : t * (starts / rs) - circum * (6.2831853 / pitch);
+                fibreDir = normalize(yarnDir - n * dot(yarnDir, n) + 1e-5 * t);
+                fibreAniso = 0.8;
+                m = vEdge.z < 0.0 ? vec4(0.04, 40.0, 0.0, 0.5) : vec4(0.035, 22.0, 0.0, 0.45);
             }
             else if (vMaterial == 20u)
             {
@@ -719,7 +740,22 @@ internal static unsafe class Stage
             float fill = outdoors(vWorld) ? 0.5 + 0.5 * n.y : max(dot(n, fillDir), 0.0);
             float bounce = 0.5 - 0.5 * n.y;
             ao *= occlusion;
-            vec3 light = (keyColor * key * shade + fillColor * fill + vec3(0.12, 0.1, 0.09) * bounce + 0.03) * ao;
+            // Rope is a bundle of fibres: light goes into it and comes out warmer and softer, past the terminator and
+            // into the shadow a neighbouring strand casts, so that its dark side is a warm brown rather than the fill's
+            // blue-grey, and no shadow's edge on it is hard.
+            vec3 fillLight = fillColor;
+            if (vMaterial == 6u)
+            {
+                shade = mix(0.35, 1.0, shade);
+                fillLight = fillColor * vec3(1.4, 1.0, 0.65);
+            }
+
+            vec3 light = (keyColor * key * shade + fillLight * fill + vec3(0.12, 0.1, 0.09) * bounce + 0.03) * ao;
+            if (vMaterial == 6u)
+            {
+                float wrap = clamp((dot(n, keyDir) + 0.6) / 1.6, 0.0, 1.0);
+                light += keyColor * vec3(0.62, 0.42, 0.24) * wrap * mix(0.5, 0.12, shade) * ao;
+            }
 
             // The gallery's picture lights (HallGallery.Wash): a warm wash from a line along the left wall, 0.75 m out
             // and 2.45 m up, on what faces it near that wall, falling off with distance; untraced, so nothing shadows it.
@@ -740,8 +776,8 @@ internal static unsafe class Stage
             float norm = (m.y + 8.0) / 25.0;
             // Brushed metal stretches its highlights along the brush, a box's face's first axis: aluminium most, steel
             // less, brass (redder than it is blue) a little.
-            float aniso = vMaterial == 2u ? 0.85 : vMaterial == 3u ? (base.r > 1.8 * base.b ? 0.2 : 0.6) : 0.0;
-            vec3 brush = vTangent - n * dot(vTangent, n);
+            float aniso = vMaterial == 2u ? 0.85 : vMaterial == 3u ? (base.r > 1.8 * base.b ? 0.2 : 0.6) : fibreAniso;
+            vec3 brush = fibreAniso > 0.0 ? fibreDir : vTangent - n * dot(vTangent, n);
             brush = dot(brush, brush) > 1e-8 ? normalize(brush) : vec3(1.0, 0.0, 0.0);
             vec3 highlight = keyColor * lobe(n, normalize(keyDir + v), m.y, brush, aniso) * key * shade
                 + fillColor * lobe(n, normalize(fillDir + v), m.y, brush, aniso) * fill;
@@ -1978,8 +2014,13 @@ internal static unsafe class Stage
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
         var knotsPath = KnotFloor.Path(Option(args, "--marins"));
         var marins = KnotFloor.Load(knotsPath);
-        var (ropeVertices, cardsEn, cardsFr) = (KnotFloor.BuildKnots(marins), KnotFloor.BuildCards(marins, fr: false), KnotFloor.BuildCards(marins, fr: true));
+        var hairVertices = new List<Vertex>();
+        var (ropeVertices, cardsEn, cardsFr) = (KnotFloor.BuildKnots(marins, hairVertices), KnotFloor.BuildCards(marins, fr: false), KnotFloor.BuildCards(marins, fr: true));
         var knotRopes = new Mesh(device, physical, ropeVertices, resident: true);
+        // The ropes' loose fibres, drawn only within KnotFloor.HairsWithin of the tables (KnotFloor.Fuzz).
+        var knotHairs = new Mesh(device, physical, [.. hairVertices], resident: true);
+        hairVertices.Clear();
+        hairVertices.TrimExcess();
         // Where the ropes and the cards are, to draw them only when the picture shows some of it (KnotFloor.Seen).
         var knotBox = KnotFloor.Box(ropeVertices, cardsEn, cardsFr);
         var knots = new Dictionary<bool, Mesh>
@@ -1989,7 +2030,7 @@ internal static unsafe class Stage
         };
         (ropeVertices, cardsEn, cardsFr) = ([], [], []);
         Console.WriteLine(marins.Knots.Length > 0
-            ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {knotRopes.Count} vertices of rope{(knotRopes.Resident ? " in the GPU's memory" : " in the host's memory")}, the fuller table {KnotFloor.Fill:P0} full; "
+            ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {knotRopes.Count} vertices of rope and {knotHairs.Count / 12} loose fibres{(knotRopes.Resident ? " in the GPU's memory" : " in the host's memory")}, the fuller table {KnotFloor.Fill:P0} full; "
               + $"each knot moved from IX's path at most, its clearance, tightest turn, steepest slope and plan crossings/writhe, IX's then as shown: {string.Join(", ", marins.Knots.Select(k => (k, m: KnotFloor.Measure(k))).Select(x => $"{x.k.Id} {x.m.Moved:F1} r, {x.m.Before:F2}>{x.m.After:F2} d, {x.m.Bent.Tightest:F2}>{x.m.Relaxed.Tightest:F2} r, {x.m.Bent.Slope:F2}>{x.m.Relaxed.Slope:F2}, {x.m.Bent.Crossings}/{x.m.Bent.Writhe}>{x.m.Relaxed.Crossings}/{x.m.Relaxed.Writhe}"))}"
             : $"SCENE knots: none ({marins.Why}, {knotsPath})");
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
@@ -4760,6 +4801,11 @@ internal static unsafe class Stage
                 if (KnotFloor.Seen(viewProj, knotBox))
                 {
                     Draw(cb, layout, knotRopes, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                    if (KnotFloor.Near(eye, knotBox))
+                    {
+                        Draw(cb, layout, knotHairs, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                    }
+
                     Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 }
 
@@ -5501,6 +5547,7 @@ internal static unsafe class Stage
         }
         hall.Dispose();
         knotRopes.Dispose();
+        knotHairs.Dispose();
         shell.Dispose();
         shellGlass.Dispose();
         doorCurtain.Dispose();
