@@ -2778,8 +2778,14 @@ tiles ?? », then « Fait tout ca » to four proposals, the paid one among them.
   - `--door street`: the Centre Block is sharp, fewer small blades. Coarse posts taller than 8 m (the gates) and a
     coarse blob at the eye remain.
   - 52 fps.
-- **To do:** `--door balcony` is not yet seen. The opening is still at its cap (270 nested tilesets, 159 meshes):
-  finer tiles at the door need more requests per opening, which is the user's call.
+- **To do:** `--door balcony` is not yet seen.
+- **More requests an opening.** The opening stopped at its cap (270 nested tilesets, 159 meshes). Asked whether to
+  raise it to about 700 requests (about 4 USD an opening once the free 1,000 a month are spent), the user answered
+  « 2 oui ». Now:
+  - an opening has 700 requests and 250 meshes, its nested tilesets capped at what is left;
+  - a ride has up to 320 meshes, within 700 + 300 requests a run;
+  - 448 image layers, 600 MB on the GPU.
+  Live from the next opening of the door; not yet measured.
 
 ## Known problems
 

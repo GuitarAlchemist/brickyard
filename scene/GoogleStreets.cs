@@ -15,7 +15,9 @@ using SN = System.Numerics;
 internal static class GoogleStreets
 {
     internal const int Side = 512; // each tile's image, stretched to a square layer of the array
-    internal const int MostTiles = 160, MostRequests = 450, MostImages = 320; // 320 layers: 430 MB on the GPU with their mipmaps
+    // Since 2026-11-18 (« 2 oui » to about 700 requests an opening, past the free 1,000 a month: about 4 USD each) 250
+    // meshes and 700 requests (160 and 450 before); 448 layers: 600 MB on the GPU with their mipmaps.
+    internal const int MostTiles = 250, MostRequests = 700, MostImages = 448;
     // Metres: the place looked at, out from the door; around it; the eye over the ellipsoid, as a walker's at the door
     // (Wellington Street there is 45.3 m over it, measured on 2026-11-18). Since « beurk » (2026-11-18) the place is
     // smaller and nearer the door (330 and 150 m before), so that the requests refine what is near the eye; the
@@ -26,7 +28,7 @@ internal static class GoogleStreets
     // goes more than RefineStep metres from every place the tiles were refined for, they are chosen again for its path
     // as well, at most RideTiles meshes. What was fetched already comes from memory (this run's, never the disk), so
     // only the new tiles cost; all the run's requests together stop at MostRequests + RideRequests.
-    internal const int RideRequests = 300, RideTiles = 220;
+    internal const int RideRequests = 300, RideTiles = 320;
     internal const double RefineStep = 70;
 
     // A coarse tile's spikes (melted cars, trees and people a few metres tall): a triangle of a tile coarser than
@@ -79,7 +81,8 @@ internal static class GoogleStreets
             Radius = Reach,
             ScreenHeight = 1440,
             MaxTiles = riding ? RideTiles : MostTiles,
-            MaxTilesets = MostRequests + RideRequests, // the run's cap below stops it first
+            // The opening: the rest of its requests, but for the root and a margin. A ride's: the run's cap below.
+            MaxTilesets = riding ? MostRequests + RideRequests : MostRequests - MostTiles - 20,
         };
         if (http is null)
         {
