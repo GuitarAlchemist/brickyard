@@ -2620,6 +2620,9 @@ internal static unsafe class Stage
         var origamiFilm = origamiPlay is null ? null : new OrigamiFilm(camera, origamiPlay, origamiSeconds);
         var filmAsked = false; // the film's game asked of the cabinet
         var hud = filmDir is null; // the window's buttons and cards; a film shows none
+        // Google's attribution card, bottom right, over the version's label when that is shown.
+        (int X, int Y) AttributionAt(Panel.Card c) =>
+            (extent.Width - c.Width - CardMargin(), (hud && versionLabel is not null ? VersionAt().Y - (CardMargin() / 2) : extent.Height - CardMargin()) - c.Height);
         // While nobody moves the camera it tours the hall (IdleTour); --no-tour leaves it out, as films and shots do.
         // --tour-after S starts the tour after S seconds instead of 25, for captures. PARSEC is a third party's page, fetched
         // from its site and run in the scene, so nothing fetches it until asked: a click on the cabinet, or --arcade-robot,
@@ -3569,8 +3572,8 @@ internal static unsafe class Stage
             {
                 var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
                 if (panoShown && pano is not null && aerialCard is { } shownCard && panoCardId == pano.Id
-                    && cx >= extent.Width - shownCard.Width - CardMargin() && cx < extent.Width - CardMargin()
-                    && cy >= extent.Height - shownCard.Height - CardMargin() && cy < extent.Height - CardMargin())
+                    && AttributionAt(shownCard) is var (cardX, cardY)
+                    && cx >= cardX && cx < cardX + shownCard.Width && cy >= cardY && cy < cardY + shownCard.Height)
                 {
                     StreetPanorama.Report(pano, line => Console.WriteLine($"STREETVIEW {line}")); // Google's report-a-problem page
                 }
@@ -4150,7 +4153,7 @@ internal static unsafe class Stage
                 {
                     panoAskedAt = at;
                     var (lat, lon) = OttawaStreets.LatLon(at);
-                    panoLoading = StreetPanorama.Nearest(lat, lon, line => Console.WriteLine($"STREETVIEW {line}"));
+                    panoLoading = StreetPanorama.Nearest(lat, lon, line => Console.WriteLine($"STREETVIEW {line}"), pano?.Id);
                 }
             }
 
@@ -4181,7 +4184,9 @@ internal static unsafe class Stage
             officeView = splashing ? null : viewProj;
             gaiaEye = eye;
             lastEye = eye;
-            panoShown = pano is not null && panoMesh is not null && googleChosen && eye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } panoPlace
+            // Only with the eye out in the street: from the hall, through the open door, the hall's own floor and walls
+            // are what is near (the user's picture, 2026-11-18: the panorama's street lay over the hall's floor).
+            panoShown = pano is not null && panoMesh is not null && googleChosen && eye.Z > HallShell.Front + 0.5f && eye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } panoPlace
                 && SN.Vector2.Distance(panoPlace.FromHall(eye), OttawaStreets.Local(pano.Lat, pano.Lon)) < StreetPanorama.Near;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
@@ -4798,7 +4803,8 @@ internal static unsafe class Stage
                 {
                     // Google's attribution, bottom right, whenever its tiles are in view, the HUD shown or not.
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
-                    var push = new SplashPush(Rect(extent.Width - aerialCard.Width - CardMargin(), extent.Height - aerialCard.Height - CardMargin(), aerialCard.Width, aerialCard.Height), SN.Vector4.One);
+                    var (attributionX, attributionY) = AttributionAt(aerialCard);
+                    var push = new SplashPush(Rect(attributionX, attributionY, aerialCard.Width, aerialCard.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [aerialCardSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);

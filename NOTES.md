@@ -2832,6 +2832,19 @@ up to about 22 USD if Google bills each one.
 - The ledger was seeded for 2026-11 with the 3D share spent (1,000) and the 32 Street View tiles of the hidden run.
 - Google's own quotas and a budget alert in the Cloud console are the only hard guarantee; that is the user's to set.
 
+## Street View, first live faults (2026-11-18)
+
+Live, the nearest panorama to the door was a member of the public's photosphere (« Photo by: David Carriere »,
+2022-02, 3 × 2 tiles at zoom 3, no heading): small, turned, and the user saw mostly sky. And with the door open the
+panorama was drawn from inside the hall, its street over the hall's floor (the user's pictures: « la scene est
+cassee »). Fixed:
+- only panoramas of Google's own cars (`Meta.Taken`: the copyright names Google, outdoors, at least 13312 × 6656). The
+  API has no filter for this, so the metadata (not billed) is asked at the eye and at eight places 15 m round it, and
+  the nearest such panorama within 25 m is taken; none: logged, OpenStreetMap stays;
+- the panorama is drawn only with the eye out of the hall (z past the front wall);
+- its street lies 5 cm under the hall's floor; the attribution card sits over the version's label;
+- the panorama already drawn is not fetched again.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out
