@@ -1070,6 +1070,33 @@ Not verified, since nothing has run on the user's network or Chromecast yet:
 
 The button in Delta's window and its call to `/tv/start` belong to the brain and the scene, which Delta Live writes.
 
+### The delay on the television (2026-11-19)
+
+The user's first cast worked, with two things wrong: **6 s of delay**, and a red progress bar that would not go away.
+
+**What changed for the delay.** A player starts and stays three target durations behind the live edge, which was 3 s
+behind segments that are only published once they are complete, which was another 1 s.
+- The segments are half a second long, with a keyframe at each one.
+- ffmpeg writes `#EXT-X-TARGETDURATION:0` for half-second segments, which HLS forbids. `livePlaylist` serves it as 1.
+- `livePlaylist` adds `#EXT-X-SERVER-CONTROL:HOLD-BACK=1.5` and `#EXT-X-START:TIME-OFFSET=-1.5`, asking the player to
+  start and stay three segments behind.
+- The gateway logs each change of the player's state, as `the television's player: <state>`. If `BUFFERING` comes
+  back while the cast plays, the stream stalls: 1.5 s is too close to the edge for this network.
+
+**Verified:**
+- the playlist served, with an exact test;
+- ffmpeg's real half-second segments;
+- the player's state read from MEDIA_STATUS;
+- five mutations, each turning one test red.
+
+**Not verified:**
+- whether the default receiver honours HOLD-BACK or EXT-X-START. If it ignores both, the delay only loses the half
+  second of shorter segments.
+- the new delay itself.
+
+**The red bar** is not addressed. The default receiver draws its own overlay and offers no way to hide it. A Styled
+Media Receiver could hide it, but it needs a registered app id, which the user turned down.
+
 ## The louder copy goes (2026-10-23)
 
 The six live pairs (pid 117856, utterances 17/18 to 38/39) came 0.16 to 0.48 s apart, from the headset and the

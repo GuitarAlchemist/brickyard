@@ -195,7 +195,7 @@ func castPlay(ctx context.Context, addr, url string, playing func()) error {
 	}
 	ping := time.NewTicker(5 * time.Second)
 	defer ping.Stop()
-	session, loaded := "", false
+	session, loaded, state := "", false, ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -249,6 +249,10 @@ func castPlay(ctx context.Context, addr, url string, playing func()) error {
 			case m.namespace == nsMedia && (st.Type == "LOAD_FAILED" || st.Type == "LOAD_CANCELLED" || st.Type == "INVALID_REQUEST"):
 				return fmt.Errorf("the Chromecast did not take the stream: %s %s", st.Type, st.Reason)
 			case m.namespace == nsMedia && st.Type == "MEDIA_STATUS":
+				if now := mediaState(m.payload); now != "" && now != state {
+					state = now
+					logf("the television's player: %s", state)
+				}
 				if playing != nil && mediaPlays(m.payload) {
 					playing()
 					playing = nil
@@ -267,6 +271,18 @@ type mediaStatus struct {
 		PlayerState string `json:"playerState"`
 		IdleReason  string `json:"idleReason"`
 	} `json:"status"`
+}
+
+// mediaState is the player's state a MEDIA_STATUS message gives, or "" when it gives none: a stall shows as BUFFERING.
+func mediaState(payload string) string {
+	var m mediaStatus
+	json.Unmarshal([]byte(payload), &m)
+	for _, s := range m.Status {
+		if s.PlayerState != "" {
+			return s.PlayerState
+		}
+	}
+	return ""
 }
 
 func mediaPlays(payload string) bool {
