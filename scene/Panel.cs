@@ -78,19 +78,35 @@ internal static class Panel
     // the window.
     // The attribution Google's Map Tiles policy asks for while its 3D tiles are drawn (GoogleStreets): "Google Maps",
     // the text it accepts where its logo is not drawn, and on one line the data providers the tiles name.
-    public static Card Attribution(IReadOnlyList<string> providers, int windowWidth, int windowHeight)
+    // With a Street View panorama shown (StreetPanorama), two more lines: its copyright and date, and the words of its
+    // report-a-problem link, which a click on the card opens.
+    public static Card Attribution(IReadOnlyList<string> providers, int windowWidth, int windowHeight, string? panorama = null)
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
         var room = Math.Min(Px(560), windowWidth - (2 * Px(12))) - (2 * Px(Pad / 2));
         var line = Fit(string.Join(" · ", providers.Where(p => !p.Equals("Google", StringComparison.OrdinalIgnoreCase))), Px(12), false, room);
+        var taken = panorama is null ? "" : Fit(panorama, Px(12), false, room);
+        var report = panorama is null ? "" : Words.Say("Report a problem with this image", "Signaler un problème avec cette image");
         int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
-        var width = Math.Max(Wide("Google Maps", Px(14), true), Wide(line, Px(12), false)) + (2 * Px(Pad / 2));
-        var height = Px(Pad / 2) + Px(18) + (line.Length > 0 ? Px(16) : 0) + Px(Pad / 2);
+        var width = new[] { Wide("Google Maps", Px(14), true), Wide(line, Px(12), false), Wide(taken, Px(12), false), Wide(report, Px(12), false) }.Max() + (2 * Px(Pad / 2));
+        var height = Px(Pad / 2) + Px(18) + (line.Length > 0 ? Px(16) : 0) + (taken.Length > 0 ? 2 * Px(16) : 0) + Px(Pad / 2);
         var rgba = new byte[width * height * 4];
         Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 190);
         Text(rgba, width, height, "Google Maps", Px(14), true, Px(Pad / 2), Px(Pad / 2), (240, 236, 228));
-        if (line.Length > 0) Text(rgba, width, height, line, Px(12), false, Px(Pad / 2), Px(Pad / 2) + Px(18), (200, 206, 212));
+        var y = Px(Pad / 2) + Px(18);
+        if (line.Length > 0)
+        {
+            Text(rgba, width, height, line, Px(12), false, Px(Pad / 2), y, (200, 206, 212));
+            y += Px(16);
+        }
+
+        if (taken.Length > 0)
+        {
+            Text(rgba, width, height, taken, Px(12), false, Px(Pad / 2), y, (200, 206, 212));
+            Text(rgba, width, height, report, Px(12), false, Px(Pad / 2), y + Px(16), (120, 180, 255));
+        }
+
         return new Card(rgba, width, height, []);
     }
 

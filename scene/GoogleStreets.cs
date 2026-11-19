@@ -47,13 +47,29 @@ internal static class GoogleStreets
     private static GoogleTileSource? google;
     private static HttpClient? http;
 
+    // The run's one client to tile.googleapis.com (the 3D tiles and StreetPanorama's).
+    internal static HttpClient Http
+    {
+        get
+        {
+            if (http is null)
+            {
+                var client = new HttpClient();
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("delta-scene/1.0");
+                Interlocked.CompareExchange(ref http, client, null);
+            }
+
+            return http;
+        }
+    }
+
     // How many requests this run has made, all choices together.
     internal static int RunRequests => google?.Requests ?? 0;
 
     internal static bool MayRefine => google is not null && RunRequests < MostRequests + RideRequests - 40;
 
     // The key, from the process's environment or else the user's; null without one. Never printed.
-    private static string? Key() =>
+    internal static string? Key() =>
         Environment.GetEnvironmentVariable("GOOGLE_MAPS_API_KEY") is { Length: > 0 } key ? key
         : OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("GOOGLE_MAPS_API_KEY", EnvironmentVariableTarget.User) is { Length: > 0 } user ? user
         : null;
@@ -84,13 +100,7 @@ internal static class GoogleStreets
             // The opening: the rest of its requests, but for the root and a margin. A ride's: the run's cap below.
             MaxTilesets = riding ? MostRequests + RideRequests : MostRequests - MostTiles - 20,
         };
-        if (http is null)
-        {
-            http = new HttpClient();
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("delta-scene/1.0");
-        }
-
-        google ??= new GoogleTileSource(http, key);
+        google ??= new GoogleTileSource(Http, key);
         var source = new Remembered(new Capped(google, MostRequests + RideRequests));
         var before = google.Requests;
         using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(4));

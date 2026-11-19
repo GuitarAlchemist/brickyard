@@ -2787,6 +2787,36 @@ tiles ?? », then « Fait tout ca » to four proposals, the paid one among them.
   - 448 image layers, 600 MB on the GPU.
   Live from the next opening of the door; not yet measured.
 
+## Street View at street level (2026-11-18)
+
+The user, on the 3D tiles at a walker's height: « toujours pas terrible », then « y'a pas une API google street view ? »
+and « Oui » to checking its terms and a prototype. Google's photogrammetry is taken from the air and melts near the
+ground whatever the budget; Street View's panoramas are photographs taken in the street. `StreetPanorama.cs`.
+
+- **API** (Map Tiles API, Street View tiles, read on 2026-11-18): `createSession` with `mapType` streetview, then the
+  metadata of the panorama nearest a place within 50 m, then its tiles at zoom 3. The session and the metadata are not
+  billed; a tile is, 100,000 free a month, then 2 USD a thousand. A panorama at zoom 3 is 8 × 4 tiles (16384 × 8192 at
+  zoom 5), so 32 tiles; at most 60 panoramas a run.
+- **Terms followed:**
+  - the tiles live in memory for the run, never on disk; the panorama ID is not kept either;
+  - the attribution card shows "Google Maps", then « Street View », the panorama's copyright and date, and « Report a
+    problem with this image » / « Signaler un problème avec cette image »; a click on the card opens the panorama's
+    `reportProblemLink`, only on https at a google.com host;
+  - no 3D model is made from the imagery and no image is analysed: the picture is laid on a fixed sphere.
+- **Drawn:**
+  - a sphere of 30 m round where the panorama was taken, 2.5 m over the street; its directions below the horizon are
+    cut by the street, so the ground keeps some parallax as the eye moves;
+  - the image's centre at the panorama's heading;
+  - the tiles go in the aerial array after the 3D tiles' photographs (`Material.Aerial`, unlit, glow alpha −1);
+  - it is drawn in place of the 3D tiles while the eye is lower than 4 m and within 12 m of where it was taken, else the
+    3D tiles. Out in the streets, low, a new panorama is asked for 8 m from the one shown and 5 m from the last ask.
+- **Measured hidden** (`--door street`, Google): the opening's 3D tiles took 569 requests; one panorama 4.9 m from the
+  eye, 8 × 4 tiles (32 Street View tiles), taken 2023-09, heading 59°, « From the Owner, Photo by: Google ». Its upload
+  re-sends the whole array (326 + 32 layers) in 220 ms, one hitch per panorama. 52 fps. The Centre Block, the gates and
+  the street are sharp; a car parked by the camera is stretched over the street below the horizon.
+- **To do:** walking or riding between panoramas (a jump at each, and the hitch); the report link by hand; a per-layer
+  upload into reserved slots instead of the whole array.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

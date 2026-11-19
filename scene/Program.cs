@@ -1953,6 +1953,16 @@ internal static unsafe class Stage
         IReadOnlyList<string> aerialProviders = [];
         var googlePath = new List<SN.Vector2>(); // the places out in the streets the tiles were refined for, past the door
         var lastEye = SN.Vector3.Zero;
+        // Street View at street level (StreetPanorama): the panorama nearest the eye, low in the street, drawn in place
+        // of the 3D tiles within StreetPanorama.Near metres of where it was taken. Its tiles go in the aerial array after
+        // the 3D tiles' photographs (aerialLayers).
+        byte[][] aerialLayers = [];
+        StreetPanorama.Pano? pano = null;
+        Mesh? panoMesh = null;
+        Task<StreetPanorama.Pano?>? panoLoading = null;
+        var panoAskedAt = new SN.Vector2(float.NaN, float.NaN);
+        var panoShown = false;
+        var panoCardId = "";
         // The gallery on the left wall (HallGallery): the learn site's courses, demos and artifacts, from gallery.json
         // (--gallery FILE), drawn from Lego's blocks and redrawn when the file changes; a click on one opens its page.
         // What the demos and artifacts show inside their glasses (GalleryPictures, --pictures DIR), read first.
@@ -3558,7 +3568,13 @@ internal static unsafe class Stage
             else if (action == GlfwButtonAction.Press && button == 0)
             {
                 var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
-                if (OfficeRobotAt(cx, cy) is { } robot)
+                if (panoShown && pano is not null && aerialCard is { } shownCard && panoCardId == pano.Id
+                    && cx >= extent.Width - shownCard.Width - CardMargin() && cx < extent.Width - CardMargin()
+                    && cy >= extent.Height - shownCard.Height - CardMargin() && cy < extent.Height - CardMargin())
+                {
+                    StreetPanorama.Report(pano, line => Console.WriteLine($"STREETVIEW {line}")); // Google's report-a-problem page
+                }
+                else if (OfficeRobotAt(cx, cy) is { } robot)
                 {
                     // Held: the release decides between a click and a turn (the frame loop turns it meanwhile).
                     (officeDrag, officeDragFrom, officeDragAt, officeDragMoved) = (robot, (cx, cy), (cx, cy), 0);
@@ -4100,7 +4116,19 @@ internal static unsafe class Stage
                     if (drawnBefore is not null) device.WaitIdle();
                     aerial = new Mesh(device, physical, tiles.Vertices, resident: true);
                     drawnBefore?.Dispose();
-                    if (tiles.Layers.Length > 0) UploadAerial(tiles.Layers);
+                    if (tiles.Layers.Length > 0)
+                    {
+                        aerialLayers = tiles.Layers;
+                        if (pano is not null && streetsPlacement is { } still)
+                        {
+                            // The panorama's layers follow the new photographs: its mesh is rebuilt for where they now begin.
+                            var panoBefore = panoMesh;
+                            panoMesh = new Mesh(device, physical, StreetPanorama.Build(pano, still, aerialLayers.Length));
+                            panoBefore?.Dispose();
+                        }
+
+                        UploadAerial(pano is null ? aerialLayers : [.. aerialLayers, .. pano.Layers]);
+                    }
                     aerialProviders = tiles.Attributions;
                     aerialCardSize = (0, 0);
                     Console.WriteLine($"GOOGLE {tiles.Meshes} tiles, {tiles.Vertices.Length / 3} triangles, {tiles.Layers.Length} images, {tiles.Requests} requests ({GoogleStreets.RunRequests} this run){(tiles.Truncated ? ", stopped at the cap of tiles" : "")}; "
@@ -4109,6 +4137,36 @@ internal static unsafe class Stage
                 else
                 {
                     Console.Error.WriteLine($"GOOGLE no tiles drawn: {fetched.Exception?.InnerException?.Message ?? "none fetched"}; {(aerial is null ? "OpenStreetMap's buildings stay" : "the tiles drawn stay")}");
+                }
+            }
+
+            // Street View: low in the street among Google's tiles, the panorama nearest the eye is asked for whenever the eye
+            // is StreetPanorama.Again metres from the one shown, and has moved 5 m since the last ask.
+            if (googleChosen && aerial is not null && panoLoading is null && (camera.Outdoors || rides.Outdoors) && lastEye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } street)
+            {
+                var at = street.FromHall(lastEye);
+                var fromShown = pano is null ? double.PositiveInfinity : SN.Vector2.Distance(at, OttawaStreets.Local(pano.Lat, pano.Lon));
+                if (fromShown > StreetPanorama.Again && !(SN.Vector2.Distance(at, panoAskedAt) < 5f))
+                {
+                    panoAskedAt = at;
+                    var (lat, lon) = OttawaStreets.LatLon(at);
+                    panoLoading = StreetPanorama.Nearest(lat, lon, line => Console.WriteLine($"STREETVIEW {line}"));
+                }
+            }
+
+            if (panoLoading is { IsCompleted: true } panoFetched)
+            {
+                panoLoading = null;
+                if (panoFetched.IsCompletedSuccessfully && panoFetched.Result is { } got && got.Id != pano?.Id && streetsPlacement is { } street2)
+                {
+                    var started = clock.Elapsed.TotalSeconds;
+                    pano = got;
+                    UploadAerial([.. aerialLayers, .. got.Layers]);
+                    var panoBefore = panoMesh;
+                    panoMesh = new Mesh(device, physical, StreetPanorama.Build(got, street2, aerialLayers.Length));
+                    panoBefore?.Dispose();
+                    Console.WriteLine($"STREETVIEW panorama {got.Cols} × {got.Rows} tiles taken {got.Date ?? "?"}, {SN.Vector2.Distance(street2.FromHall(lastEye), OttawaStreets.Local(got.Lat, got.Lon)):F1} m from the eye, heading {got.Heading:F0}°; "
+                        + $"{StreetPanorama.Tiles} Street View tiles this run; uploaded in {(clock.Elapsed.TotalSeconds - started) * 1000:F0} ms; {got.Copyright}");
                 }
             }
 
@@ -4123,6 +4181,8 @@ internal static unsafe class Stage
             officeView = splashing ? null : viewProj;
             gaiaEye = eye;
             lastEye = eye;
+            panoShown = pano is not null && panoMesh is not null && googleChosen && aerial is not null && eye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } panoPlace
+                && SN.Vector2.Distance(panoPlace.FromHall(eye), OttawaStreets.Local(pano.Lat, pano.Lon)) < StreetPanorama.Near;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
             if (wallTest && !splashing) WallTest(linkNow);
@@ -4222,10 +4282,13 @@ internal static unsafe class Stage
                     cardTexture = Upload(card, cardSet, cardTexture);
                 }
 
-                if (googleChosen && aerial is not null && !splashing && aerialCardSize != (extent.Width, extent.Height))
+                var panoCard = panoShown && pano is not null ? pano.Id : "";
+                if (googleChosen && aerial is not null && !splashing && (aerialCardSize != (extent.Width, extent.Height) || panoCard != panoCardId))
                 {
                     aerialCardSize = (extent.Width, extent.Height);
-                    aerialCard = Panel.Attribution(aerialProviders, extent.Width, extent.Height);
+                    panoCardId = panoCard;
+                    var taken = panoShown && pano is not null ? $"Street View {pano.Copyright}{(pano.Date is { } d ? $" · {d}" : "")}" : null;
+                    aerialCard = Panel.Attribution(aerialProviders, extent.Width, extent.Height, taken);
                     aerialCardTexture = Upload(aerialCard, aerialCardSet, aerialCardTexture);
                 }
 
@@ -4604,7 +4667,12 @@ internal static unsafe class Stage
                 DrawLetThrough(cb, layout, gymGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
                 DrawLetThrough(cb, layout, gymBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
                 // The streets, out of the traced structure: a kilometre of city would swell it for what the door shows.
-                if (outside && googleChosen && aerial is not null)
+                if (outside && googleChosen && panoShown && panoMesh is not null)
+                {
+                    // Street View's photographs round the eye, in place of the 3D tiles, which they would cross.
+                    DrawUntraced(cb, layout, panoMesh, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0f, 0f, 0f, -1f)));
+                }
+                else if (outside && googleChosen && aerial is not null)
                 {
                     // Google's photographs, untraced: they carry their own light and shadows, and nothing else of the
                     // city is drawn beside them.
@@ -4726,7 +4794,7 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
-                if (outside && googleChosen && aerial is not null && aerialCard is not null && aerialCardTexture is not null)
+                if (outside && googleChosen && (aerial is not null || panoShown) && aerialCard is not null && aerialCardTexture is not null)
                 {
                     // Google's attribution, bottom right, whenever its tiles are in view, the HUD shown or not.
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
