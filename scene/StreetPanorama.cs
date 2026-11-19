@@ -19,7 +19,9 @@ internal static class StreetPanorama
 {
     internal const int Zoom = 3, MostTilesEach = 40, MostPanoramas = 60;
     // Sink: the panorama's street lies this far under the hall's floor, which is seen through the open door over it.
-    internal const double Radius = 30, CameraHeight = 2.5, Near = 12, Again = 8, Sink = 0.05;
+    // Near was 12 m: live, the panorama of Google's in front of the door was taken 13.5 m out, so a walker at the door
+    // never saw it (2026-11-18). It is now the distance it is chosen within, and the sphere wider to match.
+    internal const double Radius = 45, CameraHeight = 2.5, Near = 25, Again = 8, Sink = 0.05;
 
     // A panorama: where it was taken, which way its image's centre looks, what must be shown with it, its image as
     // Cols × Rows layers of GoogleStreets.Side pixels, and how much of the last column and row the image fills.
