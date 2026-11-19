@@ -165,6 +165,7 @@ internal static class GoogleMonth
             var inner = new Counting();
             using (var metered = new HttpMessageInvoker(new GoogleStreets.Metered(inner)))
             {
+                System.Net.HttpStatusCode? refused = null;
                 bool Send(string url)
                 {
                     try
@@ -172,8 +173,9 @@ internal static class GoogleMonth
                         metered.SendAsync(new HttpRequestMessage(HttpMethod.Get, url), CancellationToken.None).GetAwaiter().GetResult().Dispose();
                         return true;
                     }
-                    catch (HttpRequestException)
+                    catch (HttpRequestException e)
                     {
+                        refused = e.StatusCode;
                         return false;
                     }
                 }
@@ -184,6 +186,7 @@ internal static class GoogleMonth
                     && Used(Kind.Tiles3D) == 3 && Used(Kind.StreetView) == 0, "Street View tiles and other hosts are not metered here");
                 Take(Kind.Tiles3D, Free3D - 3);
                 check(!Send(tile) && inner.Sent == 5 && Used(Kind.Tiles3D) == Free3D, "past the allowance a 3D request is refused before it is sent");
+                check(refused is not null, "with a status code, which GoogleTileSource does not ask again");
             }
 
             File.WriteAllText(Path, "{ broken");

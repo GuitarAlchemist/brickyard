@@ -138,14 +138,17 @@ internal static class GoogleStreets
 
     // Every request for a 3D tile, each retry among them (GoogleTileSource tries up to three times), is taken from the
     // month's ledger as it is sent, and refused past it (Brutal's review of 0.8.0: the ledger took one per tile, not
-    // per try).
+    // per try). The refusal carries a status code (402), so that GoogleTileSource does not take it for a dropped
+    // connection and wait to ask again (it retries only those without one): Brutal's review of 0.8.1.
     internal sealed class Metered(HttpMessageHandler inner) : DelegatingHandler(inner)
     {
         internal static bool Paid(Uri? uri) => uri is { Host: "tile.googleapis.com" } && uri.AbsolutePath.StartsWith("/v1/3dtiles/", StringComparison.Ordinal);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Paid(request.RequestUri) && !GoogleMonth.Take(GoogleMonth.Kind.Tiles3D)
-                ? throw new HttpRequestException($"this month's {GoogleMonth.Free3D} 3D tile requests (1,000 free and {GoogleMonth.Dollars3D} USD) are spent: stopped")
+                ? throw new HttpRequestException(
+                    $"this month's {GoogleMonth.Free3D} 3D tile requests (1,000 free and {GoogleMonth.Dollars3D} USD) are spent: stopped",
+                    null, System.Net.HttpStatusCode.PaymentRequired)
                 : base.SendAsync(request, cancellationToken);
     }
 
