@@ -42,7 +42,9 @@ foreach ($demo in (Get-Content $Gallery -Raw -Encoding utf8 | ConvertFrom-Json).
         try { $pages[$base] = (Invoke-WebRequest -UseBasicParsing $base).Content }
         catch { "skipped $($demo.title): $($_.Exception.Message)"; $pages[$base] = ''; continue }
     }
-    $video = Find-Video $pages[$base] ([Uri]$base) ($uri.Fragment ? [Uri]::UnescapeDataString($uri.Fragment.Substring(1)) : '')
+    $anchor = ''
+    if ($uri.Fragment) { $anchor = [Uri]::UnescapeDataString($uri.Fragment.Substring(1)) } # no ?: : check.ps1 parses as Windows PowerShell
+    $video = Find-Video $pages[$base] ([Uri]$base) $anchor
     if (-not $video) { continue }
     if ($video.Scheme -ne 'https') { "skipped $($demo.title): $video is not HTTPS"; continue }
     $key = Get-Key $demo.url
