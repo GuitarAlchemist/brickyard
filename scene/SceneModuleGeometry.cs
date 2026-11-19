@@ -1,6 +1,36 @@
 using Delta.SceneModules;
 using SN = System.Numerics;
 
+// A module's meshes on the GPU: its labels and boxes, and apart from them the triangles the hand may turn (GaiaTurn).
+internal sealed class ModuleSurface(Mesh rest, Mesh? turning, SN.Vector3 centre, float radius) : IDisposable
+{
+    public Mesh Rest => rest;
+    public Mesh? Turning => turning;
+    public SN.Vector3 Centre => centre;
+    public float Radius => radius;
+
+    public static ModuleSurface Make(Vertex[] all, Func<Vertex[], Mesh> upload)
+    {
+        var (r, t, c, radius) = SceneModuleGeometry.Split(all);
+        var restMesh = upload(r);
+        try
+        {
+            return new(restMesh, t.Length > 0 ? upload(t) : null, c, radius);
+        }
+        catch
+        {
+            restMesh.Dispose();
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+        try { rest.Dispose(); }
+        finally { turning?.Dispose(); }
+    }
+}
+
 internal static class SceneModuleGeometry
 {
     public static Vertex[] Compile(ModuleVisual visual, ModulePresentation presentation) => Compile(visual, null, presentation);
@@ -58,6 +88,23 @@ internal static class SceneModuleGeometry
         }
         if (triangles is not null) Triangles(vertices, triangles);
         return vertices.ToArray();
+    }
+
+    // The module's triangles painted with an image (Gaia's planet) apart from the rest, so that the host can turn them by
+    // hand (GaiaTurn); their centre and radius. Without such triangles Turning is empty.
+    public static (Vertex[] Others, Vertex[] Turning, SN.Vector3 Centre, float Radius) Split(Vertex[] all)
+    {
+        var turning = all.Where(v => v.Material == Material.Imaged).ToArray();
+        var rest = all.Where(v => v.Material != Material.Imaged).ToArray();
+        if (turning.Length == 0) return (rest, turning, default, 0f);
+        var (lo, hi) = (turning[0].Pos, turning[0].Pos);
+        foreach (var v in turning)
+        {
+            lo = SN.Vector3.Min(lo, v.Pos);
+            hi = SN.Vector3.Max(hi, v.Pos);
+        }
+
+        return (rest, turning, (lo + hi) / 2, (hi.X - lo.X) / 2);
     }
 
     // The images the host holds for module triangles, by name, each its first layer in the Low shader's globe images

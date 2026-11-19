@@ -20,6 +20,79 @@ internal sealed class FreeCamera
     internal static readonly SN.Vector3 DriftTarget = new(0f, 0.7f, 0f);
     internal static readonly SN.Vector3 Min = new(-6f, 0.25f, -3.1f);
     internal static readonly SN.Vector3 Max = new(6f, 4.2f, 5.5f);
+
+    // Out through the roll-up door when it is open (StreetDoor): the opening, overlapping the hall and the street, and
+    // the streets of Ottawa beyond it (OttawaStreets), where one may fly up to see the city.
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Doorway =
+        (new(HallShell.DoorX - (HallShell.DoorWidth / 2) + 0.35f, Min.Y, Max.Z - 0.5f), new(HallShell.DoorX + (HallShell.DoorWidth / 2) - 0.35f, HallShell.DoorHeight - 0.3f, HallShell.Front + 0.9f));
+
+    // Up to 150 m over them, where the drone may climb (Rides); as far as Google's tiles reach (GoogleStreets: Reach
+    // round a point Ahead of the door), so that the scooter does not ride out of the city into the void (2026-11-18):
+    // the box's far corners are within the tiles' circle. OpenStreetMap's buildings reach further.
+    private static readonly float StreetsHalf = (float)(GoogleStreets.Reach * Scale / 1.42);
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Streets = (
+        new(HallShell.DoorX - StreetsHalf, Min.Y, HallShell.Front + 0.6f),
+        new(HallShell.DoorX + StreetsHalf, 150f * Scale, HallShell.Front + (float)(GoogleStreets.Ahead * Scale) + StreetsHalf));
+
+    // Through the hall's right wall into the gymnasium (Gymnasium): the door's opening, overlapping the hall and the
+    // wing, and the wing itself; always open.
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) GymDoor =
+        (new(Max.X - 0.5f, Min.Y, Gymnasium.DoorZ - (Gymnasium.DoorWidth / 2) + 0.3f), new(Gymnasium.Left + 0.6f, Gymnasium.DoorHeight - 0.3f, Math.Min(Max.Z, Gymnasium.DoorZ + (Gymnasium.DoorWidth / 2) - 0.3f)));
+
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max) Gym =
+        (new(Gymnasium.Left + 0.3f, Min.Y, Gymnasium.Back + 0.3f), new(Gymnasium.Right - 0.3f, Gymnasium.Top - 0.6f, Max.Z));
+
+    // The places the body may be, with the roll-up door shut and open.
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max)[] ClosedSpaces = [(Min, Max), GymDoor, Gym];
+    private static readonly (SN.Vector3 Min, SN.Vector3 Max)[] OpenSpaces = [(Min, Max), GymDoor, Gym, Doorway, Streets];
+
+    // Whether the door lets the body through; set by the scene each frame.
+    internal bool DoorOpen { get; set; }
+
+    // The streets as far as the city reaches; a wider field for the rides' tests, which run at speed for seconds.
+    internal (SN.Vector3 Min, SN.Vector3 Max)? StreetsOverride { get; init; }
+
+    internal static float StreetsFar => Streets.Max.Z;
+
+    internal static (SN.Vector3 Min, SN.Vector3 Max) WideStreets => (new(-2000f, Min.Y, HallShell.Front + 0.6f), new(2000f, 150f * Scale, 2000f));
+
+    // A building of the streets, its footprint (x, z) and the box round it; the walking body stays Radius out of it.
+    internal sealed record Footprint(SN.Vector2[] Ring, SN.Vector2 Min, SN.Vector2 Max)
+    {
+        internal static Footprint Of(SN.Vector2[] ring) =>
+            new(ring, new(ring.Min(p => p.X), ring.Min(p => p.Y)), new(ring.Max(p => p.X), ring.Max(p => p.Y)));
+    }
+
+    // The streets' buildings, once they are loaded (OttawaStreets).
+    internal IReadOnlyList<Footprint> Footprints { get; set; } = [];
+
+    // Whether the eye is out in the streets.
+    internal bool Outdoors => position.Z > HallShell.Front;
+
+    // Where a move from one place to another ends: anywhere in a space that holds both (the hall, the gymnasium and its
+    // door, and the doorway and the streets when the roll-up door is open); else at the nearest place in the space it started from; anywhere it is to go when
+    // it started outside them all (a view's cut).
+    internal SN.Vector3 Confine(SN.Vector3 from, SN.Vector3 to)
+    {
+        var spaces = !DoorOpen ? ClosedSpaces : StreetsOverride is { } wide ? [.. OpenSpaces[..^1], wide] : OpenSpaces;
+        static bool In((SN.Vector3 Min, SN.Vector3 Max) s, SN.Vector3 p) => SN.Vector3.Clamp(p, s.Min, s.Max) == p;
+        foreach (var s in spaces)
+        {
+            if (In(s, from) && In(s, to)) return to;
+        }
+
+        foreach (var s in spaces)
+        {
+            if (In(s, from)) return SN.Vector3.Clamp(to, s.Min, s.Max);
+        }
+
+        foreach (var s in spaces)
+        {
+            if (In(s, to)) return to;
+        }
+
+        return SN.Vector3.Clamp(to, Min, Max);
+    }
     internal const float Radius = 0.3f * Scale; // the walking body's, against what stands on the floor
     internal const float SolidRadius = 0.15f; // the walking body's, against the knots' floor's solids (Collide)
     internal const float StepUp = 0.16f; // the highest step the body walks onto, above a stair's 0.125 m
@@ -36,6 +109,10 @@ internal sealed class FreeCamera
         (new(-3.3f, -3f), 0f, new(0.35f, 0.35f)), // the pillars
         (new(3.3f, -3f), 0f, new(0.35f, 0.35f)),
         (new(ArcadeCabinet.Position.X, ArcadeCabinet.Position.Z), ArcadeCabinet.Yaw, new(0.335f, 0.4f)), // the arcade cabinet, turned to the room
+        (HallGallery.Footprint.Centre, 0f, HallGallery.Footprint.Half), // the gallery's bookcase and counter along the left wall
+        (HallGallery.CatalogueFootprint.Centre, 0f, HallGallery.CatalogueFootprint.Half), // Streeling's card catalogue on the back wall
+        (HallGallery.LecternFootprint.Centre, 0f, HallGallery.LecternFootprint.Half), // the lectern
+        .. Gymnasium.Obstacles, // the gymnasium's bleachers
     ];
 
     private const float Sensitivity = 0.0025f; // radians a pixel, the Observatory's
@@ -279,6 +356,8 @@ internal sealed class FreeCamera
         (new(0f, 1.75f, 0.6f), new(0f, 1.78f, -3.3f)), // the clocks of Ottawa and Paris
         ArcadeCabinet.View, // in front of the arcade cabinet, at a player's height
         (new(5.05f, KnotFloor.Level + WalkHeight, 0.6f), new(5.05f, KnotFloor.Level + 0.9f, -3f)), // the knots' floor, at the stair's top
+        (new(-2.4f, WalkHeight, 1.2f), new(-6.25f, 1.45f, 1.2f)), // the gallery on the left wall: courses, demos and artifacts
+        (new(-4.04f, 1.5f, -1.0f), new(-4.734f, 1.099f, -1.0f)), // the lectern's open book, read from in front of it (LearnReader)
     ];
 
     // 1 for the drift, 2 to 7 for the views; false for any other number. A cut lands at once, as behind the cinematic's
@@ -308,7 +387,7 @@ internal sealed class FreeCamera
         var d = SN.Vector3.Normalize(target - eye);
         yaw = MathF.Atan2(d.X, -d.Z);
         pitch = MathF.Asin(d.Y);
-        position = SN.Vector3.Clamp(eye, Min, Max);
+        position = Confine(eye, eye); // a view's eye anywhere the camera may be, else the nearest place in the hall
         var standing = GroundAt(new(position.X, position.Z), position.Y - WalkHeight) + WalkHeight;
         framed = !Flying && MathF.Abs(position.Y - standing) > 0.01f; // a view frames; it never takes off (F does)
         Free = true;
@@ -374,7 +453,7 @@ internal sealed class FreeCamera
         }
 
         var step = SN.Vector3.Normalize(direction) * Speed * (held.Fast ? Run : 1f) * dt;
-        position = SN.Vector3.Clamp(position + step, Min, Max);
+        position = Confine(position, position + step);
     }
 
     // The body, a circle of Radius at p, out of what stands on the floor by the nearest way, its speed into it lost so that
@@ -402,12 +481,109 @@ internal sealed class FreeCamera
                     p = Push(p, (lo + hi) / 2f, 0f, (hi - lo) / 2f, SolidRadius);
                 }
             }
+
+            // Out in the streets, the buildings' walls.
+            if (p.Y > HallShell.Front)
+            {
+                foreach (var f in Footprints)
+                {
+                    p = PushOut(p, f, Radius);
+                }
+            }
         }
 
         return p;
     }
 
+    // A circle of the given radius at p, out of what stands on the hall's floor and the knots' floor's walls, or out of
+    // the streets' buildings beyond the front wall, as the walking body is kept: for the scooter (Rides).
+    internal SN.Vector2 Solid(SN.Vector2 p, float radius)
+    {
+        for (var pass = 0; pass < 2; pass++)
+        {
+            if (p.Y > HallShell.Front)
+            {
+                foreach (var f in Footprints) p = PushRing(p, f, radius);
+                continue;
+            }
+
+            foreach (var (centre, turn, half) in Obstacles) p = PushBox(p, centre, turn, half, radius);
+            foreach (var s in KnotFloor.Solids)
+            {
+                if (s.Min.Y < Height && s.Max.Y > StepUp)
+                {
+                    var (lo, hi) = (new SN.Vector2(s.Min.X, s.Min.Z), new SN.Vector2(s.Max.X, s.Max.Z));
+                    p = PushBox(p, (lo + hi) / 2f, 0f, (hi - lo) / 2f, radius);
+                }
+            }
+        }
+
+        return p;
+    }
+
+    // The body at p out of a building's footprint by the nearest wall, its speed into the wall lost: from inside, out
+    // through the nearest wall; from outside, Radius off it.
+    private SN.Vector2 PushOut(SN.Vector2 p, Footprint f, float radius)
+    {
+        var pushed = PushRing(p, f, radius);
+        Lose(p, pushed);
+        return pushed;
+    }
+
+    // The speed into what pushed the body from p to pushed is lost, so that it slides along.
+    private void Lose(SN.Vector2 p, SN.Vector2 pushed)
+    {
+        if (SN.Vector2.DistanceSquared(pushed, p) > 1e-12f)
+        {
+            var n = SN.Vector2.Normalize(pushed - p);
+            velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
+        }
+    }
+
+    private static SN.Vector2 PushRing(SN.Vector2 p, Footprint f, float radius)
+    {
+        if (p.X < f.Min.X - radius || p.X > f.Max.X + radius || p.Y < f.Min.Y - radius || p.Y > f.Max.Y + radius)
+        {
+            return p;
+        }
+
+        var (inside, best, nearest) = (false, float.MaxValue, p);
+        for (int i = 0, j = f.Ring.Length - 1; i < f.Ring.Length; j = i++)
+        {
+            var (a, b) = (f.Ring[j], f.Ring[i]);
+            if ((a.Y > p.Y) != (b.Y > p.Y) && p.X < a.X + ((p.Y - a.Y) / (b.Y - a.Y) * (b.X - a.X)))
+            {
+                inside = !inside;
+            }
+
+            var ab = b - a;
+            var t = ab.LengthSquared() < 1e-8f ? 0f : Math.Clamp(SN.Vector2.Dot(p - a, ab) / ab.LengthSquared(), 0f, 1f);
+            var q = a + (ab * t);
+            var d = SN.Vector2.DistanceSquared(p, q);
+            if (d < best)
+            {
+                (best, nearest) = (d, q);
+            }
+        }
+
+        var distance = MathF.Sqrt(best);
+        if (!inside && distance >= radius)
+        {
+            return p;
+        }
+
+        var away = distance > 1e-5f ? (p - nearest) / distance : SN.Vector2.UnitX;
+        return nearest + ((inside ? -away : away) * radius);
+    }
+
     private SN.Vector2 Push(SN.Vector2 p, SN.Vector2 centre, float turn, SN.Vector2 half, float radius)
+    {
+        var pushed = PushBox(p, centre, turn, half, radius);
+        if (pushed != p) Lose(p, pushed);
+        return pushed;
+    }
+
+    private static SN.Vector2 PushBox(SN.Vector2 p, SN.Vector2 centre, float turn, SN.Vector2 half, float radius)
     {
         var (u, v) = (new SN.Vector2(MathF.Cos(turn), -MathF.Sin(turn)), new SN.Vector2(MathF.Sin(turn), MathF.Cos(turn)));
         var d = p - centre;
@@ -438,14 +614,7 @@ internal sealed class FreeCamera
             local.Y = (half.Y + radius) * (local.Y >= 0f ? 1f : -1f);
         }
 
-        var pushed = centre + (u * local.X) + (v * local.Y);
-        if (pushed != p)
-        {
-            var n = SN.Vector2.Normalize(pushed - p);
-            velocity -= n * Math.Min(0f, SN.Vector2.Dot(velocity, n));
-        }
-
-        return pushed;
+        return centre + (u * local.X) + (v * local.Y);
     }
 
     // The height the body at p stands on, its feet at from: the highest top under it no more than a step above them, the
@@ -547,7 +716,8 @@ internal sealed class FreeCamera
         }
 
         var next = Collide(body + (velocity * dt));
-        var inside = SN.Vector2.Clamp(next, new(Min.X, Min.Z), new(Max.X, Max.Z));
+        var confined = Confine(new(body.X, 1f, body.Y), new(next.X, 1f, next.Y));
+        var inside = new SN.Vector2(confined.X, confined.Z);
         if (inside.X != next.X)
         {
             velocity.X = 0f; // a wall stops the body
@@ -617,7 +787,7 @@ internal sealed class FreeCamera
 
         var off = right * Lean * lean;
         var peekBy = peek > 0f ? PeekUp * peek : (WalkHeight - CrouchEye) * peek;
-        position = SN.Vector3.Clamp(new(body.X + off.X, feet + eye + dip + peekBy, body.Y + off.Y), Min, Max);
+        position = Confine(position, new(body.X + off.X, feet + eye + dip + peekBy, body.Y + off.Y));
 
         var kickTo = slide > 0f ? FovKick * 1.4f : sprinting && velocity.Length() > walk * 1.1f ? FovKick : 0f;
         Ease(kickTo, (-LeanRoll * lean) + (slide > 0f ? SlideRoll : 0f), dt);
@@ -749,6 +919,20 @@ internal sealed class FreeCamera
 
     internal static void SelfTest(Action<bool, string> Check)
     {
+        // The streets: through the open door and out, a building's wall stops the body, from outside or from within.
+        var walker = new FreeCamera { DoorOpen = true, Footprints = [Footprint.Of([new(-1f, 10f), new(1f, 10f), new(1f, 12f), new(-1f, 12f)])] };
+        SN.Vector3 WalkTo(float x, float z)
+        {
+            var at = new SN.Vector3(x, 1.1f, 4f);
+            for (var i = 0; i < 200; i++) at = walker.Confine(at, at + new SN.Vector3(0f, 0f, 0.05f));
+            return at;
+        }
+
+        var (through, beside) = (WalkTo(HallShell.DoorX, 14f), WalkTo(3f, 14f));
+        Check(through.Z > 13f && beside.Z <= Max.Z, $"the open door lets the body out through it, and only through it ({through.Z:F2}, {beside.Z:F2})");
+        var (stopped, within) = (walker.Collide(new(0f, 10f - (Radius / 2))), walker.Collide(new(0.2f, 10.4f)));
+        Check(stopped.Y <= 10f - Radius + 1e-4f && within.Y <= 10f - Radius + 1e-4f, $"a building's wall stops the body Radius off it, and puts back out one inside ({stopped.Y:F3}, {within.Y:F3})");
+
         var camera = new FreeCamera();
         var (driftEye, driftTarget) = camera.View(3f);
         Check(!camera.Free && driftEye == DriftEye(3f) && driftTarget == DriftTarget, "at rest the camera drifts as before");

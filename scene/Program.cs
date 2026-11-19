@@ -18,7 +18,8 @@
 // haze that thickens with distance and thins with height, which B or --no-fog turns off. --view N starts
 // the camera on a view (FreeCamera: 2 the agents' office, 3 Gaia, 4 the whole hall, 5 the clocks, 6 the arcade
 // cabinet, 7 the knots' floor). H hides or shows the wall clocks of Ottawa and Paris (WallClocks), shown by default.
-// --knots FILE reads the knots' floor's gallery (KnotFloor), else %LOCALAPPDATA%\delta\ix-knots.json.
+// --marins FILE reads the knots' floor's 21 sailors' knots (KnotFloor, brain -ix-marins), else
+// %LOCALAPPDATA%\delta\ix-marins.json.
 //
 // The camera has the Observatory's controls (FreeCamera): it walks, sprints, jumps, crouches, slides and leans, flies with
 // F, turns with the right button held or, after Ctrl and a click, with the mouse until the next Ctrl and click (a click
@@ -68,14 +69,17 @@ internal struct Vertex(SN.Vector3 pos, SN.Vector3 normal, SN.Vector3 color, Mate
     public SN.Vector4 Edge = edge;
 }
 
-// What the Low shader reads once a frame, 32 bytes: the camera's position, the haze's density per metre (0: none),
-// whether the photographed materials are there (1) or drawn in their flat colours (0), and whether the shadows and the
-// ambient occlusion are traced (1) or painted (0).
+// What the Low shader reads once a frame, 48 bytes: the camera's position, the haze's density per metre (0: none),
+// whether the photographed materials are there (1) or drawn in their flat colours (0), whether the shadows and the
+// ambient occlusion are traced (1) or painted (0), and the video projected on the gallery's wall (GalleryVideo.Projection):
+// its picture's layer and its strength (0: none), and where on the wall (Screen: its centre's z and y, its half width,
+// the wall's x).
 [StructLayout(LayoutKind.Sequential)]
-internal struct Frame(SN.Vector3 eye, float haze, bool photographed, bool traced)
+internal struct Frame(SN.Vector3 eye, float haze, bool photographed, bool traced, GalleryVideo.Projection projection)
 {
     public SN.Vector4 Eye = new(eye, haze);
-    public SN.Vector4 Options = new(photographed ? 1f : 0f, traced ? 1f : 0f, 0f, 0f);
+    public SN.Vector4 Options = new(photographed ? 1f : 0f, traced ? 1f : 0f, projection.Layer, projection.Strength);
+    public SN.Vector4 Screen = projection.Screen;
 }
 
 // What each draw pushes, 128 bytes: the part's clip transform, the three rows of its world transform (for the light)
@@ -160,7 +164,7 @@ internal static unsafe class Stage
     // The Low lighting: Flat's three lights, with rounded edges, each material's highlights and reflections of the hall
     // (Material in Mesh.cs), the robot's shadow and the dark where things meet the floor, and a shoulder for what grows
     // too bright.
-    private const string LowFragmentShader = """
+    internal const string LowFragmentShader = """
         #version 450
         layout(location = 0) in vec3 vNormal;
         layout(location = 1) in vec3 vColor;
@@ -169,11 +173,13 @@ internal static unsafe class Stage
         layout(location = 4) in vec3 vTangent;
         layout(location = 5) in vec4 vEdge;
         layout(push_constant) uniform Push { mat4 mvp; vec4 row0; vec4 row1; vec4 row2; vec4 glow; } pc;
-        layout(set = 0, binding = 0) uniform Frame { vec4 eye; vec4 options; } frame;
+        layout(set = 0, binding = 0) uniform Frame { vec4 eye; vec4 options; vec4 screen; } frame;
         layout(set = 0, binding = 1) uniform sampler2DArray albedoMaps; // colour, the height in alpha (MaterialTextures)
         layout(set = 0, binding = 2) uniform sampler2DArray normalMaps; // tangent space, green up
         layout(set = 0, binding = 3) uniform sampler2DArray armMaps;    // occlusion, roughness, metalness
         layout(set = 0, binding = 5) uniform sampler2DArray globeMaps;  // GlobeImages: a globe's west and east halves
+        layout(set = 0, binding = 6) uniform sampler2DArray pictureMaps; // GalleryPictures: what the gallery's glasses show
+        layout(set = 0, binding = 7) uniform sampler2DArray aerialMaps;  // GoogleStreets: the 3D tiles' photographs, a layer each
         layout(location = 0) out vec4 outColor;
 
         // Per photographed material (Material.BrickWall = 8 and on): its layer, its tile in metres (tools/textures), the
@@ -243,16 +249,23 @@ internal static unsafe class Stage
         #ifdef RAYS
         layout(set = 0, binding = 4) uniform accelerationStructureEXT hallRays; // RayScene: last frame's meshes
 
-        // How far along dir, from origin, the first surface is; tmax when none is nearer.
-        float reach(vec3 origin, vec3 dir, float tmax, bool any)
+        // reach, through the instances whose mask meets the given one (RayScene: 0x01 casts shadows, 0x02 the shell,
+        // 0x04 the city, whose shadows only fall outside).
+        float reachThrough(vec3 origin, vec3 dir, float tmax, bool any, uint mask)
         {
             rayQueryEXT q;
-            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | (any ? gl_RayFlagsTerminateOnFirstHitEXT : 0u), 0xFFu, origin, 0.0, dir, tmax);
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | (any ? gl_RayFlagsTerminateOnFirstHitEXT : 0u), mask, origin, 0.0, dir, tmax);
             while (rayQueryProceedEXT(q))
             {
             }
 
             return rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT ? tmax : rayQueryGetIntersectionTEXT(q, true);
+        }
+
+        // How far along dir, from origin, the first surface is; tmax when none is nearer.
+        float reach(vec3 origin, vec3 dir, float tmax, bool any)
+        {
+            return reachThrough(origin, dir, tmax, any, any ? 0x01u : 0xFFu); // a shadow ray passes the shell (RayScene.ShadowMask)
         }
 
         // Interleaved gradient noise: a different turn for each pixel, the same every frame, so nothing crawls.
@@ -267,6 +280,20 @@ internal static unsafe class Stage
             b = cross(n, t);
         }
 
+        // The city of Ottawa's draw (OttawaStreets), which Program marks with a glow of no light (alpha -1).
+        bool city()
+        {
+            return pc.glow.a < -0.5;
+        }
+
+        // Out in the streets: the city, wherever it stands round the hall, and whatever lies past the front wall.
+        bool outdoors(vec3 p)
+        {
+            // Halfway through the front wall (6.0 to 6.16): its inner face, at 6.0 give or take a rounding, stays inside;
+            // at 6.0 itself the sun of the streets speckled it.
+            return city() || p.z > 6.08;
+        }
+
         // The key light's share that reaches p: three rays into a light about 4° across, each pixel's turned its way.
         float keyShadow(vec3 p, vec3 face, vec3 keyDir)
         {
@@ -279,11 +306,16 @@ internal static unsafe class Stage
             across(keyDir, t, b);
             float turn = grain(gl_FragCoord.xy) * 6.2831853;
             float lit = 0.0;
+            // Outside the hall's front wall (HallShell.Front, 6.0) the streets: the city's buildings cast shadows there,
+            // and from further away (a 60 m tower's shadow runs about 70 m, 45 of the hall's units).
+            bool street = outdoors(p);
+            float upTo = street ? 160.0 : 40.0;
+            uint mask = street ? 0x05u : 0x01u;
             for (int i = 0; i < 3; i++)
             {
                 float a = turn + float(i) * 2.3999632;
                 float r = sqrt((float(i) + 0.5) / 3.0) * 0.035;
-                lit += reach(p, normalize(keyDir + (cos(a) * t + sin(a) * b) * r), 40.0, true) >= 40.0 ? 1.0 : 0.0;
+                lit += reachThrough(p, normalize(keyDir + (cos(a) * t + sin(a) * b) * r), upTo, true, mask) >= upTo ? 1.0 : 0.0;
             }
 
             return lit / 3.0;
@@ -312,19 +344,57 @@ internal static unsafe class Stage
 
         // Per material: its reflectance head-on (a metal's is its colour), its gloss (Blinn-Phong's exponent), whether
         // it is a metal, and how much a grazing view adds to its reflection, little on rough surfaces.
-        const vec4 materials[6] = vec4[](
+        const vec4 materials[8] = vec4[](
             vec4(0.02, 6.0, 0.0, 0.12),   // matte: brick, concrete, wood
             vec4(0.05, 90.0, 0.0, 0.8),   // enamel and paint
             vec4(0.0, 40.0, 1.0, 1.0),    // brushed aluminium
             vec4(0.0, 24.0, 1.0, 0.8),    // steel
             vec4(0.02, 4.0, 0.0, 0.1),    // rubber
-            vec4(0.04, 260.0, 0.0, 1.0)); // glass, screens and lamps
+            vec4(0.04, 260.0, 0.0, 1.0),  // glass, screens and lamps
+            vec4(0.03, 5.0, 0.0, 0.35),   // hemp rope: rough, a little sheen at grazing
+            vec4(0.04, 36.0, 0.0, 0.55)); // turned oak, oiled
 
         // The distance from p to a rectangle of half-size h about the origin, negative inside.
         float box(vec2 p, vec2 h)
         {
             vec2 d = abs(p) - h;
             return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+        }
+
+        // Value noise, smooth between whole points, 0 to 1.
+        float hash(vec3 p)
+        {
+            p = fract(p * 0.3183099 + 0.1) * 17.0;
+            return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+        }
+
+        float noise(vec3 x)
+        {
+            vec3 i = floor(x);
+            vec3 f = fract(x);
+            f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(mix(hash(i), hash(i + vec3(1, 0, 0)), f.x), mix(hash(i + vec3(0, 1, 0)), hash(i + vec3(1, 1, 0)), f.x), f.y),
+                       mix(mix(hash(i + vec3(0, 0, 1)), hash(i + vec3(1, 0, 1)), f.x), mix(hash(i + vec3(0, 1, 1)), hash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+        }
+
+        // A highlight's lobe about the half-vector h: Blinn-Phong of exponent e; on brushed metal (aniso above 0)
+        // stretched along the brush t, as Ashikhmin and Shirley's is, wide along the grooves and sharp across them,
+        // its energy kept.
+        float lobe(vec3 n, vec3 h, float e, vec3 t, float aniso)
+        {
+            float nh = max(dot(n, h), 0.0);
+            if (aniso <= 0.0)
+            {
+                return pow(nh, e);
+            }
+
+            vec3 b = normalize(cross(n, t));
+            t = cross(b, n);
+            float eu = e * (1.0 - aniso);
+            float ev = e / (1.0 - aniso);
+            float ht = dot(h, t);
+            float hb = dot(h, b);
+            return sqrt((eu + 1.0) * (ev + 1.0)) / (e + 1.0) * pow(nh, (eu * ht * ht + ev * hb * hb) / max(1.0 - nh * nh, 1e-4));
         }
 
         // What the hall shows a glossy surface in direction r: the lit floor below, the brick around, the dark roof
@@ -338,6 +408,13 @@ internal static unsafe class Stage
             return c * (r.z < 0.0 ? 1.0 : 0.7);
         }
 
+        // What a surface at p mirrors along r: inside, the hall; out in the streets of Ottawa, the day's sky above and
+        // the paved ground below.
+        vec3 around(vec3 r, vec3 p)
+        {
+            return outdoors(p) ? (r.y < 0.0 ? vec3(0.16, 0.15, 0.14) : mix(vec3(0.62, 0.68, 0.76), vec3(0.42, 0.55, 0.75), smoothstep(0.0, 0.5, r.y))) * 0.5 : hall(r);
+        }
+
         // The haze between the eye and p: none in the first 3 m, then thicker with distance and thinner with height
         // (half as thick 2 m up), a cool steel blue, dim, so that the far brick and the roof recede into it while what
         // is near stays clear. Its colour is HazeColor's, the clear colour beyond the hall.
@@ -345,7 +422,9 @@ internal static unsafe class Stage
         {
             float density = frame.eye.w * exp(-0.35 * max(0.5 * (p.y + frame.eye.y), 0.0));
             float through = exp(-density * max(length(p - frame.eye.xyz) - 3.0, 0.0));
-            return mix(vec3(0.075, 0.09, 0.115), c, through);
+            // Inside, the hall's dusk; seen from the streets or looking out onto them, a day's blue (OttawaStreets).
+            float day = max(smoothstep(6.0, 6.4, frame.eye.z), city() ? 1.0 : smoothstep(6.0, 6.4, p.z));
+            return mix(mix(vec3(0.075, 0.09, 0.115), vec3(0.42, 0.55, 0.75), day), c, through);
         }
 
         // Below 0.6 as it is; above, rolling off towards 1 instead of clipping.
@@ -361,6 +440,8 @@ internal static unsafe class Stage
             vec3 v = normalize(frame.eye.xyz - vWorld);
             vec3 base = vColor;
             float occlusion = 1.0;
+            float skyGlass = 0.0; // a city window's glass, which mirrors the sky (Material.Facade)
+            float aerial = 0.0;   // Google's photographs, which carry their own light (Material.Aerial)
             vec3 n;
             vec4 m;
             if (vMaterial == 16u)
@@ -376,7 +457,16 @@ internal static unsafe class Stage
                 float water = smoothstep(0.02, 0.08, base.b - base.r);
                 m = mix(materials[0], vec4(0.02, 70.0, 0.0, 0.7), water);
             }
-            else if (vMaterial >= 8u && frame.options.x > 0.5)
+            else if (vMaterial == 17u)
+            {
+                // A gallery picture (Material.Pictured): Edge holds its place on it and its layer, printed on satin
+                // paper and lit a little from within, as a diorama's backdrop is.
+                vec2 uv = vEdge.xy;
+                base = textureGrad(pictureMaps, vec3(uv, vEdge.z), dFdx(uv), dFdy(uv)).rgb;
+                n = face;
+                m = vec4(0.03, 30.0, 0.0, 0.35);
+            }
+            else if (vMaterial >= 8u && vMaterial < 16u && frame.options.x > 0.5)
             {
                 // A photographed material: its scan, its relief, its normals and its roughness; no rounded edges.
                 vec4 s = scans[min(vMaterial - 8u, 5u)];
@@ -393,6 +483,112 @@ internal static unsafe class Stage
                 occlusion = arm.x;
                 float r = clamp(arm.y, 0.05, 1.0);
                 m = vec4(0.04, clamp(2.0 / (r * r * r * r) - 2.0, 2.0, 600.0), arm.z, mix(1.0, 0.1, r));
+                if (vMaterial == 10u && abs(face.y) < 0.5)
+                {
+                    // A cast concrete wall shows its formwork, as architectural concrete does (« les murs manquent de
+                    // relief », 2026-11-18): 1.8 by 0.9 m plywood panels (1.165 by 0.582 in the hall's units), their
+                    // edges eased and their joints a dark 3 mm line, six conical tie holes a panel, 3 cm across, and
+                    // each panel its own tone of the pour. The scan's own relief is drawn twice as deep there. All the
+                    // formwork fades where it would be under a pixel, so that a far wall does not shimmer.
+                    vec3 along = abs(face.x) > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+                    vec3 up = vec3(0.0, 1.0, 0.0);
+                    vec2 panel = vec2(1.1646, 0.5823);
+                    vec2 q = vec2(dot(vWorld, along), vWorld.y) / panel;
+                    vec2 cell = fract(q);
+                    vec2 w = fwidth(q);
+                    float detail = 1.0 - smoothstep(0.004, 0.012, max(w.x, w.y));
+                    vec2 d = min(cell, 1.0 - cell);
+                    vec2 halfJoint = 0.00097 / panel;
+                    vec2 inJoint = 1.0 - smoothstep(halfJoint, halfJoint + 1.5 * w, d);
+                    float joint = max(inJoint.x, inJoint.y) * detail;
+                    vec2 ease = (1.0 - smoothstep(halfJoint, halfJoint + 0.006 / panel, d)) * sign(cell - 0.5) * detail * (1.0 - joint);
+                    vec2 h = (fract(cell * vec2(3.0, 2.0)) - 0.5) * panel / vec2(3.0, 2.0);
+                    float rh = length(h), wh = max(fwidth(rh), 1e-5);
+                    float hole = (1.0 - smoothstep(0.0097 - wh, 0.0097 + wh, rh)) * detail;
+                    vec3 toCentre = -(h.x * along + h.y * up) / max(rh, 1e-5);
+                    float cone = hole * smoothstep(0.0035, 0.0097, rh);
+                    n = normalize(t * tn.x * 2.0 + b * tn.y * 2.0 + face * max(tn.z, 0.05));
+                    n = normalize(n + 0.5 * (ease.x * along + ease.y * up) + 1.4 * cone * toCentre);
+                    float pour = fract(sin(dot(floor(q), vec2(12.9898, 78.233))) * 43758.5453);
+                    base *= mix(1.0, 0.95 + 0.1 * pour, detail) * mix(1.0, 0.55, joint) * mix(1.0, 0.4, hole - 0.6 * cone);
+                    occlusion *= mix(1.0, 0.8, joint) * mix(1.0, 0.45, hole);
+                }
+            }
+            else if (vMaterial == 6u)
+            {
+                // A laid rope's strand (Material.Rope; Edge: along it in metres, round it, its radius, a seed): five
+                // yarns twisted against the strand's lay, so that on the rope's outside they run nearly along it, as in
+                // a real hawser-laid rope. Each yarn is round, between narrow dark grooves, its own tone; on it the
+                // fibres run along the yarn, and the loose hairs catch the light at grazing. The rope's tone wanders
+                // along it, as a natural fibre's does. Where a yarn is under two pixels the relief fades to the
+                // strand's own round, so that nothing shimmers. A negative radius is a rope's whipping instead
+                // (KnotFloor.Whip): rings of twine round it, that far apart.
+                vec3 t = normalize(vTangent - face * dot(vTangent, face));
+                vec3 circum = cross(t, face);
+                float rs = max(abs(vEdge.z), 1e-4);
+                float starts = vEdge.z < 0.0 ? 0.0 : 5.0;
+                float pitch = vEdge.z < 0.0 ? rs : rs * 7.0;
+                float phase = starts * vEdge.y + 6.2831853 * vEdge.x / pitch;
+                float detail = 1.0 - smoothstep(0.6, 1.6, fwidth(phase));
+                float across = fract(phase / 6.2831853) * 2.0 - 1.0; // from one groove to the next, -1 to 1
+                float height = sqrt(max(1.0 - across * across, 0.0));
+                float lean = clamp(-across / max(height, 0.3), -2.5, 2.5);
+                vec3 slope = normalize(circum * (starts / rs) + t * (6.2831853 / pitch));
+                n = normalize(face + 0.3 * lean * slope * detail);
+                float yarn = floor(phase / 6.2831853);
+                float tone = 0.86 + 0.2 * fract(sin(yarn * 12.9898 + vEdge.w * 78.233) * 43758.5453);
+                float fibre = phase * 9.0 + 2.3 * sin(vEdge.x / rs * 2.3 + yarn * 1.7 + vEdge.w);
+                float fibres = 1.0 + 0.16 * sin(fibre) * (1.0 - smoothstep(0.8, 2.0, fwidth(fibre)));
+                float wander = 1.0 + 0.07 * sin(vEdge.x * 9.0 + vEdge.w * 3.1) * sin(vEdge.x * 23.0 + vEdge.w);
+                float hairs = pow(1.0 - max(dot(face, v), 0.0), 3.0);
+                // The grooves are the fibre in shadow, warmer and deeper than grey.
+                vec3 groove = mix(vec3(0.5, 0.4, 0.3), vec3(1.0), sqrt(height));
+                base = vColor * wander * mix(1.0, tone * fibres, detail) * mix(vec3(0.85), groove * 1.05, detail);
+                base += vColor * vec3(0.28, 0.22, 0.15) * hairs * mix(0.5, 1.0, height);
+                occlusion = mix(1.0, mix(0.6, 1.0, sqrt(height)), detail);
+                m = materials[6];
+            }
+            else if (vMaterial == 20u)
+            {
+                // A triangle of Google's Photorealistic 3D Tiles (Material.Aerial): its tile's photograph, at its place
+                // on it, drawn as it is (below, unlit).
+                base = texture(aerialMaps, vec3(vEdge.xy, vEdge.z)).rgb;
+                n = face;
+                m = materials[0];
+                aerial = 1.0;
+            }
+            else if (vMaterial == 19u)
+            {
+                // A city building's wall (Material.Facade, OttawaStreets): a window every 2.2 m along it (1.42 at the
+                // hall's scale) and on every 3 m floor (1.94), the ground floor's taller; dark glass, each pane its own
+                // shade, in the wall's stone, which takes the sky's light further on. Under a few pixels a window
+                // fades to the wall's tone.
+                vec3 along = normalize(vTangent - face * dot(vTangent, face));
+                vec2 q = vec2(dot(vWorld, along) / 1.42, vWorld.y / 1.94);
+                vec2 w = fwidth(q);
+                float detail = 1.0 - smoothstep(0.12, 0.35, max(w.x, w.y));
+                vec2 cell = fract(q);
+                vec2 lo = vec2(0.24, q.y < 1.0 ? 0.08 : 0.3), hi = vec2(0.76, 0.84);
+                vec2 inside = smoothstep(lo - w, lo + w, cell) * (1.0 - smoothstep(hi - w, hi + w, cell));
+                float glass = inside.x * inside.y * detail;
+                float pane = fract(sin(dot(floor(q), vec2(12.9898, 78.233)) + vEdge.w * 91.7) * 43758.5453);
+                float sill = (1.0 - smoothstep(0.0, w.y * 1.5, abs(cell.y - lo.y + 0.02))) * step(lo.x, cell.x) * step(cell.x, hi.x) * detail;
+                base = mix(vColor * mix(1.0, 0.82, sill), vec3(0.035, 0.045, 0.055) * (0.7 + 0.6 * pane), glass);
+                n = face;
+                m = mix(materials[0], vec4(0.04, 220.0, 0.0, 1.0), glass);
+                skyGlass = glass;
+            }
+            else if (vMaterial == 7u)
+            {
+                // Turned oak (Material.Wood): its grain along the post, the lines wandering a little, darker late wood.
+                float rs = max(vEdge.z, 1e-4);
+                float across = vEdge.y * rs / 0.0016 + 2.5 * sin(vEdge.x * 9.0 + vEdge.w) + 0.8 * sin(vEdge.x * 37.0 + vEdge.y * 3.0);
+                float lines = 1.0 - smoothstep(0.6, 1.4, fwidth(across));
+                float late = smoothstep(0.55, 0.95, 0.5 + 0.5 * sin(across * 6.2831853));
+                float streak = 0.94 + 0.06 * sin(vEdge.x * 61.0 + vEdge.w * 5.0);
+                base = vColor * streak * mix(1.0, mix(1.05, 0.72, late), lines);
+                n = face;
+                m = materials[7];
             }
             else
             {
@@ -403,13 +599,87 @@ internal static unsafe class Stage
                 vec2 width = max(min(vec2(0.008), 0.35 * vEdge.zw), fwidth(toEdge));
                 vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(vEdge.xy);
                 n = normalize(face + lean.x * across + lean.y * cross(face, across));
-                m = materials[vMaterial >= 8u ? 0u : min(vMaterial, 5u)];
+                m = materials[vMaterial >= 8u ? 0u : min(vMaterial, 7u)];
+                if (vMaterial == 18u)
+                {
+                    // Oak boards (Material.Oak): flat-sawn grain along the face's longer side (Edge: where on the
+                    // face, its half sizes), the late wood darker, the pores in fine dark streaks, and the figure's
+                    // sheen sliding as the eye moves (chatoyance); oiled, under the clear coat further on. Each line
+                    // fades to its tone where it would be under a pixel.
+                    bool longU = vEdge.z >= vEdge.w;
+                    vec2 q = longU ? vEdge.xy * vEdge.zw : vEdge.yx * vEdge.wz; // metres along the grain, across it
+                    vec3 grain = longU ? across : cross(face, across);
+                    float seed = fract(dot(vEdge.zw, vec2(91.7, 37.3)));
+                    float ring = q.y / 0.005 + 6.0 * noise(vec3(q.x * 1.5, q.y * 12.0, seed * 50.0)) + 1.5 * sin(q.x * 9.0 + q.y * 30.0 + seed * 40.0);
+                    float rings = 1.0 - smoothstep(0.5, 1.5, fwidth(ring));
+                    float late = smoothstep(0.35, 0.95, 0.5 + 0.5 * sin(ring * 6.2831853)) * mix(0.5, 1.0, noise(vec3(q.x * 4.0, ring * 0.5, seed * 7.0)));
+                    float pore = smoothstep(0.62, 0.8, noise(vec3(q.x * 30.0, q.y * 1400.0, seed * 9.0)));
+                    float pores = 1.0 - smoothstep(0.5, 1.5, fwidth(q.y * 1400.0));
+                    float sheen = 1.0 - smoothstep(0.5, 1.5, fwidth(q.y * 260.0));
+                    float figure = 1.0 + 0.1 * sin(q.y * 260.0 + 7.0 * dot(v, grain) + seed * 20.0) * sheen;
+                    float board = 0.88 + 0.24 * noise(vec3(q.x * 0.8, q.y * 3.0, seed * 31.0)); // a board's tone, not even
+                    base = vColor * board * figure * mix(1.0, mix(1.06, 0.78, late), rings) * mix(1.0, 0.8, pore * pores);
+                    m = vec4(0.04, 28.0, 0.0, 0.4);
+                    // A board's rounded edge fades out where it would be under a pixel: far off, a floor's rows of
+                    // edges, each a pixel catching the light, made moiré (Gymnasium).
+                    vec2 far = smoothstep(vec2(0.003), vec2(0.01), fwidth(toEdge));
+                    n = normalize(face + lean.x * (1.0 - far.x) * across + lean.y * (1.0 - far.y) * cross(face, across));
+                }
+                else if (vMaterial == 22u)
+                {
+                    // Painted concrete block (Material.Block, Gymnasium): 40 by 20 cm blocks in running bond (0.259 by
+                    // 0.129 in the hall's units), their joints a little recessed and darker, each block's face its own
+                    // tone and porous under the paint, a satin sheen; a blue band at 2.3 m. Joints and pores fade
+                    // where they would be under a pixel, so that a far wall does not shimmer.
+                    vec3 along = abs(face.x) > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+                    vec2 q = vec2(dot(vWorld, along) / 0.2588, vWorld.y / 0.1294);
+                    float course = floor(q.y);
+                    q.x += 0.5 * mod(course, 2.0);
+                    vec2 cell = fract(q);
+                    vec2 w = fwidth(q);
+                    float detail = 1.0 - smoothstep(0.08, 0.25, max(w.x, w.y));
+                    vec2 half_ = vec2(0.019, 0.039); // half a 1 cm joint, of a block's length and height
+                    vec2 d = min(cell, 1.0 - cell);
+                    vec2 inJoint = 1.0 - smoothstep(half_ - w, half_ + w, d);
+                    float mortar = max(inJoint.x, inJoint.y) * detail;
+                    vec2 bevel = (1.0 - smoothstep(half_, half_ + vec2(0.04, 0.08), d)) * sign(cell - 0.5) * detail * (1.0 - mortar);
+                    float fine = 1.0 - smoothstep(0.3, 1.0, length(fwidth(vWorld)) * 220.0);
+                    float pore = noise(vWorld * 260.0);
+                    n = normalize(face + 0.45 * (bevel.x * along + bevel.y * vec3(0.0, 1.0, 0.0)) + 0.08 * fine * (pore - 0.5) * along);
+                    float block = fract(sin(dot(floor(q), vec2(12.9898, 78.233))) * 43758.5453);
+                    float tone = mix(1.0, 0.965 + 0.07 * block, detail);
+                    float y = vWorld.y, wy = fwidth(y);
+                    float band = smoothstep(1.47 - wy, 1.47 + wy, y) * (1.0 - smoothstep(1.6 - wy, 1.6 + wy, y))
+                        * step(box(vWorld.xz - vec2(17.405, -1.75), vec2(10.995, 7.75)), 0.05); // inside only
+                    vec3 paint = mix(vColor, vec3(0.06, 0.13, 0.36), band);
+                    base = paint * tone * mix(1.0, 0.93 + 0.12 * pore, fine) * mix(1.0, 0.72, mortar);
+                    occlusion = mix(1.0, 0.8, mortar);
+                    m = vec4(0.04, 18.0, 0.0, 0.3);
+                }
+                else if (vMaterial == 2u || vMaterial == 3u)
+                {
+                    // Worn metal: its polish varies over centimetres and over millimetres, duller where hands have
+                    // been, darker with it; the fine wear fades where it would be under a pixel.
+                    float fine = 1.0 - smoothstep(0.3, 1.0, length(fwidth(vWorld)) * 160.0);
+                    float wear = 0.6 * noise(vWorld * 23.0) + 0.4 * mix(0.5, noise(vWorld * 160.0), fine);
+                    m.y *= mix(0.45, 1.5, wear);
+                    base *= mix(0.85, 1.06, wear);
+                }
             }
 
             vec3 keyDir = normalize(vec3(-0.45, 0.8, 0.55));
             vec3 fillDir = normalize(vec3(0.7, 0.25, 0.3));
             vec3 keyColor = vec3(1.0, 0.86, 0.68);
             vec3 fillColor = vec3(0.35, 0.45, 0.6) * 0.35;
+            if (outdoors(vWorld))
+            {
+                // The streets of Ottawa, past the hall's front wall: an afternoon sun from the south-west, behind the eye
+                // that looks out of the door towards Parliament (+z is northward there), and the blue sky's light from above.
+                keyDir = normalize(vec3(0.35, 0.7, -0.6));
+                fillDir = vec3(0.0, 1.0, 0.0);
+                keyColor = vec3(1.0, 0.93, 0.82) * 1.1;
+                fillColor = vec3(0.42, 0.55, 0.75) * 0.6;
+            }
 
             // On the floor: the robot's shadow from the key light, as a column 1.25 m high whose penumbra widens away
             // from its foot, and the dark where the robot, the pallet, the cabinet and the wall stand. On the wall: the
@@ -445,29 +715,108 @@ internal static unsafe class Stage
             }
 
             float key = max(dot(n, keyDir), 0.0);
-            float fill = max(dot(n, fillDir), 0.0);
+            // Outside, the sky's light from the whole dome: a wall sees half of it, a roof all, the shaded side too.
+            float fill = outdoors(vWorld) ? 0.5 + 0.5 * n.y : max(dot(n, fillDir), 0.0);
             float bounce = 0.5 - 0.5 * n.y;
             ao *= occlusion;
             vec3 light = (keyColor * key * shade + fillColor * fill + vec3(0.12, 0.1, 0.09) * bounce + 0.03) * ao;
+
+            // The gallery's picture lights (HallGallery.Wash): a warm wash from a line along the left wall, 0.75 m out
+            // and 2.45 m up, on what faces it near that wall, falling off with distance; untraced, so nothing shadows it.
+            vec3 washAt = vec3(-5.5, 2.45, clamp(vWorld.z, -3.3, 5.9));
+            vec3 toWash = washAt - vWorld;
+            float washD = max(length(toWash), 0.05);
+            light += vec3(1.0, 0.86, 0.66) * 0.75 * max(dot(n, toWash / washD), 0.0) / (1.0 + 0.8 * washD * washD) * (1.0 - smoothstep(-5.4, -4.2, vWorld.x)) * ao;
+            // And Streeling's card catalogue on the back wall, from its own light 0.6 m out (HallGallery.BackWash).
+            vec3 backAt = vec3(clamp(vWorld.x, -5.7, -3.8), 2.4, -2.85);
+            vec3 toBack = backAt - vWorld;
+            float backD = max(length(toBack), 0.05);
+            light += vec3(1.0, 0.86, 0.66) * 0.75 * max(dot(n, toBack / backD), 0.0) / (1.0 + 0.8 * backD * backD) * (1.0 - smoothstep(-2.7, -1.8, vWorld.z)) * (1.0 - smoothstep(-3.6, -3.0, vWorld.x)) * ao;
 
             // Blinn-Phong highlights of both lights, roughly normalised so that a tighter one is brighter, and the hall
             // reflected, both weighed by Schlick's Fresnel.
             vec3 f0 = mix(vec3(m.x), base, m.z);
             vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0) * m.w;
             float norm = (m.y + 8.0) / 25.0;
-            vec3 highlight = keyColor * pow(max(dot(n, normalize(keyDir + v)), 0.0), m.y) * key * shade
-                + fillColor * pow(max(dot(n, normalize(fillDir + v)), 0.0), m.y) * fill;
-            vec3 lit = base * light + (highlight * norm + hall(reflect(-v, n)) * ao) * fresnel;
+            // Brushed metal stretches its highlights along the brush, a box's face's first axis: aluminium most, steel
+            // less, brass (redder than it is blue) a little.
+            float aniso = vMaterial == 2u ? 0.85 : vMaterial == 3u ? (base.r > 1.8 * base.b ? 0.2 : 0.6) : 0.0;
+            vec3 brush = vTangent - n * dot(vTangent, n);
+            brush = dot(brush, brush) > 1e-8 ? normalize(brush) : vec3(1.0, 0.0, 0.0);
+            vec3 highlight = keyColor * lobe(n, normalize(keyDir + v), m.y, brush, aniso) * key * shade
+                + fillColor * lobe(n, normalize(fillDir + v), m.y, brush, aniso) * fill;
+            vec3 lit = base * light + (highlight * norm + around(reflect(-v, n), vWorld) * ao) * fresnel;
+            // A thin clear coat over oiled wood (Material.Wood, Material.Oak): its own sharp highlight and reflection,
+            // off the face's smooth normal rather than the grain's, weighed by a dielectric's Fresnel.
+            if (vMaterial == 7u || vMaterial == 18u)
+            {
+                float fc = 0.04 + 0.96 * pow(1.0 - max(dot(face, v), 0.0), 5.0);
+                float coat = pow(max(dot(face, normalize(keyDir + v)), 0.0), 400.0) * key * shade * 16.0;
+                lit = lit * (1.0 - fc) + (keyColor * coat + hall(reflect(-v, face)) * ao) * fc;
+            }
+            lit += vMaterial == 17u ? base * 0.5 : vec3(0.0); // a gallery picture's light from within
+            // A city window mirrors the daylight sky (around, by Fresnel), and a little more of it seen face on.
+            lit += vec3(0.42, 0.55, 0.75) * skyGlass * 0.06;
+            lit = mix(lit, base, aerial); // a photograph already holds the day's light and shadows
 
-            // A pool of light around the robot; the hall falls into the dark beyond it and above it.
+            // A pool of light around the robot; the hall falls into the dark beyond it and above it. The knots' floor
+            // has its own light over its tables (KnotFloor), its edge fading over 80 cm.
             float pool = 1.0 - smoothstep(0.8, 6.0, length(vWorld.xz - vec2(0.0, -0.3)));
-            float high = 1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y);
-            outColor = vec4(haze(shoulder(lit * (0.1 + 0.9 * pool) * high) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
+            // A smaller pool under each pendant lamp over the hall's floor (HallShell.FloorLamps), below the lamps.
+            vec2 lamps[4] = vec2[](vec2(-3.2, -0.6), vec2(0.0, 1.6), vec2(3.0, -0.6), vec2(-3.2, 3.4));
+            for (int i = 0; i < 4; i++)
+            {
+                pool = max(pool, 0.7 * (1.0 - smoothstep(0.4, 3.4, length(vWorld.xz - lamps[i]))) * (1.0 - smoothstep(3.6, 4.4, vWorld.y)));
+            }
+
+            float knots = (1.0 - smoothstep(0.0, 0.8, box(vWorld.xz - vec2(5.075, -1.2), vec2(1.17, 2.1)))) * smoothstep(1.8, 2.0, vWorld.y);
+            pool = max(pool, 0.9 * knots);
+            // The gallery along the left wall is in its picture lights' light, up to their height (HallGallery).
+            float gallery = (1.0 - smoothstep(0.0, 1.2, box(vWorld.xz - vec2(-5.7, 1.25), vec2(0.55, 4.65)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
+            pool = max(pool, 0.8 * gallery);
+            float catalogue = (1.0 - smoothstep(0.0, 1.0, box(vWorld.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, vWorld.y));
+            pool = max(pool, 0.8 * catalogue);
+            // The gymnasium on the hall's right (Gymnasium) is lit through, under its high-bay lamps and its windows; its
+            // edge is sharp, so that the hall's side of the wall between them stays the hall's.
+            float gym = 1.0 - smoothstep(0.0, 0.08, box(vWorld.xz - vec2(17.405, -1.75), vec2(10.995, 7.75)));
+            pool = max(pool, gym);
+            float high = max(max(1.0 - 0.6 * smoothstep(1.6, 4.5, vWorld.y), knots), gym);
+            // The streets beyond the front wall's roll-up door (OttawaStreets) are in daylight, every height of them, and
+            // so are the building's outer walls and roofs, past its inner faces by more than a wall's thickness.
+            vec3 outHall = max(abs(vWorld - vec3(0.0, 2.425, 1.275)) - vec3(6.25, 2.425, 4.725), 0.0);
+            vec3 outGym = max(abs(vWorld - vec3(17.405, 2.9, -1.75)) - vec3(10.995, 2.9, 7.75), 0.0);
+            float street = max(city() ? 1.0 : smoothstep(6.0, 6.4, vWorld.z), smoothstep(0.1, 0.15, min(length(outHall), length(outGym))));
+            pool = max(pool, street);
+            high = max(high, street);
+            // A video projected on the gallery's wall (GalleryVideo.Projection): a projector's light, 4:3, on the white
+            // screen hung there (Material.Screen, GalleryVideo.ScreenModel) and on nothing else; its edges soft over 1 %.
+            // The derivatives are taken outside the branch, where every pixel of a quad still runs.
+            vec3 projected = vec3(0.0);
+            float washed = 1.0; // the room's light on the screen, dimmed where the picture falls so that its darks stay dark
+            vec2 extent = vec2(frame.screen.z, frame.screen.z * 0.75); // half sizes; "half" is reserved in GLSL
+            vec2 onScreen = (frame.screen.xy + extent - vWorld.zy) / max(2.0 * extent, vec2(1e-4));
+            vec2 screenDx = dFdx(onScreen), screenDy = dFdy(onScreen);
+            if (frame.options.w > 0.0 && vMaterial == 21u && face.x > 0.5 && vWorld.x < frame.screen.w + 0.06)
+            {
+                vec2 inside = smoothstep(vec2(0.0), vec2(0.01), onScreen) * smoothstep(vec2(0.0), vec2(0.01), 1.0 - onScreen);
+                if (inside.x * inside.y > 0.0)
+                {
+                    vec3 shown = textureGrad(pictureMaps, vec3(clamp(onScreen, 0.0, 1.0), frame.options.z), screenDx, screenDy).rgb;
+                    projected = base * shown * 1.15 * face.x * frame.options.w * inside.x * inside.y;
+                    washed = 1.0 - (0.7 * frame.options.w * inside.x * inside.y);
+                }
+            }
+            outColor = vec4(haze(shoulder(lit * washed * (0.1 + 0.9 * pool) * high + projected) + pc.glow.rgb * pc.glow.a, vWorld), 1.0);
         }
         """;
 
     private const float Haze = 0.06f; // the haze's density per metre past its first 3 m: about half the light through at 15 m
+    // The streets' haze, much thinner: about half the light through at 290 m. At 0.12 of the hall's (half at 96 m) the
+    // Parliament's towers faded into a white mist (the user, 2026-11-18: « je veux moins de brouillard »).
+    private const float StreetHaze = Haze * 0.04f;
+    private const float GymHaze = Haze * 0.3f; // the gymnasium's: its far end, 34 m off, still clear (Gymnasium)
     private static readonly float4 HazeColor = new(0.075f, 0.09f, 0.115f, 1f); // the shader's haze() colour
+    private static readonly float4 DaySky = new(0.42f, 0.55f, 0.75f, 1f); // its day colour over the streets of Ottawa (OttawaStreets)
 
     // How the scene is lit (--quality): Flat as it was first drawn, or Low (LowFragmentShader).
     private enum Quality
@@ -504,9 +853,33 @@ internal static unsafe class Stage
 
     public static int Run(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--reload-after") return Reload.Helper(args); // F5's helper (Reload)
+
         if (args.Contains("--selftest"))
         {
             return Link.SelfTest();
+        }
+
+        // --question SESSION SURFACE: what the shelf would show for that waiting session, printed, nothing sent.
+        if (Option(args, "--question") is { } questioned)
+        {
+            var asked = SessionQuestion.Ask(questioned, args.SkipWhile(a => a != "--question").Skip(2).FirstOrDefault() ?? "");
+            Console.WriteLine($"QUESTION {asked.Title}: {asked.Text.ReplaceLineEndings(" ")[..Math.Min(100, asked.Text.Length)]}");
+            foreach (var c in asked.Choices) Console.WriteLine($"QUESTION choice {c.Label} ({(c.WmuxChoice is { } reported ? "wmux " + reported : "key " + c.Key)})");
+            if (asked.Note is { } note) Console.WriteLine($"QUESTION note {note}");
+            return 0;
+        }
+
+        // --streets: the streets of Ottawa behind the door, fetched once (or read where they were kept) and built, without
+        // a window: what the door would show, counted.
+        if (args.Contains("--streets"))
+        {
+            var city = OttawaStreets.Load().GetAwaiter().GetResult();
+            if (city is null) { Console.Error.WriteLine("STREETS no answer from Overpass"); return 1; }
+            var p = city.Placement;
+            Console.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"STREETS {city.Buildings} buildings, {city.Streets} streets, {city.Left} left out, {city.Vertices.Length / 3} triangles; door at ({p.Door.X:F1}, {p.Door.Y:F1}) m from Parliament Hill, out toward ({p.Out.X:F3}, {p.Out.Y:F3}); kept in {OttawaStreets.CachePath}"));
+            return 0;
         }
 
         var clock = Stopwatch.StartNew();
@@ -681,6 +1054,7 @@ internal static unsafe class Stage
         // leaves it out.
         Streamline.Needs[] streamlineNeeds = [];
         var rayReconstruction = false; // DLSS-RR's functions bound once the device is told
+        var superResolution = false; // DLSS's (Super Resolution) bound once the device is told
         var frameGeneration = false; // DLSS-G's, with the swapchain through Streamline (--dlss-g)
         var streamlineHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "streamline");
         var dlssByItself = !hidden && !args.Contains("--no-dlss") && File.Exists(Path.Combine(streamlineHome, "sl.interposer.dll"));
@@ -784,10 +1158,14 @@ internal static unsafe class Stage
             _ when properties.DeviceType == VkPhysicalDeviceType.Cpu => (Quality.Flat, $"{gpu} draws on the CPU"),
             _ => (Quality.Low, $"{gpu} is a {properties.DeviceType switch { VkPhysicalDeviceType.DiscreteGpu => "discrete", VkPhysicalDeviceType.IntegratedGpu => "integrated", VkPhysicalDeviceType.VirtualGpu => "virtual", _ => "other" }} GPU"),
         };
-        // Low draws four samples a pixel, which every Vulkan GPU offers, and resolves them into the swapchain's image.
-        var samples = quality == Quality.Low ? VkSampleCountFlags._4Bit : VkSampleCountFlags._1Bit;
+        // Low draws four samples a pixel, which every Vulkan GPU offers, and resolves them into the swapchain's image;
+        // with DLSS Super Resolution offered (Streamline, an NVIDIA RTX GPU), one sample: DLSS smooths the edges instead,
+        // from the jittered frames (RasterUpscaler), unless --no-dlss-sr.
+        var dlssSmooths = quality == Quality.Low && Streamline.Loaded && !args.Contains("--no-dlss-sr")
+            && Streamline.Features.Contains(Streamline.FeatureDlss) && Streamline.Supported(Streamline.FeatureDlss, physical.VkHandle) == 0;
+        var samples = quality == Quality.Low && !dlssSmooths ? VkSampleCountFlags._4Bit : VkSampleCountFlags._1Bit;
         var msaa = samples != VkSampleCountFlags._1Bit;
-        Console.WriteLine($"SCENE quality {quality.ToString().ToLowerInvariant()} because {because}{(msaa ? ", with 4x MSAA" : "")}");
+        Console.WriteLine($"SCENE quality {quality.ToString().ToLowerInvariant()} because {because}{(msaa ? ", with 4x MSAA" : dlssSmooths ? ", its edges smoothed by DLSS instead of MSAA" : "")}");
 
         // The screen's pace (VK_KHR_present_id and VK_KHR_present_wait), when the GPU offers it: a frame can wait for the
         // last one to be on screen.
@@ -1025,6 +1403,14 @@ internal static unsafe class Stage
                 Console.WriteLine($"SCENE streamline ray reconstruction: {bound ?? "ready"}");
             }
 
+            // Super Resolution on the raster pass (RasterUpscaler), unless --no-dlss-sr; not with Low's MSAA.
+            if (told == 0 && !msaa && !args.Contains("--no-dlss-sr") && Streamline.Supported(Streamline.FeatureDlss, physical.VkHandle) == 0)
+            {
+                var bound = Streamline.BindSuperResolution();
+                superResolution = bound is null;
+                Console.WriteLine($"SCENE streamline super resolution: {bound ?? "ready"}");
+            }
+
             // Frame generation (--dlss-g): its functions, the swapchain's proxies and Reflex's low latency mode, then
             // the window's surface made again through the interposer, so that DLSS-G knows it.
             if (told == 0 && rayReconstruction && Streamline.Features.Contains(Streamline.FeatureDlssG))
@@ -1210,6 +1596,62 @@ internal static unsafe class Stage
             Dependencies = &dependency,
         }, null);
 
+        // Frame generation draws a frame in two passes, compatible with renderPass and its framebuffers: the hall
+        // (hallPass), which leaves the canvas as a colour attachment so that Streamline can copy it as the HUD-less colour,
+        // then the cards and buttons over it (cardsPass), which ends as renderPass does. With MSAA the samples are kept
+        // between the two, the hall's pass resolves them into the canvas, and the cards' pass loads them and resolves
+        // them again, cards and all.
+        var hudless = frameGeneration;
+        var hallPass = default(VkRenderPass);
+        var cardsPass = default(VkRenderPass);
+        // Super Resolution (RasterUpscaler) draws the hall into its own pass, then the cards' pass over the window's
+        // image: DLSS's picture first, the cards after it.
+        if (hudless || superResolution)
+        {
+            Span<VkAttachmentDescription> split = [attachments[0], attachments[1], attachments[2]];
+            if (msaa)
+            {
+                split[0].StoreOp = VkAttachmentStoreOp.Store;
+                split[2].FinalLayout = VkImageLayout.ColorAttachmentOptimal;
+            }
+            else
+            {
+                split[0].FinalLayout = VkImageLayout.ColorAttachmentOptimal;
+            }
+
+            hallPass = device.CreateRenderPass(new VkRenderPassCreateInfo
+            {
+                AttachmentCount = msaa ? 3 : 2,
+                Attachments = (VkAttachmentDescription*)Unsafe.AsPointer(ref split[0]),
+                SubpassCount = 1,
+                Subpasses = &subpass,
+                DependencyCount = 1,
+                Dependencies = &dependency,
+            }, null);
+            split[0].LoadOp = VkAttachmentLoadOp.Load;
+            split[0].InitialLayout = VkImageLayout.ColorAttachmentOptimal;
+            if (msaa)
+            {
+                split[0].StoreOp = VkAttachmentStoreOp.DontCare;
+                split[2].FinalLayout = VkImageLayout.PresentSrcKHR;
+            }
+            else
+            {
+                split[0].FinalLayout = VkImageLayout.PresentSrcKHR;
+            }
+
+            split[1].LoadOp = VkAttachmentLoadOp.DontCare; // the cards test no depth
+            cardsPass = device.CreateRenderPass(new VkRenderPassCreateInfo
+            {
+                AttachmentCount = msaa ? 3 : 2,
+                Attachments = (VkAttachmentDescription*)Unsafe.AsPointer(ref split[0]),
+                SubpassCount = 1,
+                Subpasses = &subpass,
+                DependencyCount = 1,
+                Dependencies = &dependency,
+            }, null);
+        }
+
         // Builds the swapchain at the window's size, with its depth buffer, image views, framebuffers and semaphores. It
         // is false while the window has no size, when it is minimised.
         bool Build()
@@ -1336,7 +1778,8 @@ internal static unsafe class Stage
                     ArrayLayers = 1,
                     Samples = samples,
                     Tiling = VkImageTiling.Optimal,
-                    Usage = VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.TransientAttachmentBit,
+                    // Frame generation keeps the samples from the hall's pass to the cards': not transient then.
+                    Usage = VkImageUsageFlags.ColorAttachmentBit | (hudless ? default : VkImageUsageFlags.TransientAttachmentBit),
                     SharingMode = VkSharingMode.Exclusive,
                     InitialLayout = VkImageLayout.Undefined,
                 }, null);
@@ -1428,6 +1871,8 @@ internal static unsafe class Stage
                 new VkDescriptorSetLayoutBinding { Binding = 2, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 3, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 new VkDescriptorSetLayoutBinding { Binding = 5, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 6, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
+                new VkDescriptorSetLayoutBinding { Binding = 7, DescriptorType = VkDescriptorType.CombinedImageSampler, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit },
                 .. (rayTraced
                     ? new[] { new VkDescriptorSetLayoutBinding { Binding = 4, DescriptorType = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 1, StageFlags = VkShaderStageFlags.FragmentBit } }
                     : []),
@@ -1439,7 +1884,7 @@ internal static unsafe class Stage
             PoolSizes =
             [
                 new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = FramesInFlight },
-                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 4 * FramesInFlight },
+                new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 6 * FramesInFlight },
                 .. (rayTraced ? new[] { new VkDescriptorPoolSize { Type = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = FramesInFlight } } : []),
             ],
         }, null);
@@ -1476,17 +1921,77 @@ internal static unsafe class Stage
         var materialDir = quality == Quality.Low && !args.Contains("--no-textures") ? MaterialTextures.Find(Option(args, "--textures")) : null;
         var hallVertices = Brickwork.Build(photographed: materialDir is not null);
         var hall = new Mesh(device, physical, [.. hallVertices, .. KnotFloor.Build(photographed: materialDir is not null)]);
+        // The hall closed round (HallShell): walls, ceiling, windows and lamps, drawn but not traced.
+        var (shellVertices, glassVertices, bulbVertices) = HallShell.Build(photographed: materialDir is not null);
+        var (shell, shellGlass, shellBulbs) = (new Mesh(device, physical, shellVertices), new Mesh(device, physical, glassVertices), new Mesh(device, physical, bulbVertices));
+        // The gymnasium through the hall's right wall (Gymnasium): its walls, roof and windows drawn as the shell is, its
+        // floor, court, hoops, bleachers and trusses traced.
+        var (gymShellVertices, gymGlassVertices, gymBulbVertices, gymInsideVertices) = Gymnasium.Build(photographed: materialDir is not null);
+        var (gymShell, gymGlass, gymBulbs, gymInside) = (new Mesh(device, physical, gymShellVertices), new Mesh(device, physical, gymGlassVertices), new Mesh(device, physical, gymBulbVertices), new Mesh(device, physical, gymInsideVertices));
+        // The roll-up door's curtain, and the streets of Ottawa behind it once fetched (StreetDoor, OttawaStreets).
+        var streetDoor = new StreetDoor();
+        var doorCurtain = new Mesh(device, physical, StreetDoor.Curtain());
+        Task<OttawaStreets.City?>? streetsLoading = null;
+        Mesh? streets = null;
+        Mesh? projectionScreen = null; // the white screen the gallery's video is projected on (GalleryVideo.ScreenModel)
+        IReadOnlyList<HallGallery.Globe>? screenFor = null;
+        Mesh? scooterMesh = null, droneMesh = null; // the rides' models (Rides), made at the first ride
+        var rides = new Rides { ReducedMotion = args.Contains("--reduced-motion") };
+        Panel.Card? rideHint = null;
+        Texture? rideHintTexture = null;
+        (string Text, int Height) rideHintDrawn = default;
+        var rideHintAt = double.NegativeInfinity;
+        OttawaStreets.Placement? streetsPlacement = null;
+        IReadOnlyList<FreeCamera.Footprint> streetFootprints = [];
+        // Google's 3D tiles in place of OpenStreetMap's buildings (GoogleStreets): chosen from the start since the user
+        // asked for them (2026-11-18: « Je veux Google 3d tiles, pas OpenStreetMap »), G or --osm goes back to
+        // OpenStreetMap. Fetched once a run, at most GoogleStreets.MostRequests requests, kept in memory only. While
+        // they are chosen nothing of OpenStreetMap is drawn beside them (Google's terms, 3.2.3 (e)) and the buildings do
+        // not stop the walker. Without a key, OpenStreetMap stays.
+        var googleChosen = GoogleStreets.Keyed && !args.Contains("--osm");
+        var googleTried = false;
+        var tilesAsked = args.Contains("--google-tiles"); // the 3D tiles: only on G, or this option for a paid hidden run
+        Task<GoogleStreets.Tiles?>? googleLoading = null;
+        Mesh? aerial = null;
+        IReadOnlyList<string> aerialProviders = [];
+        var googlePath = new List<SN.Vector2>(); // the places out in the streets the tiles were refined for, past the door
+        var lastEye = SN.Vector3.Zero;
+        // Street View at street level (StreetPanorama): the panorama nearest the eye, low in the street, drawn in place
+        // of the 3D tiles within StreetPanorama.Near metres of where it was taken. Its tiles go in the aerial array after
+        // the 3D tiles' photographs (aerialLayers).
+        byte[][] aerialLayers = [];
+        StreetPanorama.Pano? pano = null;
+        Mesh? panoMesh = null;
+        Task<StreetPanorama.Pano?>? panoLoading = null;
+        var panoAskedAt = new SN.Vector2(float.NaN, float.NaN);
+        var panoShown = false;
+        var panoCardId = "";
+        // The gallery on the left wall (HallGallery): the learn site's courses, demos and artifacts, from gallery.json
+        // (--gallery FILE), drawn from Lego's blocks and redrawn when the file changes; a click on one opens its page.
+        // What the demos and artifacts show inside their glasses (GalleryPictures, --pictures DIR), read first.
+        var picturesDir = quality == Quality.Low && !args.Contains("--no-textures") ? GalleryPictures.Find(Option(args, "--pictures")) : null;
+        GalleryPictures.Pixels? picturePixels = GalleryPictures.Read(picturesDir);
+        HallGallery.Pictures = picturePixels.Held;
+        Console.WriteLine($"SCENE gallery pictures: {picturePixels.Held.Count}{(picturesDir is null ? " (the Flat lighting or --no-textures)" : $" from {picturesDir}")}");
+        var hallGallery = new HallGallery(vertices => new Mesh(device, physical, vertices), FramesInFlight, Option(args, "--gallery"));
+        Console.WriteLine($"SCENE gallery: {hallGallery.Summary}");
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
-        var knotsPath = KnotFloor.Path(Option(args, "--knots"));
-        var knotGallery = KnotFloor.Load(knotsPath);
+        var knotsPath = KnotFloor.Path(Option(args, "--marins"));
+        var marins = KnotFloor.Load(knotsPath);
+        var (ropeVertices, cardsEn, cardsFr) = (KnotFloor.BuildKnots(marins), KnotFloor.BuildCards(marins, fr: false), KnotFloor.BuildCards(marins, fr: true));
+        var knotRopes = new Mesh(device, physical, ropeVertices, resident: true);
+        // Where the ropes and the cards are, to draw them only when the picture shows some of it (KnotFloor.Seen).
+        var knotBox = KnotFloor.Box(ropeVertices, cardsEn, cardsFr);
         var knots = new Dictionary<bool, Mesh>
         {
-            [false] = new Mesh(device, physical, KnotFloor.BuildGallery(knotGallery, fr: false)),
-            [true] = new Mesh(device, physical, KnotFloor.BuildGallery(knotGallery, fr: true)),
+            [false] = new Mesh(device, physical, cardsEn),
+            [true] = new Mesh(device, physical, cardsFr),
         };
-        Console.WriteLine(knotGallery.Exhibits.Length > 0
-            ? $"SCENE knots: {knotGallery.Exhibits.Length} from {knotsPath}, {knotGallery.Exhibits.Count(e => e.Verified)} verified by IX, {knots[false].Count} vertices"
-            : $"SCENE knots: none ({knotGallery.Why}, {knotsPath})");
+        (ropeVertices, cardsEn, cardsFr) = ([], [], []);
+        Console.WriteLine(marins.Knots.Length > 0
+            ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {knotRopes.Count} vertices of rope{(knotRopes.Resident ? " in the GPU's memory" : " in the host's memory")}, the fuller table {KnotFloor.Fill:P0} full; "
+              + $"each knot moved from IX's path at most, its clearance, tightest turn, steepest slope and plan crossings/writhe, IX's then as shown: {string.Join(", ", marins.Knots.Select(k => (k, m: KnotFloor.Measure(k))).Select(x => $"{x.k.Id} {x.m.Moved:F1} r, {x.m.Before:F2}>{x.m.After:F2} d, {x.m.Bent.Tightest:F2}>{x.m.Relaxed.Tightest:F2} r, {x.m.Bent.Slope:F2}>{x.m.Relaxed.Slope:F2}, {x.m.Bent.Crossings}/{x.m.Bent.Writhe}>{x.m.Relaxed.Crossings}/{x.m.Relaxed.Writhe}"))}"
+            : $"SCENE knots: none ({marins.Why}, {knotsPath})");
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
         var parts = Robot.Meshes().Select(v => new Mesh(device, physical, v)).ToArray();
         var crate = new Mesh(device, physical, ArcadePlayer.CrateMesh()); // the small robot at the cabinet stands on it
@@ -1503,13 +2008,13 @@ internal static unsafe class Stage
         var validatedStore = Option(args, "--module-dir") is null
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "modules", "gaia", "validated")
             : Path.Combine(moduleRoot, "validated");
-        SceneModuleHost<Mesh>? gaiaModule = null;
+        SceneModuleHost<ModuleSurface>? gaiaModule = null;
         Dictionary<string, Mesh>? gaiaFallback = null;
         try
         {
-            gaiaModule = new SceneModuleHost<Mesh>(Path.Combine(moduleRoot, "initial", "GaiaPresence.Module.dll"),
+            gaiaModule = new SceneModuleHost<ModuleSurface>(Path.Combine(moduleRoot, "initial", "GaiaPresence.Module.dll"),
                 Path.Combine(moduleRoot, "available", "GaiaPresence.Module.dll"), Words.Language,
-                (visual, triangles, presentation) => new Mesh(device, physical, SceneModuleGeometry.Compile(visual, triangles, presentation)), () => device.WaitIdle(), validatedStore);
+                (visual, triangles, presentation) => ModuleSurface.Make(SceneModuleGeometry.Compile(visual, triangles, presentation), v => new Mesh(device, physical, v)), () => device.WaitIdle(), validatedStore);
             Console.WriteLine($"MODULE gaia loaded code v{gaiaModule.Version.ToString(2)}; pid {Environment.ProcessId}; sha256 {gaiaModule.CodeHash}");
         }
         catch (Exception error)
@@ -1526,6 +2031,22 @@ internal static unsafe class Stage
         WidgetStage<Mesh>? officeStage = null;
         OfficeFeed? officeFeed = null;
         var officeSelection = new OfficeSelection();
+        // A robot held with the left button turns its ring as the mouse moves sideways (OfficeState.Turns), half a turn
+        // across the window's width; one let go within DragSlop pixels of where it was pressed is a click.
+        var officeTurns = new Dictionary<string, double>(StringComparer.Ordinal);
+        string? officeDrag = null;
+        (double X, double Y) officeDragFrom = default, officeDragAt = default;
+        var officeDragMoved = 0.0;
+        const double DragSlop = 6, TurnPerWidth = Math.PI;
+        var officeSpin = new OfficeSpin(); // and coasts on once let go
+        // Gaia's planet, pressed and dragged sideways, turns about its axis and coasts on as the rings do (GaiaTurn).
+        var gaiaHeld = false;
+        (double X, double Y) gaiaFrom = default, gaiaAt = default;
+        var gaiaMoved = 0.0;
+        var gaiaSpin = new OfficeSpin();
+        var gaiaTurns = new Dictionary<string, double>();
+        var gaiaEye = SN.Vector3.Zero;
+        var officeSpinAt = double.NaN;
         SN.Matrix4x4? officeView = null; // the frame's camera for clicks; none during the splash
         SN.Matrix4x4? chestView = null; // the last frame's torso transform and camera, for a click on Delta's chest screen
         var wallTestStep = 0; // --wall-test: the checks made
@@ -1615,8 +2136,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 24, // the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 24 }], // one image each
+            MaxSets = 28, // the Caster button and its card, the ride's dial (Rides), Google's attribution (GoogleStreets), the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 28 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -1633,6 +2154,13 @@ internal static unsafe class Stage
         var materials = new MaterialTextures(device, physical, upload, materialDir);
         var globes = new GlobeImages(device, physical, upload, globePixels!);
         globePixels = null;
+        var pictures = new GalleryPictures(device, physical, upload, picturePixels!);
+        // Google's 3D tiles' photographs (GoogleStreets): one white layer until they are fetched, then their own array.
+        var aerialImage = new MaterialTextures.ArrayImage(device, physical, upload, VkFormat.R8G8B8A8SRGB, 1, [[255, 255, 255, 255]], normal: false);
+        // The demos' videos played in their globes as the eye comes near (GalleryVideo, --videos DIR, --no-videos).
+        var videos = picturesDir is null || args.Contains("--no-videos") ? null
+            : new GalleryVideo(device, physical, pictures, picturePixels!, GalleryVideo.Dir(Option(args, "--videos")), FramesInFlight);
+        picturePixels = null;
         // A globe's halves meet at the edges: clamped there, they never blend with the far side of their own half.
         var globeSampler = device.CreateSampler(new VkSamplerCreateInfo
         {
@@ -1646,6 +2174,10 @@ internal static unsafe class Stage
             MaxAnisotropy = anisotropic ? 16f : 1f,
             MaxLod = 16f,
         }, null);
+        // DLSS Super Resolution's mode (--dlss-sr-mode, quality by default), and the textures sampled as at the window's
+        // size, as DLSS's guide asks: a mip bias of log2(drawn / window), -0.58 in quality.
+        var srMode = (uint)Math.Max(Array.IndexOf(Streamline.Modes, Option(args, "--dlss-sr-mode") ?? "quality"), 1);
+        var lodBias = superResolution && Streamline.SuperResolutionSize(srMode, 3840, 2160) is { } srSize ? MathF.Log2(srSize.Width / 3840f) : 0f;
         var materialSampler = device.CreateSampler(new VkSamplerCreateInfo
         {
             MagFilter = VkFilter.Linear,
@@ -1654,6 +2186,7 @@ internal static unsafe class Stage
             AddressModeU = VkSamplerAddressMode.Repeat,
             AddressModeV = VkSamplerAddressMode.Repeat,
             AddressModeW = VkSamplerAddressMode.Repeat,
+            MipLodBias = lodBias,
             AnisotropyEnable = anisotropic,
             MaxAnisotropy = anisotropic ? 16f : 1f,
             MaxLod = 16f,
@@ -1676,6 +2209,17 @@ internal static unsafe class Stage
         var (wallW, wallH) = (WallSource.Width / 2f, WallSource.Height / 2f);
         var sessionWall = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
             WallCard.Render([], ""), WallCard.Width, WallCard.Height, 1, new(-wallW, wallH, wallW, -wallH), 0f, 0f);
+        // The lectern's open book (LearnLectern): a course or a Streeling department read in the hall, its pages a picture
+        // laid out by the reader's mod, reloaded when a build replaces modules\reader\LearnReader.Module.dll.
+        var reader = new LearnLectern(new LearnHost(HallGallery.Browse), Option(args, "--reader-module") ?? Path.Combine(AppContext.BaseDirectory, "modules", "reader", "LearnReader.Module.dll"));
+        var firstPage = reader.Picture;
+        var readerBook = new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight,
+            firstPage.Rgba, Delta.SceneModules.ReaderPicture.Width, Delta.SceneModules.ReaderPicture.Height, firstPage.Revision, HallGallery.BookRect, 0f, 0f);
+        // --read course:N or department:N opens that book on the lectern from the start, for captures (with --view 9).
+        if (Option(args, "--read") is { } toRead)
+        {
+            ReadOnLectern(toRead);
+        }
         var pongWall = arcade is { Frame: { Stride: var stride, Width: var pw, Height: var ph } pong } && stride == pw * 4
             ? new ScreenGpuRenderer(device, physical, upload, renderPass, samples, sampler, setLayout, FramesInFlight, pong.Rgba.ToArray(), pw, ph,
                 pong.Revision, new(-wallW, wallW * ph / pw, wallW, -wallW * ph / pw), 0f, 0.2f)
@@ -1693,6 +2237,8 @@ internal static unsafe class Stage
         device.WaitIdle();
         materials.FreeStaging();
         globes.FreeStaging();
+        pictures.FreeStaging();
+        aerialImage.FreeStaging();
         // Path tracing (F9, --path-tracing), with the ray scene: the hall drawn by following light through it.
         if (rays is not null && rtPipeline)
         {
@@ -1712,19 +2258,36 @@ internal static unsafe class Stage
             tracer.JitterSign = args.Contains("--dlss-jitter-flip") ? -1f : 1f;
             Console.WriteLine($"SCENE path tracing through DLSS Ray Reconstruction, {Streamline.Modes[tracer.UpscaleMode]}");
         }
-        var maps = stackalloc VkDescriptorImageInfo[4];
+
+        // DLSS Super Resolution on the raster pass (the window drawn without path tracing), in --dlss-sr-mode's mode
+        // (quality by default); F7 turns it off and on.
+        var upscaler = superResolution ? new RasterUpscaler(device, physical, surfaceFormat.Format, depthFormat, dependency, setLayout) : null;
+        var upscaling = upscaler is not null;
+        // The gallery's water globes and paperweights (GlassWork): bent through the hall drawn so far.
+        var glass = new GlassWork(device, physical, renderPass, samples, surfaceFormat.Format, setLayout);
+        var glassWay = (GlassWork.Way)(-1);
+        if (upscaler is not null)
+        {
+            upscaler.Mode = srMode;
+            Console.WriteLine($"SCENE raster pass through DLSS Super Resolution, {Streamline.Modes[upscaler.Mode]}, textures' mip bias {lodBias:F2}; F7 or --no-dlss-sr");
+        }
+        var maps = stackalloc VkDescriptorImageInfo[6];
         foreach (var frameSet in frameSets)
         {
             maps[0] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Albedo, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[1] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Normal, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[2] = new VkDescriptorImageInfo { Sampler = materialSampler, ImageView = materials.Arm, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             maps[3] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = globes.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            maps[4] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = pictures.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            maps[5] = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = aerialImage.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
             device.UpdateDescriptorSets(
             [
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 7, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[5] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 1, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[0] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 2, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[1] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 3, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[2] },
                 new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 5, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[3] },
+                new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 6, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &maps[4] },
             ], []);
         }
         var splashSets = new VkDescriptorSet[splashTextures.Length];
@@ -1783,6 +2346,10 @@ internal static unsafe class Stage
         // The caption under the robot (Panel.Caption) for each sentence Delta heard, drawn again for each and for a new size.
         var captionSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? captionTexture = null;
+        var aerialCardSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? aerialCardTexture = null;
+        Panel.Card? aerialCard = null;
+        var aerialCardSize = (0, 0);
         Panel.Card? caption = null;
         var captionId = 0;
         var captionSize = (0, 0);
@@ -1868,6 +2435,26 @@ internal static unsafe class Stage
         var invitationOpened = 0.0;
         (int X, int Y) InvitationAt() => invitationCard is null ? (0, 0) : ((extent.Width - invitationCard.Width) / 2, (extent.Height - invitationCard.Height) / 2);
 
+        // The Caster button left of the Inviter button (Panel.CastButton; the user, 2026-11-18, « 1 - oui »): a click
+        // asks the brain to cast Delta's window to a Chromecast, through the phone gateway (brain/tv.go), or to stop.
+        // What comes back opens the card under the buttons (Panel.CastCard): where it is cast, why not, or a choice of
+        // Chromecasts, a click on one casting there. While cast, the window asks how it stands every 5 s.
+        var castSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? castTexture = null;
+        Panel.Card? castButton = null;
+        var castDrawn = (Height: 0, Language: "", Casting: false, Playing: false);
+        (int X, int Y) CastAt() => (InviteAt().X - (castButton?.Width ?? 0) - Math.Max(6, extent.Height / 96), CardMargin());
+        var castCardSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? castCardTexture = null;
+        Panel.Card? castCard = null;
+        var castCardDrawn = (Id: -1, Height: 0, Language: "");
+        var castShown = false;
+        var castOpened = 0.0;
+        var castAsked = double.NegativeInfinity; // when the window last asked how the cast stands
+        var castSeen = 0; // the television's last line looked at
+        var castSaid = ""; // what it said, to open the card only for news
+        (int X, int Y) CastCardAt() => castCard is null ? (0, 0) : (extent.Width - castCard.Width - CardMargin(), CardMargin() + (castButton?.Height ?? 0) + Math.Max(6, extent.Height / 96));
+
         // The release notes a click on the version opens, or N (Panel.ReleaseNotes); a click on them or Esc closes them.
         var notesSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
         Texture? notesTexture = null;
@@ -1926,6 +2513,27 @@ internal static unsafe class Stage
             device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = set, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &image }], []);
             return fresh;
         }
+
+        // Google's tiles' photographs, once fetched: their array in place of the white layer, in every frame's set.
+        void UploadAerial(byte[][] layers)
+        {
+            device.WaitIdle();
+            device.ResetCommandPool(uploadPool, VkCommandPoolResetFlags.None);
+            uploader.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
+            var fresh = new MaterialTextures.ArrayImage(device, physical, uploader, VkFormat.R8G8B8A8SRGB, GoogleStreets.Side, layers, normal: false);
+            uploader.End();
+            var uploaderHandle = uploader.Handle;
+            queue.Submit([new VkSubmitInfo { CommandBufferCount = 1, CommandBuffers = &uploaderHandle }], default);
+            device.WaitIdle();
+            fresh.FreeStaging();
+            aerialImage.Dispose();
+            aerialImage = fresh;
+            var image = new VkDescriptorImageInfo { Sampler = globeSampler, ImageView = fresh.View, ImageLayout = VkImageLayout.ShaderReadOnlyOptimal };
+            foreach (var frameSet in frameSets)
+            {
+                device.UpdateDescriptorSets([new VkWriteDescriptorSet { DstSet = frameSet, DstBinding = 7, DescriptorCount = 1, DescriptorType = VkDescriptorType.CombinedImageSampler, ImageInfo = &image }], []);
+            }
+        }
         link.Shelf = command =>
         {
             var at = clock.Elapsed.TotalSeconds;
@@ -1982,11 +2590,62 @@ internal static unsafe class Stage
             Console.Error.WriteLine($"SCENE no view {startView}; the camera drifts");
         }
 
+        // --door inside|street|back|balcony|air|lawn|wing: the roll-up door open from the start, the streets loading, and the camera looking
+        // out through it from the hall, up the street from outside, or back at the hall; for hidden checks.
+        if (Option(args, "--door") is { } doorShot)
+        {
+            streetDoor.OpenNow();
+            streetsLoading = OttawaStreets.Load();
+            camera.DoorOpen = true;
+            var (doorEye, doorTarget) = doorShot switch
+            {
+                "street" => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, HallShell.Front + 6f), new SN.Vector3(HallShell.DoorX, 6f, HallShell.Front + 90f)),
+                "back" => (new SN.Vector3(HallShell.DoorX + 4f, FreeCamera.WalkHeight + 1f, HallShell.Front + 14f), new SN.Vector3(HallShell.DoorX, 2f, HallShell.Front)),
+                // 12 m up, as from a balcony over the door: Google's photographed city reads best a little above the street.
+                "balcony" => (new SN.Vector3(HallShell.DoorX, 12f * FreeCamera.Scale, HallShell.Front + 3f), new SN.Vector3(HallShell.DoorX, 5f, HallShell.Front + 90f)),
+                "air" => (new SN.Vector3(HallShell.DoorX + 30f, 50f, HallShell.Front + 2f), new SN.Vector3(HallShell.DoorX, 8f, HallShell.Front + 120f)),
+                "lawn" => (new SN.Vector3(HallShell.DoorX + 6f, FreeCamera.WalkHeight, HallShell.Front + 80f), new SN.Vector3(HallShell.DoorX - 4f, 30f, HallShell.Front + 140f)),
+                "wing" => (new SN.Vector3(Gymnasium.Right + 8f, 16f, HallShell.Front + 22f), new SN.Vector3(10f, 2f, -2f)), // the building and its gymnasium from the air
+                _ => (new SN.Vector3(HallShell.DoorX, FreeCamera.WalkHeight, 1.5f), new SN.Vector3(HallShell.DoorX, 1.8f, 20f)),
+            };
+            camera.GoTo(doorEye, doorTarget, cut: true);
+        }
+
+        // --gym court|door|stands: the gymnasium (Gymnasium) from its end, from the hall's door into it, or from the
+        // bleachers; for hidden checks.
+        if (Option(args, "--gym") is { } gymShot)
+        {
+            var (gymEye, gymTarget) = gymShot switch
+            {
+                "door" => (new SN.Vector3(4.6f, FreeCamera.WalkHeight, Gymnasium.DoorZ), new SN.Vector3(20f, 1.6f, 0f)),
+                "stands" => (new SN.Vector3(17.4f, 2.3f, 5.4f), new SN.Vector3(17.4f, 1.2f, -6f)),
+                _ => (new SN.Vector3(Gymnasium.Left + 1.2f, 1.8f, 4.6f), new SN.Vector3(Gymnasium.Right - 2f, 1.6f, -4f)),
+            };
+            camera.GoTo(gymEye, gymTarget, cut: true);
+        }
+
+        // --knots table|near|close|wall: the first knots on the hall's side table (KnotFloor) from the walkway, nearer,
+        // a hand's length from the rope, or the end wall's table and the windows over it; for hidden checks.
+        if (Option(args, "--knots") is { } knotShot)
+        {
+            var top = KnotFloor.TableTop;
+            var (knotEye, knotTarget) = knotShot switch
+            {
+                "close" => (new SN.Vector3(4.52f, top + 0.09f, 0.62f), new SN.Vector3(4.36f, top, 0.56f)),
+                "near" => (new SN.Vector3(4.85f, top + 0.3f, 0.6f), new SN.Vector3(4.35f, top, 0.35f)),
+                "wall" => (new SN.Vector3(4.75f, KnotFloor.Level + FreeCamera.WalkHeight, -1.2f), new SN.Vector3(6.25f, 3.3f, -1.6f)),
+                _ => (new SN.Vector3(5.05f, KnotFloor.Level + FreeCamera.WalkHeight, 0.6f), new SN.Vector3(4.35f, top, -0.6f)),
+            };
+            camera.GoTo(knotEye, knotTarget, cut: true);
+        }
         var film = filmDir is null || origamiFilmed ? new Cinematic { ReducedMotion = reducedMotion } : new Cinematic(ArcadeFilm.Shots, ArcadeFilm.Heading); // 0, or --cinematic once the splash is over
         var arcadeFilm = filmDir is null || origamiFilmed ? null : new ArcadeFilm(camera, film);
         var origamiFilm = origamiPlay is null ? null : new OrigamiFilm(camera, origamiPlay, origamiSeconds);
         var filmAsked = false; // the film's game asked of the cabinet
         var hud = filmDir is null; // the window's buttons and cards; a film shows none
+        // Google's attribution card, bottom right, over the version's label when that is shown.
+        (int X, int Y) AttributionAt(Panel.Card c) =>
+            (extent.Width - c.Width - CardMargin(), (hud && versionLabel is not null ? VersionAt().Y - (CardMargin() / 2) : extent.Height - CardMargin()) - c.Height);
         // While nobody moves the camera it tours the hall (IdleTour); --no-tour leaves it out, as films and shots do.
         // --tour-after S starts the tour after S seconds instead of 25, for captures. PARSEC is a third party's page, fetched
         // from its site and run in the scene, so nothing fetches it until asked: a click on the cabinet, or --arcade-robot,
@@ -2007,6 +2666,11 @@ internal static unsafe class Stage
         var wheelAtStart = args.Contains("--wheel");
         var arcadeAtStart = args.Contains("--arcade-play"); // the cabinet's game once the splash is over, for captures
         var flyTo = int.TryParse(Option(args, "--fly-to"), out var flyToValue) ? flyToValue : 0; // a view's flight half a second after the splash, for captures
+        // --ride scooter|drone: that ride a second after the splash, its throttle held (the drone climbing its first 2 s), for
+        // captures; --ride-view turns its view (O).
+        var rideAsked = Option(args, "--ride") switch { "scooter" => Rides.Kind.Scooter, "drone" => Rides.Kind.Drone, _ => Rides.Kind.None };
+        var rideHeld = rideAsked != Rides.Kind.None;
+        var rideSince = double.NaN;
         // --resize-to WxH resizes the window a second after the splash, to measure the rebuild a live window's maximising makes
         var resizeTo = Option(args, "--resize-to")?.Split('x') is [var rw, var rh] && int.TryParse(rw, out var resizeW) && int.TryParse(rh, out var resizeH) && resizeW > 0 && resizeH > 0
             ? new int2(resizeW, resizeH)
@@ -2069,6 +2733,7 @@ internal static unsafe class Stage
         Texture? filmHintTexture = null;
         Panel.Card? filmHint = null;
         var arcadeHintSet = device.AllocateDescriptorSet(descriptorPool, setLayout); // the way out of the cabinet's game
+        var rideHintSet = device.AllocateDescriptorSet(descriptorPool, setLayout); // the ride's speed and keys (Rides)
         Texture? arcadeHintTexture = null;
         Panel.Card? arcadeHint = null;
         var arcadeHintDrawn = (Height: 0, Language: "");
@@ -2116,9 +2781,12 @@ internal static unsafe class Stage
                 Has("VK_EXT_opacity_micromap") ? Panel.Rtx.Offered : Panel.Rtx.Absent,
                 Words.Say("VK_EXT_opacity_micromap · for alpha-tested leaves and fences; the hall has none", "VK_EXT_opacity_micromap · pour le feuillage et les grillages découpés ; la salle n'en a pas")),
             new("DLSS (Super Resolution, Ray Reconstruction)",
-                tracer is { Upscaling: true } && pathTracing ? Panel.Rtx.Use
-                    : tracer is { UpscaleMode: > 0 } || (nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle")) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
-                tracer is { UpscaleMode: > 0 } t
+                (tracer is { Upscaling: true } && pathTracing) || (upscaler is { Ready: true } && upscaling && !pathTracing) ? Panel.Rtx.Use
+                    : tracer is { UpscaleMode: > 0 } || upscaler is not null || (nvidia && Has("VK_NVX_binary_import") && Has("VK_NVX_image_view_handle")) ? Panel.Rtx.Offered : Panel.Rtx.Absent,
+                upscaler is { Ready: true } u && upscaling && !pathTracing
+                    ? Words.Say($"Super Resolution ({Streamline.Modes[u.Mode]}): the hall drawn at {u.Width}x{u.Height}, upscaled to {u.OutputWidth}x{u.OutputHeight}, the cards at full size · F7: on or off",
+                        $"Super Resolution ({Streamline.Modes[u.Mode]}) : la salle dessinée à {u.Width}x{u.Height}, agrandie à {u.OutputWidth}x{u.OutputHeight}, les cartes en pleine taille · F7 : activer ou couper")
+                    : tracer is { UpscaleMode: > 0 } t
                     ? Words.Say($"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}): the path tracer at {t.Width}x{t.Height}, denoised and upscaled to {t.OutputWidth}x{t.OutputHeight} (--dlss)",
                         $"Ray Reconstruction ({Streamline.Modes[t.UpscaleMode]}) : le path tracer à {t.Width}x{t.Height}, débruité et agrandi à {t.OutputWidth}x{t.OutputHeight} (--dlss)")
                     : Words.Say("NGX's extensions, VK_NVX_binary_import and VK_NVX_image_view_handle; --dlss with NVIDIA's Streamline", "extensions de NGX, VK_NVX_binary_import et VK_NVX_image_view_handle ; --dlss avec Streamline de NVIDIA")),
@@ -2140,6 +2808,14 @@ internal static unsafe class Stage
                 "VK_KHR_present_id, VK_KHR_present_wait"),
             new("MSAA 4x", msaa ? Panel.Rtx.Use : Panel.Rtx.Offered, Words.Say("four samples a pixel, Low lighting", "quatre échantillons par pixel, éclairage Low")),
         ];
+
+        // Off the scooter where it stood, or the drone landed, the view back with the pilot (Rides).
+        void EndRide()
+        {
+            var was = rides.Riding;
+            if (rides.Stop() is { } stand) camera.GoTo(stand.Eye, stand.Target, cut: true);
+            Console.WriteLine($"SCENE ride ended: {(was == Rides.Kind.Scooter ? "off the scooter" : "the drone landed")}, {rides.Crashes} crashes");
+        }
 
         GlfwKeyCallback onKey = (w, key, scancode, action, mods) => Guard("a key", () =>
         {
@@ -2221,6 +2897,42 @@ internal static unsafe class Stage
                 return; // a key held is read each frame (the loop); its repeats toggle nothing
             }
 
+            // The rides (Rides): V the racing scooter, X the drone; on one, its keys are its own, Esc or its key again ends it,
+            // and a view's key ends it before going there.
+            if (rides.Riding != Rides.Kind.None)
+            {
+                if (key == GlfwKey.Escape || (key == GlfwKey.V && rides.Riding == Rides.Kind.Scooter) || (key == GlfwKey.X && rides.Riding == Rides.Kind.Drone))
+                {
+                    EndRide();
+                    return;
+                }
+
+                if (key == GlfwKey.O)
+                {
+                    rides.ToggleView();
+                    return;
+                }
+
+                if (key is GlfwKey.F or GlfwKey.Space or GlfwKey.C or GlfwKey.CapsLock or GlfwKey.V or GlfwKey.X or GlfwKey.E or GlfwKey.Q)
+                {
+                    return;
+                }
+
+                if (key is GlfwKey.Home or GlfwKey.Enter || (int)key is >= '0' and <= '9')
+                {
+                    EndRide();
+                }
+            }
+            else if (key is GlfwKey.V or GlfwKey.X && !wheel.Open)
+            {
+                var kind = key == GlfwKey.V ? Rides.Kind.Scooter : Rides.Kind.Drone;
+                if (kind == Rides.Kind.Scooter) scooterMesh ??= new Mesh(device, physical, Rides.ScooterModel());
+                else droneMesh ??= new Mesh(device, physical, Rides.DroneModel());
+                rides.Start(kind, camera.View((float)sceneClock));
+                Console.WriteLine($"SCENE ride: {(kind == Rides.Kind.Scooter ? "the racing scooter" : "the drone")}{(rides.Outdoors ? " in the streets" : " in the hall")}");
+                return;
+            }
+
             if (key == GlfwKey.Escape && wheel.Open)
             {
                 wheel.Close(false);
@@ -2257,6 +2969,33 @@ internal static unsafe class Stage
             {
                 rtxShown = !rtxShown;
             }
+            else if (key == GlfwKey.F5 && filmDir is null)
+            {
+                Reload.Asked = true; // the frame loop closes the window, then Reload brings it back
+            }
+            else if (key == GlfwKey.G)
+            {
+                // Google's 3D tiles are paid past 1,000 a month, so they are fetched only on G (« 3 - 10$ max »,
+                // 2026-11-18), within GoogleMonth's allowance. The first G asks for them; after, G goes between Google
+                // (Street View, and the tiles when fetched) and OpenStreetMap alone.
+                if (googleChosen && !tilesAsked)
+                {
+                    tilesAsked = true;
+                    googleTried = false;
+                    var used = GoogleMonth.Used(GoogleMonth.Kind.Tiles3D);
+                    Console.WriteLine($"SCENE Google's 3D tiles asked for (G); this month {used} requests, about {GoogleMonth.Spent3D(used):F2} USD of {GoogleMonth.Dollars3D}");
+                }
+                else
+                {
+                    googleChosen = !googleChosen;
+                    if (googleChosen && aerial is null && googleLoading is null) googleTried = false; // a failed fetch is tried once more
+                    Console.WriteLine(googleChosen
+                        ? $"SCENE streets from Google{(GoogleStreets.Keyed ? "" : ": no GOOGLE_MAPS_API_KEY, OpenStreetMap stays")}"
+                        : "SCENE streets from OpenStreetMap");
+                }
+
+                camera.Footprints = googleChosen && aerial is not null ? [] : streetFootprints;
+            }
             else if (key == GlfwKey.H)
             {
                 clocks.Shown = !clocks.Shown;
@@ -2283,6 +3022,14 @@ internal static unsafe class Stage
                 pathTracing = !pathTracing;
                 tracer.Forget();
                 Console.WriteLine($"SCENE path tracing {(pathTracing ? "on" : "off")}");
+            }
+            else if (key == GlfwKey.F7 && upscaler is not null)
+            {
+                // DLSS Super Resolution on the raster pass, or the window drawn at its own size as before.
+                upscaling = !upscaling;
+                upscaler.Forget();
+                rtxDrawn = default;
+                Console.WriteLine($"SCENE super resolution {(upscaling ? "on" : "off")}");
             }
             else if (key is GlfwKey.Home or GlfwKey.Enter) // back to the first view, from wherever the player got stuck
             {
@@ -2392,12 +3139,84 @@ internal static unsafe class Stage
             return true;
         }
 
+        // The session whose robot is under (x, y), when a press there may start turning its ring; null in the flat view,
+        // whose rows do not turn, and whenever a click on the office would not reach it.
+        string? OfficeRobotAt(double x, double y) =>
+            shelf.Open || pairingShown || invitationShown || notesShown || officeFailed || quality == Quality.Flat
+            || officeStage is null || officeFeed is null || officeView is not { } view
+                ? null
+                : WidgetPicking.Pick(officeStage.Hits, view, extent.Width, extent.Height, x, y);
+
+        // Whether a press at (x, y) takes Gaia's planet, to turn it (GaiaTurn).
+        bool GaiaPlanetAt(double x, double y) =>
+            !(shelf.Open || pairingShown || invitationShown || notesShown) && officeView is { } view
+            && gaiaModule?.Surface is { Turning: not null } surface && GaiaTurn.Hit(view, surface.Centre, surface.Radius, extent.Width, extent.Height, x, y);
+
+        // A click on the lectern's book: its outline, its arrows or its links (LearnReader).
+        bool TryReaderClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view || hallGallery.Book is not { } book) return false;
+            if (HallGallery.OnRect(view, book, HallGallery.BookRect, extent.Width, extent.Height, x, y) is not { } at) return false;
+            reader.Click(at.U, at.V);
+            return true;
+        }
+
+        // A click on a course's book or a Streeling drawer opens it on the lectern, and the camera goes to read it; one on
+        // a demo or an artifact opens its page in the browser.
+        bool TryGalleryClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view) return false;
+            if (hallGallery.Pick(view, extent.Width, extent.Height, x, y) is not { } action) return false;
+            if (action.StartsWith("open:", StringComparison.Ordinal))
+            {
+                HallGallery.Browse(action[5..]);
+            }
+            else if (ReadOnLectern(action))
+            {
+                camera.GoTo(FreeCamera.Views.Length + 1);
+            }
+
+            return true;
+        }
+
+        // Opens "course:N" or "department:N" of the gallery on the lectern; false for anything else.
+        bool ReadOnLectern(string action)
+        {
+            if (hallGallery.Shelved is not { } content) return false;
+            var (kind, what) = action.IndexOf(':') is var colon and > 0 ? (action[..colon], action[(colon + 1)..]) : (action, "");
+            if (kind == "course" && int.TryParse(what, out var c) && c >= 0 && c < content.Courses.Length)
+            {
+                Console.WriteLine($"GALLERY reads {content.Courses[c].Url} on the lectern");
+                reader.OpenCourse(content.Courses[c].Title, content.Courses[c].Url);
+                return true;
+            }
+
+            if (kind == "department" && int.TryParse(what, out var d) && d >= 0 && d < content.Departments.Count)
+            {
+                var (name, modules) = content.Departments[d];
+                Console.WriteLine($"GALLERY reads Streeling's {name} on the lectern");
+                reader.OpenDepartment(name, [.. modules.Select(m => new Delta.SceneModules.ReaderItem(m.Title, m.Url))]);
+                return true;
+            }
+
+            return false;
+        }
+
         // A click on a session's robot, picked by the office.
         void OfficeClicked(string session)
         {
             if (officeFeed is null) return;
             var now = clock.Elapsed.TotalSeconds;
-            var started = officeFeed.Sessions.FirstOrDefault(s => s.Id == session)?.Started ?? 0;
+            var clicked = officeFeed.Sessions.FirstOrDefault(s => s.Id == session);
+            // A session that waits for the user (the « ? »): the shelf shows what it asks and answers it (SessionQuestion).
+            if (clicked is { Activity: Delta.SceneModules.OfficeActivity.Waiting } && officeFeed.Surface(session) is { } asking)
+            {
+                Console.WriteLine($"WIDGETS agent-office shows session {session}'s question");
+                shelf.Show(now, $"« ? » {clicked.Name}", () => SessionQuestion.Rows(session, asking, () => shelf.Hide()));
+                return;
+            }
+
+            var started = clicked?.Started ?? 0;
             var outcome = officeSelection.Click(session, started, now);
             if (outcome != OfficeSelection.Outcome.Open)
             {
@@ -2490,7 +3309,21 @@ internal static unsafe class Stage
         // the cabinet that it falls on takes it.
         void Click(double x, double y, bool simulated = false)
         {
-            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y)) TryCabinetClick(x, y, simulated);
+            if (!TryModuleClick(x, y, simulated) && !TryChestClick(x, y) && !TryOfficeClick(x, y) && !TryReaderClick(x, y) && !TryGalleryClick(x, y)
+                && !TryCabinetClick(x, y, simulated)) TryDoorClick(x, y);
+        }
+
+        // A click on the roll-up door opens it onto the streets of Ottawa, or closes it; the first opening fetches the
+        // streets (OttawaStreets), or reads them where they were kept.
+        bool TryDoorClick(double x, double y)
+        {
+            if (shelf.Open || pairingShown || invitationShown || notesShown || officeView is not { } view) return false;
+            if (HallGallery.OnRect(view, StreetDoor.Frame, StreetDoor.Rect, extent.Width, extent.Height, x, y) is null) return false;
+            streetDoor.Toggle();
+            Console.WriteLine($"DOOR {(streetDoor.Open ? "opens" : "closes")}");
+            if (streetDoor.Open && streetsLoading is null) streetsLoading = OttawaStreets.Load();
+
+            return true;
         }
 
         // --wall-real, once a frame after the splash: once the office's reading names the session and its robot is drawn
@@ -2661,6 +3494,30 @@ internal static unsafe class Stage
                 return;
             }
 
+            // A robot let go: a click if the mouse hardly moved, else the end of turning its ring.
+            if (action == GlfwButtonAction.Release && button == 0 && officeDrag is { } dragged)
+            {
+                officeDrag = null;
+                if (officeDragMoved < DragSlop) Click(officeDragFrom.X, officeDragFrom.Y);
+                else officeSpin.Release(dragged);
+                if (officeDragMoved >= DragSlop) Console.WriteLine($"WIDGETS agent-office turned by hand: session {dragged}, {officeTurns.GetValueOrDefault(dragged):F2} rad in all");
+                return;
+            }
+
+            // Gaia's planet let go: a click if the mouse hardly moved, else it coasts on.
+            if (action == GlfwButtonAction.Release && button == 0 && gaiaHeld)
+            {
+                gaiaHeld = false;
+                if (gaiaMoved < DragSlop) Click(gaiaFrom.X, gaiaFrom.Y);
+                else
+                {
+                    gaiaSpin.Release(GaiaTurn.Key);
+                    Console.WriteLine($"MODULE gaia planet turned by hand: {gaiaTurns.GetValueOrDefault(GaiaTurn.Key):F2} rad in all");
+                }
+
+                return;
+            }
+
             // In the game, a left click away from the cabinet leaves it, as Esc does; one on it is the game's.
             if (cabinet.Playing && action == GlfwButtonAction.Press && button == 0 && !locked)
             {
@@ -2737,6 +3594,22 @@ internal static unsafe class Stage
             {
                 link.Tell("""{"invite":true}""");
             }
+            else if (action == GlfwButtonAction.Press && castButton is not null && Over(w, CastAt(), castButton.Width, castButton.Height))
+            {
+                var casting = link.Read(clock.Elapsed.TotalSeconds).Tv is { On.Length: > 0 };
+                link.Tell(casting ? """{"tv":"stop"}""" : """{"tv":"start"}""");
+                Console.WriteLine($"SCENE television: {(casting ? "stop" : "cast")} asked");
+            }
+            else if (action == GlfwButtonAction.Press && castShown && castCard is not null && Over(w, CastCardAt(), castCard.Width, castCard.Height))
+            {
+                var y = (int)(w.CursorY * extent.Height / Math.Max(1, w.Height)) - CastCardAt().Y;
+                if (link.Read(clock.Elapsed.TotalSeconds).Tv is { } choosing && Panel.CastChoiceAt(choosing, extent.Height, y) is >= 0 and var row)
+                {
+                    link.Tell(System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { ["tv"] = "start", ["tv_name"] = choosing.Chromecasts[row] }));
+                }
+
+                castShown = false;
+            }
             else if (action == GlfwButtonAction.Press && languageButton is not null && Over(w, LanguageAt(), languageButton.Width, languageButton.Height))
             {
                 NextLanguage();
@@ -2754,7 +3627,27 @@ internal static unsafe class Stage
             else if (action == GlfwButtonAction.Press && button == 0)
             {
                 var (cx, cy) = (w.CursorX * extent.Width / Math.Max(1, w.Width), w.CursorY * extent.Height / Math.Max(1, w.Height));
-                Click(cx, cy);
+                if (panoShown && pano is not null && aerialCard is { } shownCard && panoCardId == pano.Id
+                    && AttributionAt(shownCard) is var (cardX, cardY)
+                    && cx >= cardX && cx < cardX + shownCard.Width && cy >= cardY && cy < cardY + shownCard.Height)
+                {
+                    StreetPanorama.Report(pano, line => Console.WriteLine($"STREETVIEW {line}")); // Google's report-a-problem page
+                }
+                else if (OfficeRobotAt(cx, cy) is { } robot)
+                {
+                    // Held: the release decides between a click and a turn (the frame loop turns it meanwhile).
+                    (officeDrag, officeDragFrom, officeDragAt, officeDragMoved) = (robot, (cx, cy), (cx, cy), 0);
+                    officeSpin.Take(robot);
+                }
+                else if (GaiaPlanetAt(cx, cy))
+                {
+                    (gaiaHeld, gaiaFrom, gaiaAt, gaiaMoved) = (true, (cx, cy), (cx, cy), 0);
+                    gaiaSpin.Take(GaiaTurn.Key);
+                }
+                else
+                {
+                    Click(cx, cy);
+                }
             }
         });
         window.OnScroll += (w, offset) => Guard("a scroll", () =>
@@ -2835,6 +3728,8 @@ internal static unsafe class Stage
         var frame = 0;
         var generationHeld = 0; // frames left before frame generation may turn on again
         var generationStatus = uint.MaxValue; // DLSS-G's status as last printed
+        var hudlessFailed = false; // the HUD-less colour's tag failed once, and said so
+        var hudlessTagged = false; // it was tagged once, and said so
         var shot = 0;
         var last = filmDir is null ? clock.Elapsed.TotalSeconds : 0.0;
         var firstFrame = -1.0;
@@ -2956,6 +3851,12 @@ internal static unsafe class Stage
             if (now >= limit)
             {
                 reason = "time limit";
+                return false;
+            }
+
+            if (Reload.Asked)
+            {
+                reason = "a full reload (F5)";
                 return false;
             }
 
@@ -3095,6 +3996,17 @@ internal static unsafe class Stage
                 ModalDrill.Start(what => Console.WriteLine($"DRILL {what} at {clock.Elapsed.TotalSeconds - firstFrame:F2} s"), (w, h) => resizeTo = new int2(w, h));
             }
 
+            if (!splashing && rideAsked != Rides.Kind.None && shown - S >= 1.0)
+            {
+                if (rideAsked == Rides.Kind.Scooter) scooterMesh ??= new Mesh(device, physical, Rides.ScooterModel());
+                else droneMesh ??= new Mesh(device, physical, Rides.DroneModel());
+                rides.Start(rideAsked, camera.View(time));
+                if (args.Contains("--ride-view")) rides.ToggleView();
+                Console.WriteLine($"SCENE ride: {rideAsked} for a capture, its throttle held");
+                rideAsked = Rides.Kind.None;
+                rideSince = shown;
+            }
+
             if (!splashing && flyTo != 0 && shown - S >= 0.5)
             {
                 camera.GoTo(flyTo);
@@ -3120,7 +4032,8 @@ internal static unsafe class Stage
                 }
                 else if (!film.Playing)
                 {
-                    camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
+                    if (rides.Riding != Rides.Kind.None) rides.Look(cx - lookFrom.X, cy - lookFrom.Y);
+                    else camera.Look(time, cx - lookFrom.X, cy - lookFrom.Y);
                     if (cx != lookFrom.X || cy != lookFrom.Y)
                     {
                         tour.Touch(now);
@@ -3136,28 +4049,208 @@ internal static unsafe class Stage
                     (float)((window.CursorY * extent.Height / Math.Max(1, window.Height)) - (extent.Height / 2.0)), inner);
             }
 
+            // A robot held: its ring follows the mouse sideways once it has moved past the slop. A window that loses
+            // focus with the button held lets the robot go, as it gives the cursor back.
+            // Let go, it coasts on (OfficeSpin).
+            var spinDt = double.IsNaN(officeSpinAt) ? 0 : Math.Clamp(now - officeSpinAt, 0, 0.25);
+            officeSpinAt = now;
+            if (officeDrag is { } turning)
+            {
+                var (dx, dy) = (window.CursorX * extent.Width / Math.Max(1, window.Width), window.CursorY * extent.Height / Math.Max(1, window.Height));
+                officeDragMoved = Math.Max(officeDragMoved, Math.Abs(dx - officeDragFrom.X) + Math.Abs(dy - officeDragFrom.Y));
+                var turned = 0.0;
+                if (officeDragMoved >= DragSlop && dx != officeDragAt.X)
+                {
+                    turned = (dx - officeDragAt.X) / Math.Max(1, extent.Width) * TurnPerWidth;
+                    officeTurns[turning] = officeTurns.GetValueOrDefault(turning) + turned;
+                    tour.Touch(now);
+                }
+
+                officeSpin.Follow(turned, spinDt);
+                officeDragAt = (dx, dy);
+                if (!window.IsFocused || wheel.Open || shelf.Open)
+                {
+                    officeDrag = null;
+                    officeSpin.Release(turning);
+                }
+            }
+
+            officeSpin.Step(officeTurns, spinDt);
+
+            // Gaia's planet held: it follows the mouse sideways past the slop, the hand on its surface.
+            if (gaiaHeld)
+            {
+                var (dx, dy) = (window.CursorX * extent.Width / Math.Max(1, window.Width), window.CursorY * extent.Height / Math.Max(1, window.Height));
+                gaiaMoved = Math.Max(gaiaMoved, Math.Abs(dx - gaiaFrom.X) + Math.Abs(dy - gaiaFrom.Y));
+                var turned = 0.0;
+                if (gaiaMoved >= DragSlop && dx != gaiaAt.X && officeView is { } seen && gaiaModule?.Surface is { } planet)
+                {
+                    turned = GaiaTurn.Turned(seen, gaiaEye, planet.Centre, planet.Radius, extent.Width, extent.Height, dx - gaiaAt.X);
+                    gaiaTurns[GaiaTurn.Key] = gaiaTurns.GetValueOrDefault(GaiaTurn.Key) + turned;
+                    tour.Touch(now);
+                }
+
+                gaiaSpin.Follow(turned, spinDt);
+                gaiaAt = (dx, dy);
+                if (!window.IsFocused || wheel.Open || shelf.Open)
+                {
+                    gaiaHeld = false;
+                    gaiaSpin.Release(GaiaTurn.Key);
+                }
+            }
+
+            gaiaSpin.Step(gaiaTurns, spinDt);
+
             if (!shelf.Open && !film.Playing && !cabinet.Playing && (window.IsFocused || walkHeld.Count > 0))
             {
                 bool Held(GlfwKey key) => window.GetKey(key) == GlfwKeyAction.Press || walkHeld.Contains(key);
                 float Axis(GlfwKey a, GlfwKey b, GlfwKey back, GlfwKey back2) => (Held(a) || Held(b) ? 1f : 0f) - (Held(back) || Held(back2) ? 1f : 0f);
                 var alt = Held(GlfwKey.LeftAlt) || Held(GlfwKey.RightAlt);
-                camera.Move(time, new(Axis(GlfwKey.W, GlfwKey.Up, GlfwKey.S, GlfwKey.Down), Axis(GlfwKey.D, GlfwKey.Right, GlfwKey.A, GlfwKey.Left),
-                    Axis(GlfwKey.Space, GlfwKey.E, GlfwKey.C, GlfwKey.C), Held(GlfwKey.LeftShift) || Held(GlfwKey.RightShift),
-                    camera.Flying || alt ? 0f : Axis(GlfwKey.E, GlfwKey.E, GlfwKey.Q, GlfwKey.Q), alt), dt);
+                var (forward, right, up, fast) = (Axis(GlfwKey.W, GlfwKey.Up, GlfwKey.S, GlfwKey.Down), Axis(GlfwKey.D, GlfwKey.Right, GlfwKey.A, GlfwKey.Left),
+                    Axis(GlfwKey.Space, GlfwKey.E, GlfwKey.C, GlfwKey.C), Held(GlfwKey.LeftShift) || Held(GlfwKey.RightShift));
+                if (rides.Riding != Rides.Kind.None)
+                {
+                    rides.Move(new(forward, right, up, fast), dt, camera); // the pilot stands still meanwhile
+                    tour.Touch(now);
+                }
+                else
+                {
+                    camera.Move(time, new(forward, right, up, fast, camera.Flying || alt ? 0f : Axis(GlfwKey.E, GlfwKey.E, GlfwKey.Q, GlfwKey.Q), alt), dt);
+                }
+            }
+            else if (rides.Riding != Rides.Kind.None)
+            {
+                // The ride coasts on, or a capture's throttle is held (--ride).
+                var climbing = rides.Riding == Rides.Kind.Drone && shown - rideSince < 2.5;
+                rides.Move(rideHeld && !double.IsNaN(rideSince) ? new(climbing ? 0f : 1f, 0f, climbing ? 1f : 0f, false) : default, dt, camera);
+                if (rideHeld) tour.Touch(now);
             }
             else
             {
                 camera.Move(time, default, dt); // a flight, a jump or a slide goes on
             }
 
+            // The roll-up door rolls; once the streets are fetched they are drawn behind it, and the camera may go out.
+            streetDoor.Step(dt);
+            camera.DoorOpen = streetDoor.Passing || camera.Outdoors || rides.Outdoors;
+            if (streets is null && streetsLoading is { IsCompleted: true } loaded)
+            {
+                if (loaded.IsCompletedSuccessfully && loaded.Result is { } city)
+                {
+                    streets = new Mesh(device, physical, city.Vertices);
+                    streetsPlacement = city.Placement;
+                    streetFootprints = [.. city.Footprints.Select(FreeCamera.Footprint.Of)];
+                    camera.Footprints = googleChosen && aerial is not null ? [] : streetFootprints;
+                    Console.WriteLine($"DOOR streets of Ottawa: {city.Buildings} buildings, {city.Streets} streets, {city.Left} left out where the hall stands; {OttawaStreets.Attribution}");
+                }
+                else
+                {
+                    Console.Error.WriteLine($"DOOR streets of Ottawa not fetched: {loaded.Exception?.InnerException?.Message ?? "no answer"}");
+                    streetsLoading = null; // the next opening tries again
+                }
+            }
+
+            // Google's tiles, chosen once the door's place is known: fetched once a run (G again tries once more after a
+            // failure), then drawn in place of OpenStreetMap's buildings.
+            if (googleChosen && tilesAsked && aerial is null && googleLoading is null && !googleTried && streetsPlacement is { } placed)
+            {
+                googleTried = true;
+                Console.WriteLine($"GOOGLE fetching the 3D tiles around the door, at most {GoogleStreets.MostRequests} requests");
+                googleLoading = GoogleStreets.Load(placed, line => Console.WriteLine($"GOOGLE {line}"));
+            }
+
+            // Out among Google's tiles, the eye more than RefineStep metres from every place they were refined for: they
+            // are chosen again for its path too, within the run's ride requests (GoogleStreets.RideRequests).
+            if (googleChosen && aerial is not null && googleLoading is null && (camera.Outdoors || rides.Outdoors) && streetsPlacement is { } around && GoogleStreets.MayRefine)
+            {
+                var at = around.FromHall(lastEye);
+                if (SN.Vector2.Distance(at, around.Door) > GoogleStreets.RefineStep && googlePath.TrueForAll(q => SN.Vector2.Distance(q, at) > GoogleStreets.RefineStep))
+                {
+                    googlePath.Add(at);
+                    Console.WriteLine($"GOOGLE refining the tiles for the eye's path ({googlePath.Count} places), {GoogleStreets.RunRequests} requests so far this run");
+                    googleLoading = GoogleStreets.Load(around, line => Console.WriteLine($"GOOGLE {line}"), [.. googlePath]);
+                }
+            }
+
+            if (googleLoading is { IsCompleted: true } fetched)
+            {
+                googleLoading = null;
+                if (fetched.IsCompletedSuccessfully && fetched.Result is { Vertices.Length: > 0 } tiles)
+                {
+                    var drawnBefore = aerial;
+                    if (drawnBefore is not null) device.WaitIdle();
+                    aerial = new Mesh(device, physical, tiles.Vertices, resident: true);
+                    drawnBefore?.Dispose();
+                    if (googleChosen) camera.Footprints = []; // the tiles' buildings do not stop the walker
+                    if (tiles.Layers.Length > 0)
+                    {
+                        aerialLayers = tiles.Layers;
+                        if (pano is not null && streetsPlacement is { } still)
+                        {
+                            // The panorama's layers follow the new photographs: its mesh is rebuilt for where they now begin.
+                            var panoBefore = panoMesh;
+                            panoMesh = new Mesh(device, physical, StreetPanorama.Build(pano, still, aerialLayers.Length));
+                            panoBefore?.Dispose();
+                        }
+
+                        UploadAerial(pano is null ? aerialLayers : [.. aerialLayers, .. pano.Layers]);
+                    }
+                    aerialProviders = tiles.Attributions;
+                    aerialCardSize = (0, 0);
+                    Console.WriteLine($"GOOGLE {tiles.Meshes} tiles, {tiles.Vertices.Length / 3} triangles, {tiles.Layers.Length} images, {tiles.Requests} requests ({GoogleStreets.RunRequests} this run){(tiles.Truncated ? ", stopped at the cap of tiles" : "")}; "
+                        + $"{tiles.Flattened} spike vertices laid flat; the ground {tiles.Ground:F1} m over the ellipsoid; Google Maps: {string.Join("; ", tiles.Attributions)}");
+                }
+                else
+                {
+                    Console.Error.WriteLine($"GOOGLE no tiles drawn: {fetched.Exception?.InnerException?.Message ?? "none fetched"}; {(aerial is null ? "OpenStreetMap's buildings stay" : "the tiles drawn stay")}");
+                }
+            }
+
+            // Street View: low in the street among Google's tiles, the panorama nearest the eye is asked for whenever the eye
+            // is StreetPanorama.Again metres from the one shown, and has moved 5 m since the last ask.
+            if (googleChosen && panoLoading is null && (camera.Outdoors || rides.Outdoors) && lastEye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } street)
+            {
+                var at = street.FromHall(lastEye);
+                var fromShown = pano is null ? double.PositiveInfinity : SN.Vector2.Distance(at, OttawaStreets.Local(pano.Lat, pano.Lon));
+                if (fromShown > StreetPanorama.Again && !(SN.Vector2.Distance(at, panoAskedAt) < 5f))
+                {
+                    panoAskedAt = at;
+                    var (lat, lon) = OttawaStreets.LatLon(at);
+                    panoLoading = StreetPanorama.Nearest(lat, lon, line => Console.WriteLine($"STREETVIEW {line}"), pano?.Id);
+                }
+            }
+
+            if (panoLoading is { IsCompleted: true } panoFetched)
+            {
+                panoLoading = null;
+                if (panoFetched.IsCompletedSuccessfully && panoFetched.Result is { } got && got.Id != pano?.Id && streetsPlacement is { } street2)
+                {
+                    var started = clock.Elapsed.TotalSeconds;
+                    pano = got;
+                    UploadAerial([.. aerialLayers, .. got.Layers]);
+                    var panoBefore = panoMesh;
+                    panoMesh = new Mesh(device, physical, StreetPanorama.Build(got, street2, aerialLayers.Length));
+                    panoBefore?.Dispose();
+                    Console.WriteLine($"STREETVIEW panorama {got.Cols} × {got.Rows} tiles taken {got.Date ?? "?"}, {SN.Vector2.Distance(street2.FromHall(lastEye), OttawaStreets.Local(got.Lat, got.Lon)):F1} m from the eye, heading {got.Heading:F0}°; "
+                        + $"{StreetPanorama.Tiles} Street View tiles this run; uploaded in {(clock.Elapsed.TotalSeconds - started) * 1000:F0} ms; {got.Copyright}");
+                }
+            }
+
+            var outside = streetDoor.Openness > 0f || camera.Outdoors || rides.Outdoors; // the streets in view: far away, the haze thinner
             var aspect = extent.Width / (float)extent.Height;
-            var pose = film.Pose(aspect) ?? camera.View(time);
+            var pose = film.Pose(aspect) ?? (rides.Riding != Rides.Kind.None ? rides.Pose(dt) : camera.View(time));
             var eye = pose.Eye;
-            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, 40f);
+            var projection = SN.Matrix4x4.CreatePerspectiveFieldOfView(pose.Fov * MathF.PI / 180f, aspect, 0.1f, outside ? 350f : 60f); // 60 inside: the gymnasium's far end, seen from the hall
             projection.M22 = -projection.M22; // Vulkan's clip space has y pointing down
             var viewProj = SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up) * projection;
             gaiaPick = !splashing && gaiaModule is not null ? SceneModulePicking.VersionRect(viewProj, extent.Width, extent.Height) : null;
             officeView = splashing ? null : viewProj;
+            gaiaEye = eye;
+            lastEye = eye;
+            // Only with the eye out in the street: from the hall, through the open door, the hall's own floor and walls
+            // are what is near (the user's picture, 2026-11-18: the panorama's street lay over the hall's floor).
+            panoShown = pano is not null && panoMesh is not null && googleChosen && eye.Z > HallShell.Front + 0.5f && eye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } panoPlace
+                && SN.Vector2.Distance(panoPlace.FromHall(eye), OttawaStreets.Local(pano.Lat, pano.Lon)) < StreetPanorama.Near;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
             if (wallTest && !splashing) WallTest(linkNow);
@@ -3219,6 +4312,15 @@ internal static unsafe class Stage
                     arcadeHintTexture = Upload(arcadeHint, arcadeHintSet, arcadeHintTexture);
                 }
 
+                // The ride's dial, its speed rounded, made again no more than five times a second (an upload waits for the GPU).
+                if (rides.Riding != Rides.Kind.None && !splashing && rides.Hint() is var said && (said, extent.Height) != rideHintDrawn && clock.Elapsed.TotalSeconds - rideHintAt >= 0.2)
+                {
+                    rideHintDrawn = (said, extent.Height);
+                    rideHintAt = clock.Elapsed.TotalSeconds;
+                    rideHint = Panel.Hint(said, extent.Height);
+                    rideHintTexture = Upload(rideHint, rideHintSet, rideHintTexture);
+                }
+
                 if (wheel.Shown > 0f && !splashing && wheelDrawn != (wheel.Pick, extent.Width, extent.Height, Words.Language))
                 {
                     wheelDrawn = (wheel.Pick, extent.Width, extent.Height, Words.Language);
@@ -3246,6 +4348,16 @@ internal static unsafe class Stage
                     cardHeight = extent.Height;
                     card = Panel.Draw(shelf.Levels, extent.Height);
                     cardTexture = Upload(card, cardSet, cardTexture);
+                }
+
+                var panoCard = panoShown && pano is not null ? pano.Id : "";
+                if (googleChosen && (aerial is not null || panoShown) && !splashing && (aerialCardSize != (extent.Width, extent.Height) || panoCard != panoCardId))
+                {
+                    aerialCardSize = (extent.Width, extent.Height);
+                    panoCardId = panoCard;
+                    var taken = panoShown && pano is not null ? $"Street View {pano.Copyright}{(pano.Date is { } d ? $" · {d}" : "")}" : null;
+                    aerialCard = Panel.Attribution(aerialProviders, extent.Width, extent.Height, taken);
+                    aerialCardTexture = Upload(aerialCard, aerialCardSet, aerialCardTexture);
                 }
 
                 if (moment.HeardAge >= 0f && !splashing && (moment.HeardId != captionId || (extent.Width, extent.Height) != captionSize))
@@ -3358,6 +4470,47 @@ internal static unsafe class Stage
                     inviteTexture = Upload(inviteButton, inviteSet, inviteTexture);
                 }
 
+                var tvNow = moment.Tv;
+                var casting = tvNow is { On.Length: > 0 };
+                if (!splashing && castDrawn != (extent.Height, Words.Language, casting, tvNow?.Playing ?? false))
+                {
+                    castDrawn = (extent.Height, Words.Language, casting, tvNow?.Playing ?? false);
+                    castButton = Panel.CastButton(extent.Height, casting, tvNow?.Playing ?? false);
+                    castTexture = Upload(castButton, castSet, castTexture);
+                }
+
+                if (tvNow is not null && moment.TvId != castSeen)
+                {
+                    // The card opens when the television says something new: a refusal, a choice, a start, play, an end;
+                    // not for the 5 s answers that say the same.
+                    castSeen = moment.TvId;
+                    var tvSaid = $"{tvNow.On}|{tvNow.Playing}|{tvNow.Ended}|{tvNow.Refused}|{string.Join(",", tvNow.Chromecasts)}";
+                    if (tvSaid != castSaid || tvNow.Refused != "")
+                    {
+                        castSaid = tvSaid;
+                        castShown = true;
+                        castOpened = clock.Elapsed.TotalSeconds;
+                    }
+                }
+
+                if (castShown && clock.Elapsed.TotalSeconds - castOpened > (tvNow?.Refused == "many" ? 30.0 : 8.0))
+                {
+                    castShown = false;
+                }
+
+                if (tvNow is not null && !splashing && castCardDrawn != (moment.TvId, extent.Height, Words.Language))
+                {
+                    castCardDrawn = (moment.TvId, extent.Height, Words.Language);
+                    castCard = Panel.CastCard(tvNow, extent.Height);
+                    castCardTexture = Upload(castCard, castCardSet, castCardTexture);
+                }
+
+                if (casting && clock.Elapsed.TotalSeconds - castAsked > 5.0)
+                {
+                    castAsked = clock.Elapsed.TotalSeconds;
+                    link.Tell("""{"tv":"state"}""");
+                }
+
                 if (moment.InvitationId != invitationSeen) // an invitation came, or why none did
                 {
                     invitationSeen = moment.InvitationId;
@@ -3386,6 +4539,7 @@ internal static unsafe class Stage
 
             var slot = frame % FramesInFlight;
             device.WaitForFences([fences[slot]], true, -1);
+            hallGallery.Frame(); // frees the gallery's meshes no frame still uses, and swaps in one redrawn from its file
             if (stamped[slot])
             {
                 var stamps = stackalloc ulong[2];
@@ -3426,7 +4580,11 @@ internal static unsafe class Stage
                         Console.WriteLine("WIDGETS agent-office selection let go: its session went or runs again");
                         wall.Released(picked);
                     }
-                    office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions, officeSelection.Selected));
+                    office.Module.Update(new(Words.Language, quality == Quality.Flat, officeFeed.Sessions, officeSelection.Selected)
+                    {
+                        Turns = officeTurns,
+                        Turning = officeDrag,
+                    });
                     if (officeStage.Sync(office.Module)) Console.WriteLine($"WIDGETS agent-office tree: {officeStage.Instances} instances, {officeStage.Meshes} meshes ({officeStage.Changes}); native mesh buffers live {Mesh.LiveCount}");
                     else if (officeStage.Problems.Count > 0 && officeLogged != officeStage.Revision)
                     {
@@ -3470,7 +4628,18 @@ internal static unsafe class Stage
                 return true;
             }
 
-            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? Haze : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing);
+            videos?.Update(eye, hallGallery.Globes);
+            if (!ReferenceEquals(hallGallery.Globes, screenFor))
+            {
+                // The screen hangs where the video falls, over the water globes; made again when the gallery is.
+                screenFor = hallGallery.Globes;
+                var place = GalleryVideo.Place(hallGallery.Globes, HallGallery.Footprint.Centre.X - HallGallery.Footprint.Half.X);
+                if (projectionScreen is not null) device.WaitIdle();
+                projectionScreen?.Dispose();
+                projectionScreen = place == default ? null : new Mesh(device, physical, GalleryVideo.ScreenModel(place));
+            }
+            *(Frame*)(frameMapped + (slot * frameStep)) = new Frame(eye, hazy ? (outside ? StreetHaze : Gymnasium.Holds(eye) ? GymHaze : Haze) : 0f, materials.Photographed, rays is not null && raysOn && !pathTracing,
+                videos?.Projected ?? GalleryVideo.Projection.None);
             device.ResetFences([fences[slot]]);
             device.ResetCommandPool(pools[slot], VkCommandPoolResetFlags.None);
 
@@ -3478,11 +4647,12 @@ internal static unsafe class Stage
             cb.Begin(new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit });
             cb.ResetQueryPool(frameStamps, 2 * slot, 2);
             cb.WriteTimestamp(VkPipelineStageFlags.TopOfPipeBit, frameStamps, 2 * slot);
+            videos?.Record(cb, slot);
             rays?.Record(cb, slot);
             if (tracer is not null && pathTracing && !splashing)
             {
                 tracer.Resize(extent.Width, extent.Height);
-                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? Haze : 0f, materials.Photographed,
+                tracer.Record(cb, slot, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, hazy ? (outside ? StreetHaze : Gymnasium.Holds(eye) ? GymHaze : Haze) : 0f, materials.Photographed,
                     hazy && quality == Quality.Low ? new SN.Vector4(0.075f, 0.09f, 0.115f, 0f) : new SN.Vector4(0.006f, 0.005f, 0.005f, 0f));
             }
 
@@ -3512,18 +4682,34 @@ internal static unsafe class Stage
                 sessionWall.UploadAfterFence(cb, slot, wallPixels, wallCardRevision);
             }
             cabinet.UploadAfterFence(cb, slot);
-            clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze
+            Guard("lectern's reader", () => reader.Poll(now));
+            var bookPage = reader.Picture;
+            readerBook.UploadAfterFence(cb, slot, bookPage.Rgba, bookPage.Revision);
+            clears[0] = new VkClearValue { Color = new VkClearColorValue { Float32 = outside && quality == Quality.Low ? DaySky : hazy && quality == Quality.Low ? HazeColor : new float4(0.006f, 0.005f, 0.005f, 1f) } }; // beyond the hall, all haze; beyond the streets, the sky
             clears[1] = new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 1f } };
+            var splitCards = hudless && Streamline.Generating && !splashing; // the hall, then the cards, in two passes
+            // DLSS Super Resolution (F7): the hall drawn smaller into the upscaler's pass, jittered, then upscaled.
+            var upscaled = upscaler is not null && upscaling && !pathTracing && !splashing && !splitCards
+                && upscaler.Resize(extent.Width, extent.Height) && upscaler.Ready;
+            var drawn = upscaled ? new VkExtent2D { Width = upscaler!.Width, Height = upscaler.Height } : extent;
+            var unjittered = viewProj;
+            var jitter = default(SN.Vector2);
+            if (upscaled)
+            {
+                (jitter, var clip) = upscaler!.Jitter(args.Contains("--dlss-jitter-flip") ? -1f : 1f);
+                viewProj *= clip;
+            }
+
             cb.BeginRenderPass(new VkRenderPassBeginInfo
             {
-                RenderPass = renderPass,
-                Framebuffer = framebuffers[imageIndex],
-                RenderArea = new VkRect2D { Extent = extent },
+                RenderPass = upscaled ? upscaler!.Pass : splitCards ? hallPass : renderPass,
+                Framebuffer = upscaled ? upscaler!.Framebuffer : framebuffers[imageIndex],
+                RenderArea = new VkRect2D { Extent = drawn },
                 ClearValueCount = 2,
                 ClearValues = clears,
             }, VkSubpassContents.Inline);
-            cb.SetViewport(firstViewport: 0, [new VkViewport { Width = extent.Width, Height = extent.Height, MinDepth = 0f, MaxDepth = 1f }]);
-            cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = extent }]);
+            cb.SetViewport(firstViewport: 0, [new VkViewport { Width = drawn.Width, Height = drawn.Height, MinDepth = 0f, MaxDepth = 1f }]);
+            cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = drawn }]);
             if (splashing)
             {
                 cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
@@ -3542,7 +4728,12 @@ internal static unsafe class Stage
                 cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, layout, 0, [frameSets[slot]], []);
                 clocks.Draw((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)), DateTimeOffset.Now);
                 cabinet.DrawMeshes((mesh, world, glow) => Draw(cb, layout, mesh, new Push(world, viewProj, glow)));
-                if (gaiaModule is not null) Draw(cb, layout, gaiaModule.Surface, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                if (gaiaModule is not null)
+                {
+                    Draw(cb, layout, gaiaModule.Surface.Rest, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                    if (gaiaModule.Surface.Turning is { } planet)
+                        Draw(cb, layout, planet, new Push(GaiaTurn.World(gaiaModule.Surface.Centre, gaiaTurns.GetValueOrDefault(GaiaTurn.Key)), viewProj, default));
+                }
                 else if (gaiaFallback is not null) Draw(cb, layout, gaiaFallback[GaiaPresence.Status], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 for (var i = 0; i < parts.Length; i++)
                 {
@@ -3565,21 +4756,142 @@ internal static unsafe class Stage
                     }
                 }
 
-                Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
+                // The knots' 1.2 million vertices of rope, and their cards, only when the picture shows the tables.
+                if (KnotFloor.Seen(viewProj, knotBox))
+                {
+                    Draw(cb, layout, knotRopes, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                    Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
+                }
 
                 // The hall last: what stands in front of the floor and the wall is already in the depth buffer, so
                 // their fragments hidden behind it are never shaded (nor their rays traced).
                 Draw(cb, layout, hall, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                // The shell after it, out of the traced structure: the key light still reaches the hall through it.
+                DrawLetThrough(cb, layout, shell, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                DrawLetThrough(cb, layout, shellGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
+                DrawLetThrough(cb, layout, shellBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
+                DrawLetThrough(cb, layout, doorCurtain, new Push(streetDoor.World(), viewProj, default));
+                Draw(cb, layout, gymInside, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                DrawLetThrough(cb, layout, gymShell, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                DrawLetThrough(cb, layout, gymGlass, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0.6f, 0.68f, 0.78f, 0.22f)));
+                DrawLetThrough(cb, layout, gymBulbs, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(1f, 0.85f, 0.6f, 1.4f)));
+                // The streets, out of the traced structure: a kilometre of city would swell it for what the door shows.
+                if (outside && googleChosen && panoShown && panoMesh is not null)
+                {
+                    // Street View's photographs round the eye, in place of the 3D tiles, which they would cross.
+                    DrawUntraced(cb, layout, panoMesh, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0f, 0f, 0f, -1f)));
+                }
+                else if (outside && googleChosen && aerial is not null)
+                {
+                    // Google's photographs, untraced: they carry their own light and shadows, and nothing else of the
+                    // city is drawn beside them.
+                    DrawUntraced(cb, layout, aerial, new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0f, 0f, 0f, -1f)));
+                }
+                else if (streets is not null && outside)
+                {
+                    // Traced, so its buildings shade the streets; their shadows fall only outside (RayScene.CityMask).
+                    var at = new Push(SN.Matrix4x4.Identity, viewProj, new SN.Vector4(0f, 0f, 0f, -1f)); // the shader's city()
+                    Rays?.Remember(streets, at, outside: true);
+                    DrawUntraced(cb, layout, streets, at);
+                }
+                // The gallery is traced too: under path tracing, what the structure lacks the picture lacks.
+                hallGallery.Draw((mesh, glow) => Draw(cb, layout, mesh, new Push(SN.Matrix4x4.Identity, viewProj, glow)), viewProj, Words.Language == "fr");
+                if (projectionScreen is not null) Draw(cb, layout, projectionScreen, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                if (rides.ModelShown && (rides.Riding == Rides.Kind.Scooter ? scooterMesh : droneMesh) is { } rideMesh)
+                {
+                    Draw(cb, layout, rideMesh, new Push(rides.World(), viewProj, default));
+                }
 
                 // Path traced, the picture goes over what the meshes drew, whose depth stays for the screens after.
                 if (tracer is not null && pathTracing) tracer.Composite(cb, splashPipeline, splashLayout);
 
                 // The Pong screen binds its own pipeline and descriptor set, so it comes after every mesh drawn with ours.
-                chestView = worlds[Robot.Torso] * viewProj;
+                chestView = worlds[Robot.Torso] * unjittered;
                 arcadeGpu?.Draw(cb, slot, worlds[Robot.Torso] * viewProj);
                 cabinet.DrawScreens(cb, slot, viewProj);
                 if (wall.Showing == WallSource.Kind.Pong) pongWall?.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
                 else if (wall.Showing == WallSource.Kind.Session) sessionWall.Draw(cb, slot, ArcadeCabinet.WallFrame * viewProj);
+                if (hallGallery.Book is { } bookFrame) readerBook.Draw(cb, slot, bookFrame * viewProj);
+
+                // The gallery's glass last, over what it holds and what stands behind it: through a copy of the hall drawn
+                // so far (DLSS's pass, stopped and resumed), the path tracer's picture, or as a veil.
+                if (hallGallery.Globes.Count > 0 && hallGallery.Shows(viewProj))
+                {
+                    var way = upscaled ? GlassWork.Way.Copy : tracer is not null && pathTracing ? GlassWork.Way.Traced : GlassWork.Way.Veil;
+                    if (way != glassWay)
+                    {
+                        glassWay = way;
+                        Console.WriteLine($"SCENE glass: {hallGallery.Globes.Count} globes, {way switch { GlassWork.Way.Copy => "bent through a copy of the hall", GlassWork.Way.Traced => "bent through the path tracer's picture", _ => "a veil (no picture to bend)" }}");
+                    }
+
+                    if (way == GlassWork.Way.Copy)
+                    {
+                        cb.EndRenderPass();
+                        glass.Capture(cb, upscaler!.ColourImage, upscaler.Width, upscaler.Height);
+                        cb.BeginRenderPass(new VkRenderPassBeginInfo
+                        {
+                            RenderPass = upscaler.ResumePass,
+                            Framebuffer = upscaler.Framebuffer,
+                            RenderArea = new VkRect2D { Extent = drawn },
+                        }, VkSubpassContents.Inline);
+                        cb.SetViewport(firstViewport: 0, [new VkViewport { Width = drawn.Width, Height = drawn.Height, MinDepth = 0f, MaxDepth = 1f }]);
+                        cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = drawn }]);
+                    }
+
+                    glass.Draw(cb, way, hallGallery.Globes, viewProj, eye, (int)drawn.Width, (int)drawn.Height, way == GlassWork.Way.Traced ? tracer!.PictureView : default);
+                }
+
+                if (upscaled)
+                {
+                    // The hall drawn, DLSS upscales it; the window's image then takes it whole in the cards' pass, the
+                    // cards and buttons drawn over it at the window's size.
+                    cb.EndRenderPass();
+                    upscaler!.Evaluate(cb, SN.Matrix4x4.CreateLookAt(eye, pose.Target, pose.Up), projection, eye, pose.Fov, jitter);
+                    cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.ColorAttachmentOutputBit, VkDependencyFlags.None, [], [],
+                        [Barrier(images[imageIndex], VkImageLayout.Undefined, VkImageLayout.ColorAttachmentOptimal, VkAccessFlags.None, VkAccessFlags.ColorAttachmentReadBit | VkAccessFlags.ColorAttachmentWriteBit)]);
+                    cb.BeginRenderPass(new VkRenderPassBeginInfo
+                    {
+                        RenderPass = cardsPass,
+                        Framebuffer = framebuffers[imageIndex],
+                        RenderArea = new VkRect2D { Extent = extent },
+                    }, VkSubpassContents.Inline);
+                    cb.SetViewport(firstViewport: 0, [new VkViewport { Width = extent.Width, Height = extent.Height, MinDepth = 0f, MaxDepth = 1f }]);
+                    cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = extent }]);
+                    upscaler.Composite(cb, splashPipeline, splashLayout);
+                }
+
+                if (splitCards)
+                {
+                    // The hall without its cards, copied by Streamline as frame generation's HUD-less colour, then the
+                    // cards' pass over the same canvas.
+                    cb.EndRenderPass();
+                    var canvas = images[imageIndex];
+                    cb.PipelineBarrier(VkPipelineStageFlags.ColorAttachmentOutputBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
+                        [Barrier(canvas, VkImageLayout.ColorAttachmentOptimal, VkImageLayout.TransferSrcOptimal, VkAccessFlags.ColorAttachmentWriteBit, VkAccessFlags.TransferReadBit)]);
+                    var untagged = Streamline.TagHudless(cb.VkHandle, canvas.VkHandle, canvasMemory[imageIndex].VkHandle, views[imageIndex].VkHandle, (int)extent.Width, (int)extent.Height,
+                        (uint)surfaceFormat.Format, (uint)VkImageLayout.TransferSrcOptimal);
+                    if (untagged is not null && !hudlessFailed)
+                    {
+                        hudlessFailed = true;
+                        Console.WriteLine($"SCENE frame generation without its HUD-less colour: {untagged}");
+                    }
+                    else if (untagged is null && !hudlessTagged)
+                    {
+                        hudlessTagged = true;
+                        Console.WriteLine("SCENE frame generation: the cards drawn apart, the hall tagged as HUD-less colour");
+                    }
+
+                    cb.PipelineBarrier(VkPipelineStageFlags.TransferBit, VkPipelineStageFlags.ColorAttachmentOutputBit, VkDependencyFlags.None, [], [],
+                        [Barrier(canvas, VkImageLayout.TransferSrcOptimal, VkImageLayout.ColorAttachmentOptimal, VkAccessFlags.TransferReadBit, VkAccessFlags.ColorAttachmentReadBit | VkAccessFlags.ColorAttachmentWriteBit)]);
+                    cb.BeginRenderPass(new VkRenderPassBeginInfo
+                    {
+                        RenderPass = cardsPass,
+                        Framebuffer = framebuffers[imageIndex],
+                        RenderArea = new VkRect2D { Extent = extent },
+                    }, VkSubpassContents.Inline);
+                    cb.SetViewport(firstViewport: 0, [new VkViewport { Width = extent.Width, Height = extent.Height, MinDepth = 0f, MaxDepth = 1f }]);
+                    cb.SetScissor(firstScissor: 0, [new VkRect2D { Extent = extent }]);
+                }
 
                 if (shelf.Open && card is not null && cardTexture is not null)
                 {
@@ -3587,6 +4899,17 @@ internal static unsafe class Stage
                     var margin = CardMargin();
                     var push = new SplashPush(Rect(margin, margin, card.Width, card.Height), SN.Vector4.One);
                     cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [cardSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (outside && googleChosen && (aerial is not null || panoShown) && aerialCard is not null && aerialCardTexture is not null)
+                {
+                    // Google's attribution, bottom right, whenever its tiles are in view, the HUD shown or not.
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (attributionX, attributionY) = AttributionAt(aerialCard);
+                    var push = new SplashPush(Rect(attributionX, attributionY, aerialCard.Width, aerialCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [aerialCardSet], []);
                     cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
                     cb.Draw(6, 1, 0, 0);
                 }
@@ -3723,6 +5046,26 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
+                if (hud && castButton is not null && castTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (castX, castY) = CastAt();
+                    var push = new SplashPush(Rect(castX, castY, castButton.Width, castButton.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [castSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (hud && castShown && castCard is not null && castCardTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (castCardX, castCardY) = CastCardAt();
+                    var push = new SplashPush(Rect(castCardX, castCardY, castCard.Width, castCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [castCardSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
                 if (hud && pairingShown && pairingCard is not null && pairingTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
@@ -3776,6 +5119,14 @@ internal static unsafe class Stage
                     var (left, top) = ((extent.Width - arcadeHint.Width) / 2, extent.Height - arcadeHint.Height - margin);
                     Quad(meterSet, left - margin / 2, top - margin / 4, arcadeHint.Width + margin, arcadeHint.Height + margin / 2, new SN.Vector4(0f, 0f, 0f, 0.55f));
                     Quad(arcadeHintSet, left, top, arcadeHint.Width, arcadeHint.Height, SN.Vector4.One);
+                }
+
+                if (hud && rides.Riding != Rides.Kind.None && !film.Playing && rideHint is not null && rideHintTexture is not null && meterTexture is not null)
+                {
+                    var margin = CardMargin();
+                    var (left, top) = ((extent.Width - rideHint.Width) / 2, extent.Height - rideHint.Height - margin);
+                    Quad(meterSet, left - margin / 2, top - margin / 4, rideHint.Width + margin, rideHint.Height + margin / 2, new SN.Vector4(0f, 0f, 0f, 0.55f));
+                    Quad(rideHintSet, left, top, rideHint.Width, rideHint.Height, SN.Vector4.One);
                 }
 
                 if (keysShown && !film.Playing && wheel.Shown <= 0f && keysCard is not null && keysTexture is not null)
@@ -4149,6 +5500,24 @@ internal static unsafe class Stage
             presence.Dispose();
         }
         hall.Dispose();
+        knotRopes.Dispose();
+        shell.Dispose();
+        shellGlass.Dispose();
+        doorCurtain.Dispose();
+        streets?.Dispose();
+        projectionScreen?.Dispose();
+        scooterMesh?.Dispose();
+        droneMesh?.Dispose();
+        rideHintTexture?.Dispose();
+        aerial?.Dispose();
+        aerialImage.Dispose();
+        aerialCardTexture?.Dispose();
+        shellBulbs.Dispose();
+        gymShell.Dispose();
+        gymGlass.Dispose();
+        gymBulbs.Dispose();
+        gymInside.Dispose();
+        hallGallery.Dispose();
         foreach (var gallery in knots.Values)
         {
             gallery.Dispose();
@@ -4169,6 +5538,8 @@ internal static unsafe class Stage
         guestTexture?.Dispose();
         pairingTexture?.Dispose();
         inviteTexture?.Dispose();
+        castTexture?.Dispose();
+        castCardTexture?.Dispose();
         invitationTexture?.Dispose();
         meterTexture?.Dispose();
         versionTexture?.Dispose();
@@ -4184,6 +5555,8 @@ internal static unsafe class Stage
         arcadeGpu?.Dispose();
         pongWall?.Dispose();
         sessionWall.Dispose();
+        readerBook.Dispose();
+        reader.Dispose();
         cabinet.Dispose();
         arcade?.Dispose();
         Console.WriteLine($"ARCADE shutdown: uploads {arcadeGpu?.Uploads ?? 0}; native texture images remaining {Texture.LiveCount}; pid {Environment.ProcessId}");
@@ -4198,9 +5571,16 @@ internal static unsafe class Stage
         materials.Dispose();
         device.DestroySampler(globeSampler, null);
         globes.Dispose();
+        videos?.Dispose();
+        pictures.Dispose();
         if (tracer is { GpuMilliseconds.Count: > 0 })
         {
             Console.WriteLine($"SCENE path tracing {tracer.Measured()} at {tracer.Width}x{tracer.Height}");
+        }
+
+        if (upscaler is not null)
+        {
+            Console.WriteLine($"SCENE super resolution: {upscaler.Measured()}");
         }
 
         if (reflex is not null)
@@ -4210,6 +5590,8 @@ internal static unsafe class Stage
 
         reflex?.Dispose();
         tracer?.Dispose();
+        upscaler?.Dispose();
+        glass.Dispose();
         rays?.Dispose();
         Rays = null;
         device.DestroyShaderModule(splashVertex, null);
@@ -4225,6 +5607,12 @@ internal static unsafe class Stage
         device.DestroyShaderModule(fragmentModule, null);
         Teardown();
         device.DestroyRenderPass(renderPass, null);
+        if (hudless || superResolution)
+        {
+            device.DestroyRenderPass(hallPass, null);
+            device.DestroyRenderPass(cardsPass, null);
+        }
+
         if (frameGeneration)
         {
             Streamline.DestroySwapchain(swapchain.VkHandle);
@@ -4260,6 +5648,8 @@ internal static unsafe class Stage
         {
             Closed(port, true);
         }
+
+        if (Reload.Asked) Reload.Start(args, line => Console.WriteLine($"SCENE {line}"));
 
         if (wallTest) Console.WriteLine(wallTestStep == 3 && wallTestFailures == 0 ? "WALLTEST PASSED" : $"WALLTEST FAILED {wallTestFailures} of {wallTestStep} checks made, 3 expected");
         if (wallReal is not null) Console.WriteLine(wallTestStep == 2 && wallTestFailures == 0 ? "WALLREAL PASSED" : $"WALLREAL FAILED {wallTestFailures}, step {wallTestStep} of 2");
@@ -4304,6 +5694,20 @@ internal static unsafe class Stage
     private static void Draw(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
     {
         Rays?.Remember(mesh, push);
+        DrawUntraced(cb, layout, mesh, push);
+    }
+
+    // Drawn and traced, but passed by shadow rays: the hall's shell (HallShell) is seen by the path tracer and by the
+    // occlusion's rays, while the key light still comes in through it.
+    private static void DrawLetThrough(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
+    {
+        Rays?.Remember(mesh, push, shadows: false);
+        DrawUntraced(cb, layout, mesh, push);
+    }
+
+    // Drawn, but left out of the next frame's traced structure: it casts no traced shadow nor occlusion.
+    private static void DrawUntraced(CommandBuffer cb, VkPipelineLayout layout, Mesh mesh, Push push)
+    {
         cb.PushConstants(layout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(Push)));
         cb.BindVertexBuffer(0, mesh.Buffer);
         cb.Draw(mesh.Count, 1, 0, 0);
@@ -4371,7 +5775,7 @@ internal static unsafe class Stage
     }
 
     // The scene's pipeline, or with overlay the splash's: no vertex buffer, no depth, alpha blended.
-    internal static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkSampleCountFlags samples, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false, bool vertexless = false)
+    internal static VkPipeline Pipeline(Device device, VkPipelineLayout layout, VkRenderPass renderPass, VkSampleCountFlags samples, VkShaderModule vertex, VkShaderModule fragment, bool overlay = false, bool vertexless = false, bool translucent = false)
     {
         var entry = "main"u8;
         fixed (byte* entryName = entry)
@@ -4408,10 +5812,10 @@ internal static unsafe class Stage
                 LineWidth = 1f,
             };
             var multisample = new VkPipelineMultisampleStateCreateInfo { RasterizationSamples = samples };
-            var depth = new VkPipelineDepthStencilStateCreateInfo { DepthTestEnable = !overlay, DepthWriteEnable = !overlay, DepthCompareOp = VkCompareOp.Less };
+            var depth = new VkPipelineDepthStencilStateCreateInfo { DepthTestEnable = !overlay, DepthWriteEnable = !overlay && !translucent, DepthCompareOp = VkCompareOp.Less };
             var blendAttachment = new VkPipelineColorBlendAttachmentState
             {
-                BlendEnable = overlay,
+                BlendEnable = overlay || translucent, // translucent: blended over what is drawn, depth tested, not written
                 SrcColorBlendFactor = VkBlendFactor.SrcAlpha,
                 DstColorBlendFactor = VkBlendFactor.OneMinusSrcAlpha,
                 ColorBlendOp = VkBlendOp.Add,

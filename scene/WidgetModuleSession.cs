@@ -9,29 +9,33 @@ using System.Security.Cryptography;
 // file is watched: when a build writes a new image there and it holds still for a poll, the image is loaded into a new
 // collectible context beside the old one and replaces it only once it has initialized, the hot reload of a mod being
 // developed. A refused image keeps the running code and is not tried again until the file changes. The image is read
-// into memory, so a build can always overwrite the file. This is trusted local code, not a sandbox.
-internal sealed class WidgetModuleSession<TModule> : IDisposable where TModule : class, IWidgetModule
+// into memory, so a build can always overwrite the file. This is trusted local code, not a sandbox. Any contract of
+// module-contracts: idOf reads a module's identity and start initializes it; tag starts its log lines.
+internal class ModuleSession<TModule> : IDisposable where TModule : class, IDisposable
 {
     private readonly int owner = Environment.CurrentManagedThreadId;
-    private readonly string path, assemblyName, typeName, id;
+    private readonly string path, assemblyName, typeName, id, tag;
+    private readonly Func<TModule, string> idOf;
+    private readonly Action<TModule> start;
     private CodeContext? context;
     private TModule? module;
     private (long Length, DateTime Written) seen, stable;
     private string? refused;
     private double nextPoll;
 
-    public WidgetModuleSession(string path, string assemblyName, string typeName, string id)
+    public ModuleSession(string path, string assemblyName, string typeName, string id, Func<TModule, string> idOf, Action<TModule> start, string tag)
     {
         this.path = Path.GetFullPath(path);
         this.assemblyName = assemblyName;
         this.typeName = typeName;
         this.id = id;
+        (this.idOf, this.start, this.tag) = (idOf, start, tag);
         seen = stable = Stamp();
         (context, module, Version, CodeHash) = Load(Image());
         CodeContextReference = new WeakReference(context);
     }
 
-    public TModule Module => module ?? throw new ObjectDisposedException(nameof(WidgetModuleSession<TModule>));
+    public TModule Module => module ?? throw new ObjectDisposedException(GetType().Name);
     public Version Version { get; private set; }
     public string CodeHash { get; private set; }
     public int Reloads { get; private set; }
@@ -69,7 +73,7 @@ internal sealed class WidgetModuleSession<TModule> : IDisposable where TModule :
             Reloads++;
             LastError = null;
             refused = null;
-            Console.WriteLine($"WIDGETS {id} reloaded: v{Version} sha256 {CodeHash}; reload {Reloads}; pid {Environment.ProcessId}");
+            Console.WriteLine($"{tag} {id} reloaded: v{Version} sha256 {CodeHash}; reload {Reloads}; pid {Environment.ProcessId}");
             return true;
         }
         catch (Exception e)
@@ -82,7 +86,7 @@ internal sealed class WidgetModuleSession<TModule> : IDisposable where TModule :
     private bool Refuse(Exception e)
     {
         LastError = $"{e.GetType().Name}: {e.Message}";
-        Console.Error.WriteLine($"WIDGETS {id} new image refused ({LastError}); keeping v{Version}");
+        Console.Error.WriteLine($"{tag} {id} new image refused ({LastError}); keeping v{Version}");
         return false;
     }
 
@@ -104,9 +108,9 @@ internal sealed class WidgetModuleSession<TModule> : IDisposable where TModule :
         {
             var assembly = code.LoadFromStream(new MemoryStream(bytes));
             loaded = Activator.CreateInstance(assembly.GetType(typeName, throwOnError: true)!) as TModule
-                ?? throw new InvalidDataException("The module does not implement the expected widget contract.");
-            if (loaded.Id != id) throw new InvalidDataException("Unexpected module identity.");
-            loaded.Initialize();
+                ?? throw new InvalidDataException("The module does not implement the expected contract.");
+            if (idOf(loaded) != id) throw new InvalidDataException("Unexpected module identity.");
+            start(loaded);
             return (code, loaded, version, Convert.ToHexString(SHA256.HashData(bytes)));
         }
         catch
@@ -139,7 +143,7 @@ internal sealed class WidgetModuleSession<TModule> : IDisposable where TModule :
     private void Check()
     {
         ObjectDisposedException.ThrowIf(module is null, this);
-        if (owner != Environment.CurrentManagedThreadId) throw new InvalidOperationException("Widget modules belong to the render thread.");
+        if (owner != Environment.CurrentManagedThreadId) throw new InvalidOperationException("Modules belong to the render thread.");
     }
 
     public void Dispose()
@@ -159,8 +163,12 @@ internal sealed class WidgetModuleSession<TModule> : IDisposable where TModule :
     {
         protected override Assembly? Load(AssemblyName name)
         {
-            var shared = typeof(IWidgetModule).Assembly;
+            var shared = typeof(IWidgetModule).Assembly; // module-contracts, one for every contract
             return name.Name == shared.GetName().Name ? shared : null;
         }
     }
 }
+
+// A widget module (module-contracts/Widgets.cs), as the agents' office is.
+internal sealed class WidgetModuleSession<TModule>(string path, string assemblyName, string typeName, string id)
+    : ModuleSession<TModule>(path, assemblyName, typeName, id, m => m.Id, m => m.Initialize(), "WIDGETS") where TModule : class, IWidgetModule;

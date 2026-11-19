@@ -42,6 +42,12 @@ Ollama and qwen3:8b are not used.
 | A Piper voice | See its model card. en_US-ljspeech-medium's dataset, LJ Speech, is public domain. fr_FR-siwis-medium's dataset is CC BY 4.0, and the voice was fine-tuned from lessac |
 | whisper.cpp | MIT |
 | Whisper large-v3-turbo, ggml conversion | MIT |
+| MediaPipe, for `hands\` | Apache-2.0 |
+| OpenCV (`opencv-contrib-python`, which MediaPipe requires) | Apache-2.0. Its wheel includes FFmpeg, under the LGPL |
+| MediaPipe's gesture recognizer model | Google's. Its model card names no licence; MediaPipe's code is Apache-2.0 |
+
+`/delta:setup` does not install the camera process: uv fetches MediaPipe and OpenCV when you first start it, and the
+process downloads its model.
 
 ## Fetched, never shipped
 
@@ -66,6 +72,22 @@ NASA's imagery is not copyrighted in the United States; NASA's guidelines ask th
 NASA's endorsement. `tools/textures` (`-globes only` for the globe alone) downloads it and writes it at 8192 × 4096, in
 two halves, into `%LOCALAPPDATA%\delta\materials\globes\earth`, with `globe.json` holding its source, its credit and
 the download's SHA-256; neither this repository nor the release holds it.
+
+The streets of Ottawa behind the hall's roll-up door are OpenStreetMap's: © OpenStreetMap contributors, under the Open
+Database License (https://www.openstreetmap.org/copyright). The scene fetches them from the public Overpass server
+(overpass-api.de) the first time the door is opened, one request, and keeps the answer in
+`%LOCALAPPDATA%\delta\ottawa\overpass.json`, as the licence allows. Neither this repository nor the release holds it.
+The extrusion follows GeoTiles' `OsmBuildings.cs` (GuitarAlchemist/ga, `Experiments/Brutal/GeoTiles`, MIT, same
+authors).
+
+With G, the streets are instead Google's Photorealistic 3D Tiles (Map Tiles API), a paid service under the Google
+Maps Platform Terms of Service and the Map Tiles API policies, through the user's own key (`GOOGLE_MAPS_API_KEY`, never
+stored or printed). They are fetched at run time, kept in memory only, never written to disk nor committed, nothing
+is derived from them, nothing of OpenStreetMap is drawn beside them, and "Google Maps" with the tiles' data providers
+shows at the bottom of the picture while they are drawn. `scene/GeoTiles/` is a copy of GeoTiles' core
+(`GeoTiles.Core` at fcef8b5: geodesy, tileset tree, selection, GLB; same authors), its selection changed to refine best
+first. It decodes the tiles' Draco geometry with Openize.Drako 1.4.4 (MIT) and their
+JPEG images with StbImageSharp 2.30.15 (public domain), both from NuGet, as GeoTiles does.
 
 ## Ideas, not code
 

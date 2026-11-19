@@ -72,6 +72,20 @@ internal sealed class Shelf
         }
     }
 
+    // Opens the shelf on one level of its own, whose rows load on the thread pool (a waiting session's question).
+    public void Show(double now, string title, Func<List<Node>> rows)
+    {
+        lock (gate)
+        {
+            path.Clear();
+            var level = new Level(title);
+            path.Add(level);
+            Load(level, rows);
+            Open = true;
+            Touch(now);
+        }
+    }
+
     public void Hide()
     {
         lock (gate)
@@ -164,7 +178,11 @@ internal sealed class Shelf
     {
         var level = new Level(node.Label);
         path.Add(level);
-        var load = node.Children!;
+        Load(level, node.Children!);
+    }
+
+    private void Load(Level level, Func<List<Node>> load)
+    {
         ThreadPool.QueueUserWorkItem(_ =>
         {
             List<Node> rows;
@@ -247,14 +265,16 @@ internal sealed class Shelf
         return sessions;
     }
 
-    private static bool Alive(int pid)
+    // Whether a session file's process still runs. After a crash its pid may belong to another process, one this user
+    // cannot even open (Access denied, 2026-11-17: the window then died every 23 s): that is not the session.
+    internal static bool Alive(int pid)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
             return !process.HasExited;
         }
-        catch (ArgumentException)
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return false;
         }
@@ -681,6 +701,44 @@ internal sealed class Shelf
         public static void Focus(string surface)
         {
             Run("focus-surface", surface)?.Dispose();
+        }
+
+        // The choices a blocked pane's agent gave wmux (report-agent --choices): each one's id and label; none when it
+        // gave none or wmux did not answer.
+        public static List<(string Id, string Label)> Choices(string surface)
+        {
+            if (!File.Exists(Exe))
+            {
+                return [];
+            }
+
+            using var doc = Run("agent-state");
+            var choices = new List<(string, string)>();
+            if (Listed(doc, "states") is { } states)
+            {
+                foreach (var s in states.EnumerateArray())
+                {
+                    if (Text(s, "surfaceId") == surface && Text(s, "state") == "blocked" && s.TryGetProperty("choices", out var list) && list.ValueKind == JsonValueKind.Array)
+                    {
+                        choices.AddRange(list.EnumerateArray().Select(c => (Text(c, "id"), Text(c, "label"))).Where(c => c.Item1.Length > 0));
+                    }
+                }
+            }
+
+            return choices;
+        }
+
+        // Answers a blocked pane with one of the choices its agent gave wmux; the surface is always named, never the
+        // caller's own.
+        public static void AnswerAgent(string surface, string choice)
+        {
+            Run("answer-agent", "--surface", surface, "--choice", choice)?.Dispose();
+        }
+
+        // Sends one key ("1", "esc", "enter") to a named pane, as if typed there.
+        public static void SendKey(string surface, string key)
+        {
+            Run("send-key", key, "--surface", surface)?.Dispose();
         }
 
         private static JsonDocument? Run(params string[] args)

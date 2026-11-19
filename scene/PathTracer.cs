@@ -215,6 +215,9 @@ internal sealed unsafe class PathTracer : IDisposable
         composite = device.AllocateDescriptorSet(splashPool, splashLayout);
     }
 
+    // The picture the composite draws (General layout), which GlassWork's glass also looks through.
+    public VkImageView PictureView => targets[Upscaling ? Upscaled : Output]?.View ?? default;
+
     public int Width { get; private set; }
 
     public int Height { get; private set; }
@@ -411,7 +414,7 @@ internal sealed unsafe class PathTracer : IDisposable
                 tags[i] = Streamline.Tag(&resources[i], types[i], target.Width, target.Height);
             }
 
-            if (Streamline.EvaluateRayReconstruction(cb.VkHandle, frameIndex, ref constants, ref options, tags) is { } failed)
+            if (Streamline.EvaluateRayReconstruction(cb.VkHandle, frameIndex, ref constants, ref options, tags) is { } failed && failed != Streamline.Skipped)
             {
                 if (UpscaleError is null)
                 {
@@ -788,9 +791,10 @@ internal sealed unsafe class PathTracer : IDisposable
         const vec4 scans[6] = vec4[](
             vec4(0.0, 2.7, 0.023, 0.0), vec4(1.0, 3.0, 0.003, 0.0), vec4(2.0, 3.0, 0.004, 0.0),
             vec4(3.0, 0.5, 0.003, 0.0), vec4(4.0, 1.0, 0.0008, 0.0), vec4(2.0, 0.6, 0.002, 1.0));
-        const vec4 materials[6] = vec4[](
+        const vec4 materials[8] = vec4[](
             vec4(0.02, 6.0, 0.0, 0.12), vec4(0.05, 90.0, 0.0, 0.8), vec4(0.0, 40.0, 1.0, 1.0),
-            vec4(0.0, 24.0, 1.0, 0.8), vec4(0.02, 4.0, 0.0, 0.1), vec4(0.04, 260.0, 0.0, 1.0));
+            vec4(0.0, 24.0, 1.0, 0.8), vec4(0.02, 4.0, 0.0, 0.1), vec4(0.04, 260.0, 0.0, 1.0),
+            vec4(0.03, 5.0, 0.0, 0.35), vec4(0.04, 36.0, 0.0, 0.55)); // rope and turned oak (Material.Rope, Material.Wood)
 
         void project(vec3 p, vec3 face, float metres, out vec2 uv, out vec3 tt, out vec3 bb)
         {
@@ -830,10 +834,35 @@ internal sealed unsafe class PathTracer : IDisposable
 
         // The lamps' reach: the Low lighting's pool around the robot and its dark above, here the shape of the key
         // and the fill's beams.
+        // The same pools as the Low shader's (Program.LowFragmentShader): the pendant lamps, the knots' floor, the
+        // gallery and the catalogue, which a path traced without them leaves in the dark.
+        float beamBox(vec2 p, vec2 extent) { vec2 q = abs(p) - extent; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
+
         float beam(vec3 p)
         {
             float pool = 1.0 - smoothstep(0.8, 6.0, length(p.xz - vec2(0.0, -0.3)));
-            float high = 1.0 - 0.6 * smoothstep(1.6, 4.5, p.y);
+            vec2 lamps[4] = vec2[](vec2(-3.2, -0.6), vec2(0.0, 1.6), vec2(3.0, -0.6), vec2(-3.2, 3.4));
+            for (int i = 0; i < 4; i++)
+            {
+                pool = max(pool, 0.7 * (1.0 - smoothstep(0.4, 3.4, length(p.xz - lamps[i]))) * (1.0 - smoothstep(3.6, 4.4, p.y)));
+            }
+
+            float knots = (1.0 - smoothstep(0.0, 0.8, beamBox(p.xz - vec2(5.075, -1.2), vec2(1.17, 2.1)))) * smoothstep(1.8, 2.0, p.y);
+            pool = max(pool, 0.9 * knots);
+            float gallery = (1.0 - smoothstep(0.0, 1.2, beamBox(p.xz - vec2(-5.7, 1.25), vec2(0.55, 4.65)))) * (1.0 - smoothstep(2.6, 3.4, p.y));
+            pool = max(pool, 0.8 * gallery);
+            float catalogue = (1.0 - smoothstep(0.0, 1.0, beamBox(p.xz - vec2(-4.76, -3.1), vec2(1.2, 0.4)))) * (1.0 - smoothstep(2.6, 3.4, p.y));
+            pool = max(pool, 0.8 * catalogue);
+            // The gymnasium (Gymnasium) under its high-bay lamps and its windows, and the building's outside in
+            // daylight, as the Low shader has them: traced without them, the wing was left in the dark (the user,
+            // 2026-11-18: « les lumière en ray trace ne sont pas réalistes »).
+            float gym = 1.0 - smoothstep(0.0, 0.08, beamBox(p.xz - vec2(17.405, -1.75), vec2(10.995, 7.75)));
+            pool = max(pool, gym);
+            vec3 outHall = max(abs(p - vec3(0.0, 2.425, 1.275)) - vec3(6.25, 2.425, 4.725), 0.0);
+            vec3 outGym = max(abs(p - vec3(17.405, 2.9, -1.75)) - vec3(10.995, 2.9, 7.75), 0.0);
+            float street = max(smoothstep(6.0, 6.4, p.z), smoothstep(0.1, 0.15, min(length(outHall), length(outGym))));
+            pool = max(pool, street);
+            float high = max(max(max(1.0 - 0.6 * smoothstep(1.6, 4.5, p.y), knots), gym), street);
             return (0.1 + 0.9 * pool) * high;
         }
 
@@ -853,14 +882,17 @@ internal sealed unsafe class PathTracer : IDisposable
         layout(location = 0) hitObjectAttributeNV vec2 hitBarycentrics;
         #endif
 
+        // A bounce (sort) passes the hall's shell as the shadow rays do (RayScene.ShadowMask): the eye sees the walls,
+        // while the sky still lights the hall as it did when the shell was not traced at all.
         bool hit(vec3 o, vec3 d, float tmax, float spread, bool sort, out Surface s)
         {
+            uint mask = sort ? 0x01u : 0xFFu;
             #ifdef SER
             // Traced into a hit object; a bounce's invocations are then sorted by the instance they hit, so that those
             // reading the same mesh, scans and material run together (the eye's rays are coherent already, and sorting
             // them cost more than it gave). No hit shader runs.
             hitObjectNV q;
-            hitObjectTraceRayNV(q, hallRays, gl_RayFlagsOpaqueEXT, 0xFFu, 0u, 0u, 0u, o, 0.0, d, tmax, 0);
+            hitObjectTraceRayNV(q, hallRays, gl_RayFlagsOpaqueEXT, mask, 0u, 0u, 0u, o, 0.0, d, tmax, 0);
             if (sort)
             {
                 uint hint = hitObjectIsHitNV(q) ? uint(hitObjectGetInstanceIdNV(q)) + 1u : 0u;
@@ -880,7 +912,7 @@ internal sealed unsafe class PathTracer : IDisposable
             mat4x3 toObject = hitObjectGetWorldToObjectNV(q);
             #else
             rayQueryEXT q;
-            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT, 0xFFu, o, 0.0, d, tmax);
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT, mask, o, 0.0, d, tmax);
             while (rayQueryProceedEXT(q))
             {
             }
@@ -930,7 +962,15 @@ internal sealed unsafe class PathTracer : IDisposable
                 s.f0 = 0.02;
                 s.n = shading;
             }
-            else if (material >= 8u && t.options.x > 0.5)
+            else if (material == 17u || material == 18u)
+            {
+                // A gallery picture (Material.Pictured) in its mean colour, matte paper; oak boards (Material.Oak) in
+                // theirs, oiled.
+                s.alpha = material == 17u ? 0.5 : 0.3;
+                s.n = shading;
+                s.glow += material == 17u ? colour * 0.5 : vec3(0.0); // its light from within, as the Low shader's
+            }
+            else if (material >= 8u && material < 16u && t.options.x > 0.5)
             {
                 vec4 scan = scans[min(material - 8u, 5u)];
                 vec2 uv;
@@ -952,9 +992,9 @@ internal sealed unsafe class PathTracer : IDisposable
                 vec3 side = normalize(tangent - shading * dot(tangent, shading));
                 vec2 toEdge = (1.0 - abs(edge.xy)) * edge.zw;
                 vec2 width = max(min(vec2(0.008), 0.35 * edge.zw), vec2(1e-4));
-                vec2 lean = (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(edge.xy);
+                vec2 lean = material == 6u || material == 7u ? vec2(0.0) : (1.0 - smoothstep(vec2(0.0), width, toEdge)) * sign(edge.xy); // a rope or post: its Edge is no box's
                 s.n = normalize(shading + lean.x * side + lean.y * cross(shading, side));
-                vec4 m = materials[material >= 8u ? 0u : min(material, 5u)];
+                vec4 m = materials[material >= 8u ? 0u : min(material, 7u)];
                 s.alpha = sqrt(2.0 / (m.y + 2.0));
                 s.metal = m.z;
                 s.f0 = m.x;
@@ -967,7 +1007,7 @@ internal sealed unsafe class PathTracer : IDisposable
         bool blocked(vec3 o, vec3 d, float tmax)
         {
             rayQueryEXT q;
-            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, o, 0.0, d, tmax);
+            rayQueryInitializeEXT(q, hallRays, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, o, 0.0, d, tmax); // the lights come in through the shell (RayScene.ShadowMask)
             while (rayQueryProceedEXT(q))
             {
             }

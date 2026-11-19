@@ -1,0 +1,6 @@
+<Project>
+
+  <!-- No lock file of its own, as Lego's (../lego/Directory.Build.targets). -->
+  <Import Project="../lego/Directory.Build.targets" />
+
+</Project>

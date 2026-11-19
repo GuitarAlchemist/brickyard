@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en" data-app-id="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delta — Caster</title>
+<!-- Served by the gateway on its guests' entrance at /cast, opened as /cast#invite=<code>. The gateway fills
+     data-app-id with the application ID the user registered. Its CSP allows www.gstatic.com for the sender SDK, on the
+     /cast pages only, never on the device's page. -->
+<link rel="stylesheet" href="page.css">
+</head>
+<body>
+<main>
+  <h1>Delta</h1>
+  <p id="state"></p>
+  <button id="go" type="button" hidden>Caster</button>
+</main>
+<script src="sender.js"></script>
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+</body>
+</html>

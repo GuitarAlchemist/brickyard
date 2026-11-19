@@ -13,7 +13,10 @@ internal sealed unsafe class Mesh : IDisposable
     private static int liveCount;
     public static int LiveCount => Volatile.Read(ref liveCount);
 
-    public Mesh(Device device, PhysicalDevice physical, Vertex[] vertices)
+    // resident: in the GPU's own memory where the driver lets the host write it (resizable BAR), else as any mesh. For a
+    // mesh so large that reading it from the host's memory, at every pass, is what the frame waits on: the knots' rope
+    // (1.2 million vertices, 15 ms a frame from host memory, at any size of window).
+    public Mesh(Device device, PhysicalDevice physical, Vertex[] vertices, bool resident = false)
     {
         this.device = device;
         Count = vertices.Length;
@@ -29,9 +32,27 @@ internal sealed unsafe class Mesh : IDisposable
         var allocated = false;
         try
         {
-            memory = RayTraced
-                ? Gpu.Allocate(device, physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit)
-                : device.AllocateMemory(physical, Buffer, VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit, null);
+            const VkMemoryPropertyFlags host = VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit;
+            VkDeviceMemory With(VkMemoryPropertyFlags wanted) => RayTraced
+                ? Gpu.Allocate(device, physical, Buffer, wanted)
+                : device.AllocateMemory(physical, Buffer, wanted, null);
+            if (resident)
+            {
+                try
+                {
+                    memory = With(host | VkMemoryPropertyFlags.DeviceLocalBit);
+                    Resident = true;
+                }
+                catch (Exception)
+                {
+                    memory = With(host);
+                }
+            }
+            else
+            {
+                memory = With(host);
+            }
+
             allocated = true;
             device.BindBufferMemory(Buffer, memory, memoryOffset: ByteSize.Zero);
             var mapped = device.MapMemory<Vertex>(new MapInfo(memory) { Region = new MapRegion { Size = size } });
@@ -54,6 +75,9 @@ internal sealed unsafe class Mesh : IDisposable
     public VkBuffer Buffer { get; }
 
     public int Count { get; }
+
+    // In the GPU's own memory (resident, where the driver allowed it).
+    public bool Resident { get; }
 
     public bool Disposed => disposed;
 
@@ -87,6 +111,12 @@ internal enum Material : uint
     Rubber,
     Glass,
 
+    // Drawn by the Low shader from Edge: x the place along a strand or a post, in metres, y the angle round it (0 to
+    // 2π), z its radius. Rope: a laid rope's strand, its four yarns twisted against it and their fibres; Wood: turned
+    // oak, its grain along it. Flat draws them in their colour.
+    Rope,
+    Wood,
+
     // Photographed (MaterialTextures, in its Names' order from BrickWall): the Low shader maps the scan onto the surface
     // by its place in the world and draws its relief; the colour is then a tint on the scan's own, about 1. ClayBrick
     // takes only the cast concrete's grain and relief, on its own colour. Without the scans they are matte, in their colour.
@@ -100,6 +130,33 @@ internal enum Material : uint
     // A module's triangle painted with one of the host's globe images (SceneModuleGeometry.Images, GlobeImages): Edge
     // carries its place on the image and the image's first layer. The Flat lighting draws it in its colour.
     Imaged = 16,
+
+    // A gallery picture inside a demo's or an artifact's glass (GalleryPictures, HallGallery.Picture): Edge carries its
+    // place on the picture, from its top left, and its layer. Flat lighting and the path tracer draw its mean colour.
+    Pictured = 17,
+
+    // Oak boards, drawn by the Low shader from a box's Edge: flat-sawn grain along the face's longer side, its pores, a
+    // sheen that moves with the eye, under a clear coat. The path tracer and Flat draw them in their colour.
+    Oak = 18,
+
+    // A city building's wall (OttawaStreets): the Low shader draws a window every 2.2 m along it (its Tangent) and on
+    // every floor, dark glass that takes the sky's light; Edge.w varies the panes from building to building. The path
+    // tracer and Flat draw the wall in its colour.
+    Facade = 19,
+
+    // A triangle of Google's Photorealistic 3D Tiles (GoogleStreets): Edge carries its place on its tile's image and the
+    // image's layer (Program's aerialMaps). The photograph carries its own light, so the Low shader draws it unlit, in
+    // the haze; Flat and the path tracer draw its colour sampled at each corner.
+    Aerial = 20,
+
+    // A projection screen's matte white cloth (GalleryVideo.ScreenModel): the Low shader projects the video on it alone,
+    // in the projector's light rather than tinted by what it falls on. Flat and the path tracer draw it white.
+    Screen = 21,
+
+    // Painted concrete block (Gymnasium's walls): the Low shader lays 40 by 20 cm blocks in running bond by their place
+    // in the world, the joints recessed and darker, the block's pores under a satin paint in its colour, and a blue band
+    // at 2.3 m. Flat and the path tracer draw its colour.
+    Block = 22,
 }
 
 // A surface's colour and what it is made of.

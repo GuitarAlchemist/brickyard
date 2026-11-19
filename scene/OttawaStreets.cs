@@ -1,0 +1,469 @@
+using System.Globalization;
+using System.Net.Http;
+using System.Text.Json;
+using SN = System.Numerics;
+
+// The streets of Ottawa behind the hall's roll-up door (« quand je clique sur le garage, puis-je me promener dans les
+// rues d'Ottawa »): OpenStreetMap's buildings round Parliament Hill, extruded, and its streets as ribbons on the ground,
+// after GeoTiles' OsmBuildings (GuitarAlchemist/ga, Experiments/Brutal/GeoTiles, MIT). OpenStreetMap's data is open
+// (ODbL): it may be kept with its attribution, so the Overpass answer is fetched once and kept in
+// %LOCALAPPDATA%\delta\ottawa; Google's tiles never are.
+//
+// The hall stands on the south side of Wellington Street, its door on the sidewalk opposite the Centre Block: the
+// point of Wellington nearest the Centre Block, Setback metres further from it. The hall's +Z, out through the door, is
+// toward the Centre Block, and +X to its left (a right-handed frame with y up). Buildings whose footprint reaches the
+// hall's own are left out, so that nothing stands inside it.
+internal static class OttawaStreets
+{
+    internal const string Attribution = "© OpenStreetMap contributors";
+    internal const double Lat = 45.4236, Lon = -75.7009, Radius = 450; // Parliament Hill, as GeoTiles' default place
+    internal const float Setback = 14f; // metres from Wellington's middle to the door: half the street and its sidewalk
+    private const double LevelHeight = 3, DefaultHeight = 8;
+
+    // The hall's footprint, from HallShell's walls and their thickness, with a margin.
+    // The building, the hall and its gymnasium (Gymnasium) together, with a metre round it.
+    private static readonly SN.Vector2 HallMin = new(HallShell.Left - 1f, Math.Min(HallShell.Back, Gymnasium.Back) - 1f), HallMax = new(Math.Max(HallShell.Right, Gymnasium.Right) + 1f, HallShell.Front + 0.5f);
+
+    internal static string CachePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "ottawa", "overpass.json");
+
+    // The buildings and the streets within Radius of Parliament Hill, with their geometry.
+    internal static string Query()
+    {
+        var around = string.Create(CultureInfo.InvariantCulture, $"(around:{Radius:F0},{Lat:F6},{Lon:F6})");
+        return $"[out:json][timeout:60];(way[\"building\"]{around};way[\"building:part\"]{around};relation[\"building\"]{around};way[\"highway\"]{around};);out geom;";
+    }
+
+    // The kept answer, or one fetched now from the public Overpass server and kept; null when neither is to be had.
+    internal static async Task<string?> Answer(CancellationToken cancel)
+    {
+        var path = CachePath;
+        if (File.Exists(path)) return await File.ReadAllTextAsync(path, cancel);
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("delta-scene/1.0");
+        using var body = new FormUrlEncodedContent([new("data", Query())]);
+        using var response = await http.PostAsync("https://overpass-api.de/api/interpreter", body, cancel);
+        if (!response.IsSuccessStatusCode) return null;
+        var json = await response.Content.ReadAsStringAsync(cancel);
+        using (var doc = JsonDocument.Parse(json))
+        {
+            if (!doc.RootElement.TryGetProperty("elements", out var elements) || elements.GetArrayLength() == 0) return null;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path + ".part", json, cancel);
+        File.Move(path + ".part", path, overwrite: true);
+        return json;
+    }
+
+    // The city, off the render thread: the kept answer or a fetched one, built; null without an answer.
+    internal static Task<City?> Load() => Task.Run(async () =>
+    {
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        return await Answer(cancel.Token) is { } json ? Build(json) : null;
+    });
+
+    // East and north metres from (Lat, Lon): an equirectangular map, within millimetres over a kilometre here.
+    internal static SN.Vector2 Local(double lat, double lon) =>
+        new((float)((lon - Lon) * 111_320.0 * Math.Cos(Lat * Math.PI / 180)), (float)((lat - Lat) * 110_574.0));
+
+    // Local's inverse: the latitude and longitude of a point in east-north metres.
+    internal static (double Lat, double Lon) LatLon(SN.Vector2 en) =>
+        (Lat + (en.Y / 110_574.0), Lon + (en.X / (111_320.0 * Math.Cos(Lat * Math.PI / 180))));
+
+    // Where the hall stands: its door's point in east-north metres and the way out of it, a unit vector; and a map
+    // from east-north metres to the hall's frame.
+    internal sealed record Placement(SN.Vector2 Door, SN.Vector2 Out)
+    {
+        internal SN.Vector2 Left => new(-Out.Y, Out.X);
+
+        // Out is the hall's +Z and Left its +X: facing +Z with y up, +X is on the left. Metres become the hall's, whose
+        // eye stands 1.1 high (FreeCamera.Scale); y is in real metres too.
+        internal SN.Vector3 ToHall(SN.Vector2 en, float y)
+        {
+            var d = (en - Door) * FreeCamera.Scale;
+            return new(HallShell.DoorX + SN.Vector2.Dot(d, Left), y * FreeCamera.Scale, HallShell.Front + 0.16f + SN.Vector2.Dot(d, Out));
+        }
+
+        // ToHall's inverse on the ground: the east-north metres under a point of the hall's frame.
+        internal SN.Vector2 FromHall(SN.Vector3 hall) =>
+            Door + ((((hall.X - HallShell.DoorX) * Left) + ((hall.Z - HallShell.Front - 0.16f) * Out)) / FreeCamera.Scale);
+    }
+
+    private sealed record Way(Dictionary<string, string> Tags, List<SN.Vector2> Points);
+
+    private static List<Way> Ways(JsonElement root)
+    {
+        var ways = new List<Way>();
+        foreach (var element in root.GetProperty("elements").EnumerateArray())
+        {
+            var tags = new Dictionary<string, string>();
+            if (element.TryGetProperty("tags", out var t))
+            {
+                foreach (var p in t.EnumerateObject()) tags[p.Name] = p.Value.GetString() ?? "";
+            }
+
+            List<SN.Vector2> Ring(JsonElement geometry) => [.. geometry.EnumerateArray().Select(n => Local(n.GetProperty("lat").GetDouble(), n.GetProperty("lon").GetDouble()))];
+            if (element.TryGetProperty("geometry", out var g)) ways.Add(new(tags, Ring(g)));
+            else if (element.TryGetProperty("members", out var members))
+            {
+                foreach (var m in members.EnumerateArray())
+                {
+                    if (m.TryGetProperty("role", out var role) && role.GetString() == "outer" && m.TryGetProperty("geometry", out var outer)) ways.Add(new(tags, Ring(outer)));
+                }
+            }
+        }
+
+        return ways;
+    }
+
+    // The door's place from the answer: opposite the Centre Block across Wellington Street; at the query's centre,
+    // facing north, when either is missing.
+    internal static Placement Place(IReadOnlyList<(Dictionary<string, string> Tags, List<SN.Vector2> Points)> ways)
+    {
+        var block = ways.FirstOrDefault(w => w.Tags.GetValueOrDefault("name") is "Centre Block" or "Édifice du Centre" && w.Tags.ContainsKey("building"));
+        var wellington = ways.Where(w => w.Tags.ContainsKey("highway") && w.Tags.GetValueOrDefault("name") is "Wellington Street" or "rue Wellington").ToList();
+        if (block.Points is not { Count: > 2 } || wellington.Count == 0) return new(new(0f, -60f), SN.Vector2.UnitY);
+        var corners = SN.Vector2.Distance(block.Points[0], block.Points[^1]) < 0.01f ? block.Points.SkipLast(1).ToList() : block.Points; // a closed ring repeats its first point
+        var centre = corners.Aggregate(SN.Vector2.Zero, (a, p) => a + p) / corners.Count;
+        var nearest = wellington.SelectMany(w => w.Points.Zip(w.Points.Skip(1), (a, b) => Nearest(a, b, centre))).MinBy(p => SN.Vector2.Distance(p, centre));
+        var toward = SN.Vector2.Normalize(centre - nearest);
+        return new(nearest - (toward * Setback), toward);
+    }
+
+    private static SN.Vector2 Nearest(SN.Vector2 a, SN.Vector2 b, SN.Vector2 p)
+    {
+        var ab = b - a;
+        var t = ab.LengthSquared() < 1e-6f ? 0f : Math.Clamp(SN.Vector2.Dot(p - a, ab) / ab.LengthSquared(), 0f, 1f);
+        return a + (t * ab);
+    }
+
+    // Footprints: the buildings standing on the ground, (x, z) in the hall's frame, which the walking body keeps out of.
+    internal sealed record City(Vertex[] Vertices, Placement Placement, int Buildings, int Streets, int Left, IReadOnlyList<SN.Vector2[]> Footprints);
+
+    // The city of an Overpass answer in the hall's frame: each building's walls and roof, each street a ribbon on the
+    // ground; Left counts the buildings left out because they reach the hall.
+    internal static City Build(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var ways = Ways(doc.RootElement);
+        var placement = Place([.. ways.Select(w => (w.Tags, w.Points))]);
+        var o = new List<Vertex>();
+        var (buildings, streets, left) = (0, 0, 0);
+        var footprints = new List<SN.Vector2[]>();
+        foreach (var way in ways.Where(w => w.Tags.ContainsKey("highway")))
+        {
+            var (width, colour, y) = Street(way.Tags["highway"]);
+            if (width <= 0) continue;
+            for (var i = 0; i + 1 < way.Points.Count; i++)
+            {
+                var (a, b) = (placement.ToHall(way.Points[i], y), placement.ToHall(way.Points[i + 1], y));
+                if (InHall(new((a.X + b.X) / 2, (a.Z + b.Z) / 2)) || InHall(new(a.X, a.Z)) || InHall(new(b.X, b.Z))) continue;
+                Ribbon(o, a, b, width * FreeCamera.Scale, colour);
+            }
+
+            streets++;
+        }
+
+        // A building drawn in parts (building:part, OpenStreetMap's Simple 3D Buildings) is drawn by its parts alone: its
+        // outline only says where it stands, and still stops the walker.
+        static List<SN.Vector2>? Ring(List<SN.Vector2> points, Placement placement)
+        {
+            var ring = points.Select(p => placement.ToHall(p, 0f)).Select(p => new SN.Vector2(p.X, p.Z)).ToList();
+            if (ring.Count < 4 || SN.Vector2.Distance(ring[0], ring[^1]) > 0.01f) return null;
+            ring.RemoveAt(ring.Count - 1);
+            return ring;
+        }
+
+        var parts = ways.Where(w => w.Tags.ContainsKey("building:part")).Select(w => Ring(w.Points, placement)).OfType<List<SN.Vector2>>()
+            .Select(r => r.Aggregate(SN.Vector2.Zero, (a, p) => a + p) / r.Count).ToList();
+        var seed = 0;
+        foreach (var way in ways.Where(w => w.Tags.ContainsKey("building") || w.Tags.ContainsKey("building:part")))
+        {
+            if (Ring(way.Points, placement) is not { } ring) continue;
+            if (Reaches(ring)) { left++; continue; }
+            var (bottom, top) = Heights(way.Tags);
+            if (bottom < 2) footprints.Add([.. ring]); // what overhangs higher than a head is walked under
+            var outline = !way.Tags.ContainsKey("building:part") && parts.Any(c => Inside(c, ring));
+            if (outline) continue;
+            var roof = RoofOf(way.Tags, top - bottom);
+            Extrude(o, ring, (float)bottom * FreeCamera.Scale, (float)(top - roof.Height) * FreeCamera.Scale, (float)top * FreeCamera.Scale,
+                WallColour(way.Tags) ?? Stone(way.Points[0]), roof.Colour, roof.Peaked, ++seed);
+            buildings++;
+        }
+
+        // The ground: a square of pavement a kilometre across, just under the hall's floor.
+        var g = new Finish(new(0.3f, 0.3f, 0.29f), Material.Matte);
+        Boxes.Add(o, new(HallShell.DoorX, -0.06f, HallShell.Front), new(1200f, 0.1f, 1200f), g);
+        Plaque(o);
+        return new([.. o], placement, buildings, streets, left, footprints);
+    }
+
+    // The data's attribution, as ODbL asks, on a dark plaque on the hall's front wall beside the door, facing the street,
+    // at eye height: drawn with the streets, so it shows whenever they do.
+    internal static readonly SN.Vector3 PlaqueAt = new(HallShell.DoorX + (HallShell.DoorWidth / 2) + 1.1f, 1.25f, HallShell.Front + 0.16f);
+
+    private static void Plaque(List<Vertex> o)
+    {
+        Boxes.Add(o, PlaqueAt + new SN.Vector3(0f, 0f, 0.012f), new(1.3f, 0.36f, 0.024f), new Finish(new(0.05f, 0.055f, 0.06f), Material.Enamel));
+        var pale = new SN.Vector3(0.86f, 0.87f, 0.9f);
+        HallGallery.Text(o, "Ottawa: © OpenStreetMap contributors", PlaqueAt + new SN.Vector3(0f, 0.07f, 0.026f), 0.09f, 1.2f, pale, 48);
+        HallGallery.Text(o, "openstreetmap.org/copyright (ODbL)", PlaqueAt + new SN.Vector3(0f, -0.08f, 0.026f), 0.07f, 1.2f, pale, 48);
+    }
+
+    // A street's width, colour and height above the ground by its kind; 0 wide for what is not drawn.
+    private static (float Width, SN.Vector3 Colour, float Y) Street(string kind)
+    {
+        SN.Vector3 asphalt = new(0.08f, 0.08f, 0.085f), walk = new(0.45f, 0.43f, 0.4f);
+        return kind switch
+        {
+            "motorway" or "trunk" or "primary" => (14f, asphalt, 0.02f),
+            "secondary" => (11f, asphalt, 0.02f),
+            "tertiary" => (9f, asphalt, 0.02f),
+            "residential" or "unclassified" or "living_street" => (7f, asphalt, 0.02f),
+            "service" => (4.5f, asphalt, 0.02f),
+            "pedestrian" => (6f, walk, 0.03f),
+            "footway" or "path" or "cycleway" or "steps" => (2.4f, walk, 0.03f),
+            _ => (0f, asphalt, 0f),
+        };
+    }
+
+    private static (double Bottom, double Top) Heights(Dictionary<string, string> tags)
+    {
+        double? Tag(string name)
+        {
+            if (!tags.TryGetValue(name, out var text)) return null;
+            var end = 0;
+            text = text.Trim();
+            while (end < text.Length && (char.IsDigit(text[end]) || text[end] == '.')) end++;
+            return double.TryParse(text.AsSpan(0, end), NumberStyles.Float, CultureInfo.InvariantCulture, out var n) ? n : null;
+        }
+
+        var top = Tag("height") ?? (Tag("building:levels") is { } levels ? levels * LevelHeight : DefaultHeight);
+        var bottom = Tag("min_height") ?? (Tag("building:min_level") is { } min ? min * LevelHeight : 0);
+        return top > bottom ? (bottom, top) : (0, DefaultHeight);
+    }
+
+    // A colour as OpenStreetMap writes it, "#d2b48c" or a few names, made linear; null for what is not understood.
+    internal static SN.Vector3? Colour(string? text)
+    {
+        if (text is null) return null;
+        text = text.Trim().ToLowerInvariant();
+        text = text switch
+        {
+            "white" => "#f0f0ec", "grey" or "gray" => "#9a9a98", "lightgrey" or "lightgray" => "#c8c8c4", "darkgrey" or "darkgray" => "#5a5a58",
+            "black" => "#303030", "brown" => "#7a5a40", "red" => "#9a4434", "beige" => "#d8cfb4", "tan" => "#d2b48c", "yellow" => "#d8c070",
+            "green" => "#4f7a5e", "blue" => "#4e6680", "silver" => "#b8bcc0", "orange" => "#c07040",
+            _ => text,
+        };
+        if (text.Length != 7 || text[0] != '#' || !uint.TryParse(text.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb)) return null;
+        static float Linear(uint c) => MathF.Pow(c / 255f, 2.2f);
+        return new(Linear((rgb >> 16) & 0xFF), Linear((rgb >> 8) & 0xFF), Linear(rgb & 0xFF));
+    }
+
+    // A wall's colour from its building:colour, or its building:material's.
+    private static SN.Vector3? WallColour(Dictionary<string, string> tags) =>
+        Colour(tags.GetValueOrDefault("building:colour")) ?? tags.GetValueOrDefault("building:material") switch
+        {
+            "limestone" or "sandstone" or "stone" => new SN.Vector3(0.62f, 0.55f, 0.42f),
+            "brick" => new SN.Vector3(0.42f, 0.2f, 0.13f),
+            "glass" => new SN.Vector3(0.18f, 0.24f, 0.3f),
+            "concrete" => new SN.Vector3(0.5f, 0.5f, 0.48f),
+            _ => null,
+        };
+
+    // A roof: how high it rises over the walls, in metres, its colour, and whether it peaks (any shape but flat, drawn
+    // as a pyramid from the walls' top to a point over the footprint's middle); copper turns verdigris.
+    private static (double Height, SN.Vector3 Colour, bool Peaked) RoofOf(Dictionary<string, string> tags, double tall)
+    {
+        var shape = tags.GetValueOrDefault("roof:shape", "flat");
+        var peaked = shape is not ("flat" or "");
+        var height = peaked ? Math.Min(tall * 0.8, Number(tags.GetValueOrDefault("roof:height")) ?? 3.0) : 0;
+        var colour = Colour(tags.GetValueOrDefault("roof:colour")) ?? (tags.GetValueOrDefault("roof:material") == "copper"
+            ? new SN.Vector3(0.22f, 0.42f, 0.34f) : new SN.Vector3(0.36f, 0.37f, 0.38f));
+        return (height, colour, peaked);
+    }
+
+    private static double? Number(string? text)
+    {
+        if (text is null) return null;
+        text = text.Trim();
+        var end = 0;
+        while (end < text.Length && (char.IsDigit(text[end]) || text[end] == '.')) end++;
+        return double.TryParse(text.AsSpan(0, end), NumberStyles.Float, CultureInfo.InvariantCulture, out var n) ? n : null;
+    }
+
+    // Whether p lies inside a ring (even-odd).
+    private static bool Inside(SN.Vector2 p, List<SN.Vector2> ring)
+    {
+        var inside = false;
+        for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+        {
+            var (a, b) = (ring[j], ring[i]);
+            if ((a.Y > p.Y) != (b.Y > p.Y) && p.X < a.X + ((p.Y - a.Y) / (b.Y - a.Y) * (b.X - a.X))) inside = !inside;
+        }
+
+        return inside;
+    }
+
+    // A building's stone, one of a few pale tones, from where it stands.
+    private static SN.Vector3 Stone(SN.Vector2 at)
+    {
+        SN.Vector3[] tones = [new(0.62f, 0.58f, 0.5f), new(0.55f, 0.52f, 0.48f), new(0.66f, 0.62f, 0.55f), new(0.5f, 0.47f, 0.44f), new(0.58f, 0.5f, 0.42f)];
+        var h = (uint)HashCode.Combine(MathF.Round(at.X), MathF.Round(at.Y));
+        return tones[(int)(((h * 2654435761u) >> 16) % (uint)tones.Length)];
+    }
+
+    private static bool InHall(SN.Vector2 p) => p.X > HallMin.X && p.X < HallMax.X && p.Y > HallMin.Y && p.Y < HallMax.Y;
+
+    // Whether a footprint (x, z) reaches the hall's: its box overlaps the hall's.
+    private static bool Reaches(List<SN.Vector2> ring) =>
+        ring.Max(p => p.X) > HallMin.X && ring.Min(p => p.X) < HallMax.X && ring.Max(p => p.Y) > HallMin.Y && ring.Min(p => p.Y) < HallMax.Y;
+
+    private static readonly SN.Vector4 Flat = new(0f, 0f, 1f, 1f);
+
+    // A triangle wound counter-clockwise about n, as the boxes are; a wall's runs along tangent (Material.Facade's windows
+    // follow it), its Edge.w the building's seed.
+    private static void Triangle(List<Vertex> o, SN.Vector3 a, SN.Vector3 b, SN.Vector3 c, SN.Vector3 n, SN.Vector3 colour,
+        Material material = Material.Matte, SN.Vector3? tangent = null, float seed = 1f)
+    {
+        if (SN.Vector3.Dot(SN.Vector3.Cross(b - a, c - a), n) < 0) (b, c) = (c, b);
+        var t = tangent ?? SN.Vector3.Normalize(b - a);
+        var edge = Flat with { W = seed };
+        o.AddRange([new(a, n, colour, material, t, edge), new(b, n, colour, material, t, edge), new(c, n, colour, material, t, edge)]);
+    }
+
+    private static void Ribbon(List<Vertex> o, SN.Vector3 a, SN.Vector3 b, float width, SN.Vector3 colour)
+    {
+        var along = b - a;
+        if (along.LengthSquared() < 1e-4f) return;
+        var side = SN.Vector3.Normalize(new SN.Vector3(-along.Z, 0f, along.X)) * (width / 2);
+        // Each end extended by half the width, so that a street's segments meet at its bends.
+        var ext = SN.Vector3.Normalize(along) * (width / 2);
+        var (p, q) = (a - ext, b + ext);
+        Triangle(o, p - side, q - side, q + side, SN.Vector3.UnitY, colour);
+        Triangle(o, p - side, q + side, p + side, SN.Vector3.UnitY, colour);
+    }
+
+    // A footprint (x, z in the hall's frame) raised from bottom to the walls' top: its walls facing out, with windows
+    // (Material.Facade), then its roof: flat at the walls' top, or peaked, a pyramid up to top over the footprint's middle.
+    private static void Extrude(List<Vertex> o, List<SN.Vector2> ring, float bottom, float walls, float top, SN.Vector3 stone, SN.Vector3 roof, bool peaked, int seed)
+    {
+        // Its signed area made positive in (x, z): the inside is then on the left of each edge, the outside on its right.
+        if (Area(ring) < 0) ring.Reverse();
+        walls = Math.Max(walls, bottom + 0.01f);
+        var tone = (seed % 97) / 97f;
+        SN.Vector3 P(SN.Vector2 v, float y) => new(v.X, y, v.Y);
+        for (var i = 0; i < ring.Count; i++)
+        {
+            var (p, q) = (ring[i], ring[(i + 1) % ring.Count]);
+            var e = q - p;
+            if (e.LengthSquared() < 1e-6f) continue;
+            var outward = SN.Vector2.Normalize(new(e.Y, -e.X));
+            var n = new SN.Vector3(outward.X, 0f, outward.Y);
+            var along = SN.Vector3.Normalize(new(e.X, 0f, e.Y));
+            Triangle(o, P(p, bottom), P(q, bottom), P(q, walls), n, stone, Material.Facade, along, tone);
+            Triangle(o, P(p, bottom), P(q, walls), P(p, walls), n, stone, Material.Facade, along, tone);
+        }
+
+        if (peaked && top > walls + 0.01f)
+        {
+            var apex = P(ring.Aggregate(SN.Vector2.Zero, (a, v) => a + v) / ring.Count, top);
+            for (var i = 0; i < ring.Count; i++)
+            {
+                var (a, b) = (P(ring[i], walls), P(ring[(i + 1) % ring.Count], walls));
+                var n = SN.Vector3.Cross(b - a, apex - a);
+                if (n.LengthSquared() < 1e-10f) continue;
+                n = SN.Vector3.Normalize(n.Y < 0 ? -n : n);
+                Triangle(o, a, b, apex, n, roof);
+            }
+
+            return;
+        }
+
+        foreach (var (a, b, c) in Triangulate(ring))
+        {
+            Triangle(o, P(ring[a], walls), P(ring[b], walls), P(ring[c], walls), SN.Vector3.UnitY, roof);
+        }
+    }
+
+    private static float Area(List<SN.Vector2> ring)
+    {
+        var twice = 0f;
+        for (var i = 0; i < ring.Count; i++)
+        {
+            var (p, q) = (ring[i], ring[(i + 1) % ring.Count]);
+            twice += (p.X * q.Y) - (q.X * p.Y);
+        }
+
+        return twice / 2;
+    }
+
+    // Ear clipping of a polygon whose signed area is positive: n - 2 triangles, as indices; a ring that crosses itself
+    // keeps what could be clipped.
+    internal static List<(int A, int B, int C)> Triangulate(IReadOnlyList<SN.Vector2> ring)
+    {
+        static float Cross(SN.Vector2 a, SN.Vector2 b, SN.Vector2 c) => ((b.X - a.X) * (c.Y - a.Y)) - ((b.Y - a.Y) * (c.X - a.X));
+        var triangles = new List<(int, int, int)>();
+        var left = Enumerable.Range(0, ring.Count).ToList();
+        var guard = ring.Count * ring.Count;
+        while (left.Count > 3 && guard-- > 0)
+        {
+            var clipped = false;
+            for (var i = 0; i < left.Count && !clipped; i++)
+            {
+                int a = left[(i + left.Count - 1) % left.Count], b = left[i], c = left[(i + 1) % left.Count];
+                if (Cross(ring[a], ring[b], ring[c]) <= 0) continue;
+                if (left.Any(k => k != a && k != b && k != c && Cross(ring[a], ring[b], ring[k]) >= 0 && Cross(ring[b], ring[c], ring[k]) >= 0 && Cross(ring[c], ring[a], ring[k]) >= 0)) continue;
+                triangles.Add((a, b, c));
+                left.RemoveAt(i);
+                clipped = true;
+            }
+
+            if (!clipped) break;
+        }
+
+        if (left.Count == 3) triangles.Add((left[0], left[1], left[2]));
+        return triangles;
+    }
+
+    // Checks without the network: a made-up answer with the Centre Block, Wellington Street, a building beside the hall
+    // and one standing where the hall stands.
+    internal static void SelfTest(Action<bool, string> check)
+    {
+        static string Node(SN.Vector2 en) => string.Create(CultureInfo.InvariantCulture,
+            $"{{\"lat\":{Lat + (en.Y / 110_574.0):F8},\"lon\":{Lon + (en.X / (111_320.0 * Math.Cos(Lat * Math.PI / 180))):F8}}}");
+        static string Ring(params SN.Vector2[] points) => "[" + string.Join(",", points.Append(points[0]).Select(Node)) + "]";
+        static SN.Vector2 V(float e, float n) => new(e, n);
+        var json = "{\"elements\":[" +
+            $"{{\"type\":\"way\",\"tags\":{{\"building\":\"yes\",\"name\":\"Centre Block\",\"height\":\"30\"}},\"geometry\":{Ring(V(-40, 40), V(40, 40), V(40, 90), V(-40, 90))}}}," +
+            $"{{\"type\":\"way\",\"tags\":{{\"highway\":\"primary\",\"name\":\"Wellington Street\"}},\"geometry\":[{Node(V(-200, 0))},{Node(V(200, 0))}]}}," +
+            $"{{\"type\":\"way\",\"tags\":{{\"building\":\"yes\",\"building:levels\":\"4\"}},\"geometry\":{Ring(V(30, -40), V(50, -40), V(50, -25), V(30, -25))}}}," +
+            $"{{\"type\":\"way\",\"tags\":{{\"building\":\"yes\"}},\"geometry\":{Ring(V(-6, -25), V(6, -25), V(6, -18), V(-6, -18))}}}" +
+            "]}";
+        var city = Build(json);
+        var p = city.Placement;
+        check(SN.Vector2.Distance(p.Door, V(0, -Setback)) < 0.05f && SN.Vector2.Distance(p.Out, SN.Vector2.UnitY) < 1e-3f,
+            $"the door stands across Wellington from the Centre Block, facing it ({p.Door.X:F2}, {p.Door.Y:F2})");
+        var block = p.ToHall(V(0, 65), 0f);
+        check(MathF.Abs(block.X - HallShell.DoorX) < 0.05f && MathF.Abs(block.Z - (HallShell.Front + 0.16f + (79f * FreeCamera.Scale))) < 0.05f,
+            $"out through the door, straight ahead, is the Centre Block, 79 m on at the hall's scale ({block.X:F2}, {block.Z:F2})");
+        var east = p.ToHall(V(40, -32), 0f);
+        check(east.X < HallShell.DoorX - (30f * FreeCamera.Scale), $"east is on the right going out: x falls ({east.X:F1})");
+        check(city.Buildings == 2 && city.Left == 1 && city.Streets == 1, $"two buildings stand, the one where the hall is is left out ({city.Buildings}, {city.Left}), one street");
+        var tall = city.Vertices.Where(v => v.Normal.Y > 0.9f && v.Pos.Y > 1f).Max(v => v.Pos.Y);
+        check(MathF.Abs(tall - (30f * FreeCamera.Scale)) < 0.01f, $"a building's height is its tag's, at the hall's scale ({tall:F2})");
+        var walls = city.Vertices.Where(v => MathF.Abs(v.Normal.Y) < 0.1f).ToList();
+        var centreOfBlock = new SN.Vector3(block.X, 0f, block.Z);
+        check(walls.Where(v => v.Pos.Z > HallShell.Front + 1f && SN.Vector3.Distance(new(v.Pos.X, 0f, v.Pos.Z), centreOfBlock) < 60f).All(v =>
+                SN.Vector3.Dot(v.Normal, new SN.Vector3(v.Pos.X, 0f, v.Pos.Z) - centreOfBlock) > 0f),
+            "the walls face out of their building");
+        var triangles = city.Vertices.Chunk(3).ToList();
+        check(triangles.All(t => SN.Vector3.Dot(SN.Vector3.Cross(t[1].Pos - t[0].Pos, t[2].Pos - t[0].Pos), t[0].Normal) > 0f),
+            "every triangle winds about its normal");
+        var inHall = city.Vertices.Any(v => v.Pos.Y > 0.1f && v.Pos.Z < HallShell.Front && InHall(new(v.Pos.X, v.Pos.Z)));
+        check(!inHall, "nothing stands inside the hall");
+        var plaque = city.Vertices.Count(v => v.Pos.Z > HallShell.Front + 0.03f && v.Pos.Z < HallShell.Front + 0.2f && MathF.Abs(v.Pos.X - PlaqueAt.X) < 0.7f && v.Normal.Z > 0.9f);
+        check(plaque > 100 && city.Footprints.Count == 2, $"the attribution's plaque faces the street beside the door ({plaque} vertices), and the two buildings standing stop the walker");
+        check(Triangulate([V(0, 0), V(4, 0), V(4, 1), V(1, 1), V(1, 4), V(0, 4)]).Count == 4, "an L-shaped roof is four triangles");
+    }
+}

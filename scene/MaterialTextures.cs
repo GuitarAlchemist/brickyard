@@ -114,42 +114,80 @@ internal sealed unsafe class MaterialTextures : IDisposable
         var levels = new List<byte[]> { top };
         for (var s = size / 2; s >= 1; s /= 2)
         {
-            var up = levels[^1];
             var down = new byte[s * s * 4];
-            var sum = new float[4];
-            for (var y = 0; y < s; y++)
-            {
-                for (var x = 0; x < s; x++)
-                {
-                    Array.Clear(sum);
-                    foreach (var (dx, dy) in Quad)
-                    {
-                        var at = ((((2 * y) + dy) * 2 * s) + (2 * x) + dx) * 4;
-                        for (var c = 0; c < 4; c++)
-                        {
-                            sum[c] += up[at + c];
-                        }
-                    }
-
-                    var to = ((y * s) + x) * 4;
-                    if (normal)
-                    {
-                        var (nx, ny, nz) = ((sum[0] / 510f) - 1f, (sum[1] / 510f) - 1f, (sum[2] / 510f) - 1f);
-                        var length = MathF.Max(MathF.Sqrt((nx * nx) + (ny * ny) + (nz * nz)), 1e-4f);
-                        (sum[0], sum[1], sum[2]) = (((nx / length) + 1f) * 510f, ((ny / length) + 1f) * 510f, ((nz / length) + 1f) * 510f);
-                    }
-
-                    for (var c = 0; c < 4; c++)
-                    {
-                        down[to + c] = (byte)Math.Clamp((int)MathF.Round(sum[c] / 4f), 0, 255);
-                    }
-                }
-            }
-
+            Halve(levels[^1], down, s, normal);
             levels.Add(down);
         }
 
         return levels;
+    }
+
+    // A colour's whole chain in flat (ChainBytes(size) long): the top, then each level after the last, as Chain makes
+    // them; nothing is allocated (GalleryVideo makes one an image).
+    internal static void Chain(ReadOnlySpan<byte> top, Span<byte> flat, int size)
+    {
+        top[..(size * size * 4)].CopyTo(flat);
+        var (from, to) = (0, size * size * 4);
+        for (var s = size / 2; s >= 1; s /= 2)
+        {
+            Halve(flat.Slice(from, s * s * 16), flat.Slice(to, s * s * 4), s, normal: false);
+            (from, to) = (to, to + (s * s * 4));
+        }
+    }
+
+    internal static int ChainBytes(int size)
+    {
+        var n = 0;
+        for (var s = size; s >= 1; s /= 2)
+        {
+            n += s * s * 4;
+        }
+
+        return n;
+    }
+
+    // up, 2s × 2s, averaged by fours into down, s × s.
+    private static void Halve(ReadOnlySpan<byte> up, Span<byte> down, int s, bool normal)
+    {
+        Span<float> sum = stackalloc float[4];
+        for (var y = 0; y < s; y++)
+        {
+            for (var x = 0; x < s; x++)
+            {
+                sum.Clear();
+                foreach (var (dx, dy) in Quad)
+                {
+                    var at = ((((2 * y) + dy) * 2 * s) + (2 * x) + dx) * 4;
+                    for (var c = 0; c < 4; c++)
+                    {
+                        sum[c] += up[at + c];
+                    }
+                }
+
+                var to = ((y * s) + x) * 4;
+                if (normal)
+                {
+                    var (nx, ny, nz) = ((sum[0] / 510f) - 1f, (sum[1] / 510f) - 1f, (sum[2] / 510f) - 1f);
+                    var length = MathF.Max(MathF.Sqrt((nx * nx) + (ny * ny) + (nz * nz)), 1e-4f);
+                    (sum[0], sum[1], sum[2]) = (((nx / length) + 1f) * 510f, ((ny / length) + 1f) * 510f, ((nz / length) + 1f) * 510f);
+                }
+
+                for (var c = 0; c < 4; c++)
+                {
+                    down[to + c] = (byte)Math.Clamp((int)MathF.Round(sum[c] / 4f), 0, 255);
+                }
+            }
+        }
+    }
+
+    internal static void SelfTest(Action<bool, string> check)
+    {
+        var top = new byte[8 * 8 * 4];
+        new Random(7).NextBytes(top);
+        var flat = new byte[ChainBytes(8)];
+        Chain(top, flat, 8);
+        check(flat.AsSpan().SequenceEqual(Chain(top, 8, normal: false).SelectMany(l => l).ToArray()) && flat.Length == 4 * (64 + 16 + 4 + 1),
+            "a flat mip chain holds the levels Chain makes, one after the other");
     }
 
     internal sealed class ArrayImage : IDisposable
@@ -157,6 +195,7 @@ internal sealed unsafe class MaterialTextures : IDisposable
         private readonly Device device;
         private readonly VkImage image;
         private readonly VkDeviceMemory memory;
+        private readonly int size, levelCount;
         private VkBuffer staging;
         private VkDeviceMemory stagingMemory;
         private bool staged = true;
@@ -166,7 +205,8 @@ internal sealed unsafe class MaterialTextures : IDisposable
             this.device = device;
             var chains = new List<byte[]>[layers.Length];
             Parallel.For(0, layers.Length, l => chains[l] = Chain(layers[l], size, normal));
-            var levelCount = chains[0].Count;
+            levelCount = chains[0].Count;
+            this.size = size;
             var total = chains.Sum(c => c.Sum(level => (long)level.Length));
             var bytes = new ByteSize((nuint)total);
             staging = device.CreateBuffer(new VkBufferCreateInfo { Size = bytes, Usage = VkBufferUsageFlags.TransferSrcBit, SharingMode = VkSharingMode.Exclusive }, null);
@@ -218,6 +258,32 @@ internal sealed unsafe class MaterialTextures : IDisposable
         }
 
         public VkImageView View { get; }
+
+        // Records, outside a render pass, a layer's every level replaced from buffer at offset, laid out as the flat
+        // Chain lays them: the fragment shading that sampled the layer before is waited for, and the one after sees the
+        // new one. (Waiting on all commands instead stalled the GPU: p95 26 ms a frame against 6 without the videos.)
+        public void Replace(CommandBuffer cb, VkBuffer buffer, long offset, int layer)
+        {
+            var range = new VkImageSubresourceRange { AspectMask = VkImageAspectFlags.ColorBit, LevelCount = levelCount, BaseArrayLayer = layer, LayerCount = 1 };
+            var copies = new VkBufferImageCopy[levelCount];
+            for (var level = 0; level < levelCount; level++)
+            {
+                var s = Math.Max(1, size >> level);
+                copies[level] = new VkBufferImageCopy
+                {
+                    BufferOffset = new ByteSize64((ulong)offset),
+                    ImageSubresource = new VkImageSubresourceLayers { AspectMask = VkImageAspectFlags.ColorBit, MipLevel = level, BaseArrayLayer = layer, LayerCount = 1 },
+                    ImageExtent = new VkExtent3D { Width = s, Height = s, Depth = 1 },
+                };
+                offset += s * s * 4;
+            }
+
+            cb.PipelineBarrier(VkPipelineStageFlags.FragmentShaderBit, VkPipelineStageFlags.TransferBit, VkDependencyFlags.None, [], [],
+                [Barrier(image, range, VkImageLayout.ShaderReadOnlyOptimal, VkImageLayout.TransferDstOptimal, VkAccessFlags.ShaderReadBit, VkAccessFlags.TransferWriteBit)]);
+            cb.CopyBufferToImage(buffer, image, VkImageLayout.TransferDstOptimal, copies);
+            cb.PipelineBarrier(VkPipelineStageFlags.TransferBit, VkPipelineStageFlags.FragmentShaderBit, VkDependencyFlags.None, [], [],
+                [Barrier(image, range, VkImageLayout.TransferDstOptimal, VkImageLayout.ShaderReadOnlyOptimal, VkAccessFlags.TransferWriteBit, VkAccessFlags.ShaderReadBit)]);
+        }
 
         public void FreeStaging()
         {

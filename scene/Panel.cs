@@ -76,6 +76,40 @@ internal static class Panel
     // The caption for a sentence Delta heard: for whom it was (Link's "heard"), with how to call Delta when it let the
     // sentence pass for want of its name, then the whole sentence in quotes on up to four lines, on a card no wider than
     // the window.
+    // The attribution Google's Map Tiles policy asks for while its 3D tiles are drawn (GoogleStreets): "Google Maps",
+    // the text it accepts where its logo is not drawn, and on one line the data providers the tiles name.
+    // With a Street View panorama shown (StreetPanorama), two more lines: its copyright and date, and the words of its
+    // report-a-problem link, which a click on the card opens.
+    public static Card Attribution(IReadOnlyList<string> providers, int windowWidth, int windowHeight, string? panorama = null)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var room = Math.Min(Px(560), windowWidth - (2 * Px(12))) - (2 * Px(Pad / 2));
+        var line = Fit(string.Join(" · ", providers.Where(p => !p.Equals("Google", StringComparison.OrdinalIgnoreCase))), Px(12), false, room);
+        var taken = panorama is null ? "" : Fit(panorama, Px(12), false, room);
+        var report = panorama is null ? "" : Words.Say("Report a problem with this image", "Signaler un problème avec cette image");
+        int Wide(string text, int pixels, bool bold) => Splash.Text(text, pixels, out var w, out _, bold) is null ? 0 : w;
+        var width = new[] { Wide("Google Maps", Px(14), true), Wide(line, Px(12), false), Wide(taken, Px(12), false), Wide(report, Px(12), false) }.Max() + (2 * Px(Pad / 2));
+        var height = Px(Pad / 2) + Px(18) + (line.Length > 0 ? Px(16) : 0) + (taken.Length > 0 ? 2 * Px(16) : 0) + Px(Pad / 2);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 190);
+        Text(rgba, width, height, "Google Maps", Px(14), true, Px(Pad / 2), Px(Pad / 2), (240, 236, 228));
+        var y = Px(Pad / 2) + Px(18);
+        if (line.Length > 0)
+        {
+            Text(rgba, width, height, line, Px(12), false, Px(Pad / 2), y, (200, 206, 212));
+            y += Px(16);
+        }
+
+        if (taken.Length > 0)
+        {
+            Text(rgba, width, height, taken, Px(12), false, Px(Pad / 2), y, (200, 206, 212));
+            Text(rgba, width, height, report, Px(12), false, Px(Pad / 2), y + Px(16), (120, 180, 255));
+        }
+
+        return new Card(rgba, width, height, []);
+    }
+
     public static Card Caption(string heard, string to, int windowWidth, int windowHeight)
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
@@ -262,6 +296,83 @@ internal static class Panel
         Fill(rgba, width, 0, 0, width, size, (12, 14, 18), 205);
         Text(rgba, width, size, label, Px(14), true, (width - wide) / 2, (size - Px(18)) / 2, (214, 220, 226));
         return new Card(rgba, width, size, []);
+    }
+
+    // The Caster button, left of the Inviter button: « Caster » / « Cast », or « Arrêter » / « Stop » while Delta's window
+    // is cast to a television, with a green dot once the Chromecast plays it.
+    public static Card CastButton(int windowHeight, bool casting, bool playing)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = casting ? Words.Say("Stop", "Arrêter") : Words.Say("Cast", "Caster");
+        var size = PhoneSize(windowHeight);
+        var wide = Splash.Text(label, Px(14), out var w, out _, true) is null ? 0 : w;
+        var width = Math.Max(size, wide + (2 * Px(10)) + (casting ? Px(10) : 0));
+        var rgba = new byte[width * size * 4];
+        Fill(rgba, width, 0, 0, width, size, casting ? (40, 22, 22) : (12, 14, 18), 205);
+        Text(rgba, width, size, label, Px(14), true, (width - wide - (casting ? Px(10) : 0)) / 2, (size - Px(18)) / 2, (214, 220, 226));
+        if (casting)
+        {
+            var dot = Px(6);
+            Fill(rgba, width, width - Px(8) - dot, (size - dot) / 2, dot, dot, playing ? (90, 220, 130) : (230, 180, 60), 255);
+        }
+
+        return new Card(rgba, width, size, []);
+    }
+
+    // The television's card, under the Caster button: where Delta is cast, why not, or the Chromecasts to choose from,
+    // one per row; Rows holds those names' rectangles' order (a click on row i casts to Chromecasts[i]).
+    public static Card CastCard(Link.Television tv, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var title = tv.Refused switch
+        {
+            "off" => Words.Say("The phone gateway casts to no television (-tv-port 0)", "La passerelle ne diffuse vers aucune télé (-tv-port 0)"),
+            "none" => Words.Say("No Chromecast answers on this network", "Aucun Chromecast ne répond sur ce réseau"),
+            "many" => Words.Say("Cast to which television?", "Diffuser sur quelle télé ?"),
+            "gateway" => Words.Say("No phone gateway: it does not run on this computer", "Passerelle absente : elle ne tourne pas sur cet ordinateur"),
+            "old" => Words.Say("The phone gateway is too old: it cannot cast yet", "Passerelle trop ancienne : elle ne sait pas encore diffuser"),
+            "error" => Words.Say("Casting failed", "La diffusion a échoué"),
+            _ when tv.On != "" => tv.Playing ? Words.Say($"On {tv.On}", $"Sur {tv.On}") : Words.Say($"Starting on {tv.On}…", $"Démarrage sur {tv.On}…"),
+            _ => Words.Say("Casting ended", "Diffusion terminée"),
+        };
+        var lines = new List<string> { title };
+        if (tv.Ended != "" && tv.Refused != "many") lines.Add(tv.Ended);
+        var choices = tv.Refused == "many" ? tv.Chromecasts : Array.Empty<string>();
+        int Wide(string text, bool bold) => Splash.Text(text, Px(13), out var w, out _, bold) is null ? 0 : w;
+        var width = Math.Min(Px(520), lines.Concat(choices).Select((t, i) => Wide(t, i == 0)).Max() + (2 * Px(12)));
+        var row = Px(22);
+        var height = Px(10) + (lines.Count * Px(18)) + (choices.Length * row) + Px(10);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 215);
+        var y = Px(10);
+        for (var i = 0; i < lines.Count; i++)
+        {
+            Text(rgba, width, height, Fit(lines[i], Px(13), i == 0, width - (2 * Px(12))), Px(13), i == 0, Px(12), y, i == 0 ? (240, 236, 228) : (170, 178, 186));
+            y += Px(18);
+        }
+
+        foreach (var name in choices)
+        {
+            Fill(rgba, width, Px(8), y + Px(2), width - Px(16), row - Px(4), (30, 40, 52), 255);
+            Text(rgba, width, height, Fit(name, Px(13), false, width - (2 * Px(16))), Px(13), false, Px(16), y + Px(4), (120, 180, 255));
+            y += row;
+        }
+
+        return new Card(rgba, width, height, []);
+    }
+
+    // Which row of the Chromecasts' choice (Panel.CastCard) is at y within the card, or -1.
+    public static int CastChoiceAt(Link.Television tv, int windowHeight, int y)
+    {
+        if (tv.Refused != "many") return -1;
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var lines = 1; // the title alone, as CastCard draws for a choice
+        var top = Px(10) + (lines * Px(18));
+        var i = (y - top) / Px(22);
+        return y >= top && i < tv.Chromecasts.Length ? i : -1;
     }
 
     // The brain's version in the bottom right corner, small and dim, such as « Delta dev-v0.6.0-40-gc31a28e · nouveautés »:
@@ -489,16 +600,16 @@ internal static class Panel
     {
         var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
         int Px(float v) => (int)MathF.Round(v * scale);
-        var look = Words.Say("Right button held, or Ctrl + click: look   Home or Enter: back to Delta   B: haze   T: room captions   F6: max out   F9: path tracing   F10: RTX   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine ou Entrée : revenir à Delta   B : brume   T : légendes de la pièce   F6 : max out   F9 : path tracing   F10 : RTX   F1 : masquer");
+        var look = Words.Say("Right button held, or Ctrl + click: look   Home or Enter: back to Delta   B: haze   G: Google's streets   T: room captions   F6: max out   F7: DLSS   F9: path tracing   F10: RTX   F5: full reload   F1: hide", "Clic droit maintenu, ou Ctrl + clic : regarder   Origine ou Entrée : revenir à Delta   B : brume   G : rues Google   T : légendes de la pièce   F6 : max out   F7 : DLSS   F9 : path tracing   F10 : RTX   F5 : rechargement complet   F1 : masquer");
         string[] lines = flying
             ? [Words.Say("FLYING", "EN VOL"),
                Words.Say("ZQSD, WASD or arrows: move   Space or E: rise   C: descend   Shift: faster", "ZQSD, WASD ou flèches : avancer   Espace ou E : monter   C : descendre   Maj : plus vite"),
-               Words.Say("F: walk   Wheel: pace   1 to 6: views (Shift and 1 to 5: filmed)   0: the cinematic   Tab: the wheel", "F : marcher   Molette : allure   1 à 6 : vues (Maj + 1 à 5 : filmées)   0 : la cinématique   Tab : la roue"),
+               Words.Say("F: walk   Wheel: pace   1 to 6: views (Shift and 1 to 5: filmed)   0: the cinematic   Tab: the wheel   V: racing scooter   X: drone", "F : marcher   Molette : allure   1 à 6 : vues (Maj + 1 à 5 : filmées)   0 : la cinématique   Tab : la roue   V : scooter de course   X : drone"),
                look]
             : [Words.Say("WALKING", "À PIED"),
                Words.Say("ZQSD, WASD or arrows: move   Shift: sprint   Space: jump   C or Ctrl: crouch (sprinting: slide)", "ZQSD, WASD ou flèches : avancer   Maj : sprint   Espace : sauter   C ou Ctrl : s'accroupir (en sprint : glissade)"),
                Words.Say("Q and E (AZERTY: A and E): lean   Alt + moving keys: lean or peek   Caps Lock: walk slowly", "A et E (QWERTY : Q et E) : se pencher   Alt + déplacement : se pencher ou se hausser   Verr. Maj : marcher lentement"),
-               Words.Say("F: fly   Wheel: pace   1 to 6: views (Shift and 1 to 5: filmed)   0: the cinematic   Tab: the wheel", "F : voler   Molette : allure   1 à 6 : vues (Maj + 1 à 5 : filmées)   0 : la cinématique   Tab : la roue"),
+               Words.Say("F: fly   Wheel: pace   1 to 6: views (Shift and 1 to 5: filmed)   0: the cinematic   Tab: the wheel   V: racing scooter   X: drone", "F : voler   Molette : allure   1 à 6 : vues (Maj + 1 à 5 : filmées)   0 : la cinématique   Tab : la roue   V : scooter de course   X : drone"),
                look];
         var room = windowWidth - (2 * Px(12)) - (2 * Px(Pad));
         var fitted = lines.Select((l, i) => Fit(l, Px(i == 0 ? 14 : 13), i == 0, room)).ToArray();

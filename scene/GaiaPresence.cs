@@ -88,9 +88,10 @@ internal static class GaiaPresence
 
     // Reuse the scene's existing Unicode font rasterizer. Contiguous covered pixels become shallow box runs, so
     // the label is part of the 3D object, depth tested in the existing pipeline, without another texture or UI card.
-    internal static void Letter(List<Vertex> vertices, string text, SN.Vector3 centre, float width, Finish finish)
+    // size: the raster's letter size; a larger one letters more finely, in more boxes.
+    internal static void Letter(List<Vertex> vertices, string text, SN.Vector3 centre, float width, Finish finish, int size = 22)
     {
-        var rgba = Splash.Text(text, 22, out var w, out var h, true);
+        var rgba = Splash.Text(text, size, out var w, out var h, true);
         if (rgba is null || w == 0 || h == 0)
         {
             throw new InvalidOperationException("Gaia's offline label could not be rasterized.");

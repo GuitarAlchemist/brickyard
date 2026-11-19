@@ -463,6 +463,26 @@ The author asked, through the wmux relay: « quand on dit au robot « love you �
 any other: the triage or Claude still answers it. Its `heard` line carries `hearts`. Seven hearts of red cubes rise
 from the chest one after another, on either side of the face, for four seconds, while Delta smiles.
 
+## Hands, through the camera (2026-10-22, night)
+
+The author asked to bring GA's camera experiments with the hand into Delta. GA's IxHandVoicingLab runs MediaPipe Hands
+in the browser, and its hand-pose service is a stub. `hands\delta_hands.py` runs MediaPipe 1.1.1's gesture recognizer
+in Python through uv, which the author accepted, asking to keep the dependencies few: two pinned packages, MediaPipe
+and the OpenCV it requires anyway. Asked whether Go, Rust or Zig could replace it, I offered a C# port on ONNX Runtime
+if Python gets in the way.
+
+- The model's canned poses take the brain's names. Pointing down, which the model does not know, comes from the
+  landmarks: the index stretched toward the floor, the three other fingers curled. Swipes and waves come from the
+  wrist's path over the last second.
+- A pose counts once held still for 0.3 s. The same gesture is not sent again within 1.5 s, nor before the pose is
+  dropped. A hand moving shows no pose, so that a wave does not first send an open palm.
+- The brain learnt `i_love_you`: hearts and a smile, as the words.
+- A test reads `brain/gesture.go` and fails if the process can send a gesture the brain would refuse.
+- Measured without a camera: 20 blank frames in 183 ms on the CPU, about 9 ms each, under Python 3.12 and 3.14. The
+  model's download matched its SHA-256. A post of `thumbs_up` to the live brain was answered 204; that brain, older,
+  answered 400 to `i_love_you`.
+- Not yet seen with a real hand: I did not turn the camera on.
+
 ## The phone's sentences that went nowhere (2026-10-22, night)
 
 The author talked to Delta from the phone through IX's gateway, 20:13 to 20:15, and Delta answered one sentence of
@@ -1829,6 +1849,33 @@ Seen hidden (port 8899, view 7, and from the hall's front at the stair's foot): 
 eight knots with traced shadows, the sign; 52 to 55 fps at 1280 × 720 (474 312 vertices for the gallery, most of them
 the plaques' letters). Not live: the live window and %LOCALAPPDATA%\delta\ix-knots.json are untouched.
 
+## A board of knots tied in rope (2026-11-15)
+
+The user's list of what waited: « la galerie des nœuds marins ». Knots a sailor ties, shown as a board shows them.
+
+- `brain -ix-cordage` (ixcordage.go) writes %LOCALAPPDATA%\delta\ix-cordage.json, the floor's format with open ropes
+  (`"closed": false`): the overhand, figure-eight, double overhand, stevedore, granny and reef knots, each one rope with
+  two free ends. A rope is a closed curve of the floor's (trefoil, figure-eight, three-twist, stevedore) cut open at its
+  highest point and its ends led up and away, above everything; the granny and reef are two such overhands in a row,
+  joined by a bridge below the ends, the reef's second one mirrored. IX's ix_knot closes an open rope by an arc over
+  everything, so it reads the knot the rope ties: an exhibit is verified when that closure is the tables' 3₁, 4₁, 5₂,
+  6₁, 3₁ # 3₁ or 3₁ # 3₁* (Jones of a sum is the product, of a mirror q → q⁻¹). All six verified at IX's first
+  reading (testdata/ix-cordage, recorded by TestRecordIXCordage with DELTA_IX_MCP: 6 calls); the double overhand and
+  stevedore as mirrors. The shapes are loose drawings of what the knot is, not rope pulled tight: no physics.
+- Tests: every rope one, open, its largest extent 1, its ends above the rest, never within 0.01 of itself; the granny's
+  polynomial the trefoil's squared, the reef's its own mirror's; every recorded closure the tables' knot.
+  TestWriteCordageFromRecordings with DELTA_CORDAGE_OUT writes the document from the recordings, without calling IX.
+- The scene (KnotFloor.BuildBoard) hangs a board on the floor's end wall, above the rail: dark felt in a wooden frame,
+  3.7 × 0.92 m, « Nœuds de cordage », the six knots in a row as rope-coloured tubes with capped ends (Tube, open), the
+  diagram IX read facing the floor, its heights halved out of the board; under each its name and « fermé : 5₂, son
+  miroir ». `--cordage FILE` reads another document; Load takes only open ropes for the board and only closed ones for
+  the floor. Self-tests: a board document taken, a closed rope refused for it, the board built on the end wall above
+  the rail, in each language.
+
+Seen hidden (port 8899, the recorded document via `--cordage`): from view 7 the board on the right wall beyond the
+plinths; from a throwaway build looking straight at it, the six knots, their names and verdicts legible. Not live:
+%LOCALAPPDATA%\delta\ix-cordage.json does not exist yet, so the live window would show the board saying why.
+
 ## Path tracing, F9 (2026-11-14)
 
 The user asked for path tracing in Delta and NVIDIA's other features. This first part is the path tracing, with what
@@ -2025,9 +2072,878 @@ and tags, at most `--dlss-g-frames` (1 by default, twice the frames; up to 3 on 
   would restart the brain. Instead, a shown window takes `--dlss-g` by itself when the Streamline folder also holds a
   file named `frame-generation`. `--no-dlss-g` leaves it out, and so does removing the file. With it, the live window
   loses the present wait and the native Reflex even while path tracing is off.
-- No HUD-less or UI tags yet: the cards and captions drawn over the picture are interpolated with the scene's motion.
-  *To verify*: Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show, and the
-  cards over generated frames.
+- HUD-less colour (2026-11-15, from the author's list of what waits): with frame generation on, the frame is drawn in
+  two render passes compatible with the one pass it had. The hall's pass ends with the canvas as a colour attachment;
+  the canvas is tagged `kBufferTypeHUDLessColor` there, `eOnlyValidNow`, so that Streamline copies it in the command
+  buffer before the cards and captions are drawn over it by the second pass. With 4x MSAA, the default quality on the
+  RTX 5080, the samples are stored between the two passes (the MSAA image is no longer transient then) and each pass
+  resolves them. Hidden, `--demo --path-tracing --dlss-g`, 1920x1080: the tag is accepted, status ok, 57 fps against
+  56 before. No UI colour and alpha (`kBufferTypeUIColorAndAlpha`) yet.
+  *To verify*: in a shown window, the cards and captions held still over generated frames (a hidden window presents
+  none), and Max out at 4K in the live window, where the screen's 60 Hz caps what a doubled rate can show.
+
+## The lectern's reader, a mod (2026-11-16)
+
+The author asked: « J'aimerais ça dans un module ou mod pour pouvoir améliorer sans relancer l'app au complet ». The
+book on the hall's lectern (key 9; a click on a course's book or a Streeling drawer opens it there) is laid out by
+`modules/LearnReader` against `module-contracts/ReaderModule.cs`. The module draws the two pages: the outline, the
+page's text extracted, laid out and paginated, the arrows and links. The host (`scene/LearnLectern.cs`) keeps what may
+be read: `LearnHost` reads only spareilleux.github.io/learn (HTTPS, no cookie, a day's cache in
+`%LOCALAPPDATA%\delta\learn-cache`), draws the text with the scene's rasterizer and opens learn pages only.
+
+- The same source is compiled into the scene as the fallback. The mod in `modules\reader\LearnReader.Module.dll` beside
+  scene.exe (or `--reader-module <dll>`) replaces it, at start or once put there (the file looked at once a second;
+  proved hidden: copied 15 s in, « the mod reads », the open course reopened). The generalised `ModuleSession` reloads it, as it does
+  the office's widgets (`WidgetModuleSession` is now that session for widget modules), and the book reopens at what was
+  open. If the mod throws, or its picture is not 2000×1300 RGBA, the built-in reader takes over until a new image comes.
+- Work on it live: `dotnet build modules/LearnReader/LearnReader.Module.csproj -c Release -p:Version=<next> -o
+  <checkout>\scene\bin\Debug\net10.0\win-x64\modules\reader`. The log shows « READER learn-reader reloaded: v… ».
+- Proof, hidden, `--view 9 --read course:2 --reader-module <dll>`: v0.1.0 then v0.1.1 copied over it 18 s in,
+  « reload 1 », same pid, the F# course still open on the book after the reload (peeks before and after).
+  `LearnLectern.SelfTest` covers the reader's extraction and pages, the host's limits, and a missing mod falling back.
+- Delta's user manual (asked for « un manuel d'utilisateur pour Delta (en 3D dans Delta) ») is the book the lectern
+  starts with. It is in `modules/LearnReader/manual.fr.md` and `manual.en.md`, in the window's language, with a chapter
+  per `## `. Both files are embedded in the mod and in the scene's built-in copy. A course or a department shows
+  « Manuel de Delta » at the bottom left to come back to it. The facts come from README.md, README.fr.md and the F1
+  keys card (Panel.Keys). Editing the manual is a mod build, reloaded live. Trap: MSBuild takes `manual.fr.md` for a
+  French culture resource and puts it in a satellite assembly, so the items carry `WithCulture="false"`.
+
+## The agents' office as a round tower (2026-11-16)
+
+The author asked: « peut-on avoir une meilleure topologie pour les petits robots (Tour circulaire, etc..) au lieu d'une
+ligne ». The office module (`modules/AgentOffice/OfficeModule.cs`) places the stations in rings about an axis at
+(-1.35, -0.15), between the bricks and Delta, 0.78 m in radius at most. Each robot faces out, and each wmux workspace's
+sign comes before its stations (the sessions outside wmux last). A ring that is full goes on to the next, a step
+higher (0.42 m at full size) and a station's depth further in. When the steps run out before the core, everything
+shrinks, down to 0.12 of full size, so the tower grows a storey as sessions come. A ring with room to spare keeps its
+slots in one arc facing the office's view (key 2). Each ring turns once in 150 s, and a ring holding the selected
+robot stops, so a double click finds it where it was. The steps are drums made of module triangles; a tower of more
+than one storey has a spire on its axis. Flat quality keeps the board.
+
+- Checks (`check-widgets.ps1`, widget-tests `Aisles`/`Enclosures`): 3 to 48 workspaces and 1 to 48 sessions in one.
+  Each case gets a sign per workspace and slots a desk's width apart at their scale. Each ring stands on its step, and
+  the drum stays clear of the pallet and of Delta's tracks, never above 2 m. The ring order is checked, along with
+  30 s of turning (a fifth of a turn, each slot at its distance) and a held ring under a selection.
+- Hidden renders, `--demo` (6 sessions, 2 workspaces) give one ring. A throwaway build with 16 demo sessions in 4
+  workspaces gives two storeys and the spire.
+
+## DLSS Super Resolution on the raster pass (2026-11-16)
+
+The author asked: « oui fais DLSS SR sur le rendu normal ». `scene/RasterUpscaler.cs` does this:
+
+- The hall is drawn into a pass of its own, at the size DLSS gives for the mode. `--dlss-sr-mode` sets the mode, quality
+  by default, which gives 2560x1369 for 3840x2054.
+- The pass is compatible with the window's: same formats, one sample, same subpass and dependency. Every pipeline
+  draws into it unchanged.
+- The projection is jittered by Halton (2, 3) in clip space. The sign is the path tracer's: +1, `--dlss-jitter-flip`
+  for -1.
+- `slEvaluateFeature(kFeatureDLSS)` upscales into an RGBA16F image.
+- The cards' pass then lays that image over the window, and the cards and buttons over it at full size.
+
+Motion vectors:
+
+- They are an image of zeros, cleared once, with `cameraMotionIncluded` false. Streamline computes the camera's motion
+  from the depth and the matrices (sl_consts.h).
+- What moves by itself has no vectors of its own and may trail: the robots' arms, the tower's turn, the screens.
+
+Textures and MSAA:
+
+- The materials' sampler takes DLSS's mip bias, log2(drawn / window): -0.58 in quality.
+- Low quality's 4x MSAA gives way to DLSS when Streamline offers it ("its edges smoothed by DLSS instead of MSAA").
+- F7 switches DLSS off and on at run time. Off, the edges are not smoothed until the next start.
+- `--no-dlss-sr` keeps the MSAA.
+- Path tracing keeps Ray Reconstruction and leaves this pass out.
+
+Streamline 2.10.0's `sl_dlss.h`, read at the v2.10.0 tag:
+
+- `DLSSOptions` (version 3, `{6AC826E4-…}`) is 88 bytes. Its offsets are checked by the selftest, with
+  `DLSSOptimalSettings` (`{EF1D0957-…}`).
+- `EvaluateRayReconstruction` and `EvaluateSuperResolution` now share one `Evaluate`.
+
+Measured in hidden runs (3840x2054, port 8899):
+
+- 395, 588 and 842 evaluations in three runs, no failure, no `presentCommon`.
+- The window's image and its cards look right.
+- With a fixed view (`--view 4`, the window's peek at 8 s), the brick wall's mean absolute Laplacian is 4.43 at +1
+  and 4.29 flipped; the bookcase's is 4.59 and 4.42. 4x MSAA at full size gives 5.68 and 6.52: the covers' small
+  print is softer through DLSS quality than drawn at 4K.
+- Frame times were not measurable that evening. The live window at 4K, Whisper and Ollama held the GPU at 100 %, and
+  the same command gave 9 to 52 fps from one run to the next. Still to measure on a quiet GPU, or live by F7 on the
+  RTX card.
+
+Live, with frame generation, the first window failed after about ten seconds and turned DLSS off: `slSetConstants:
+missing constants`. Streamline logged "Setting different 'common' constants multiple times within the same frame is
+NOT allowed!". One frame was recorded twice on one `BeginFrame` token, after a 272 ms frame. `Evaluate` now skips a
+second evaluation on the same token (`Streamline.Skipped`); the last upscaled picture stays. The upscaler turns DLSS
+off only after 120 failures in a row.
+
+Shutting down still logs `dlssEntry.cpp destroyKernel(mvecKernel) failed 6`. It comes from the kernel that computes
+the camera's motion, and changes nothing on screen.
+
+## Glass: water globes and paperweights in the gallery (2026-11-16)
+
+The author asked: "Dans l'observatoire on a une dll de réfraction pour des objets en verre, peut on faire la même chose
+dans delta?" and "Peut être les démos devraient des 'boules a neige' sur une tablette … Même chose pour les artifacts."
+The Observatory's glass is not a DLL but a shader, `assets/glassworks.gdshader`: screen-space refraction. `GlassWork`
+does the same in Delta.
+
+- **Demos** are water globes on two oak shelves with brass brackets: a ball over a slate disc, an ivory card on a brass
+  post with the title in ink, and 70 gold and silver flakes seeded by the title.
+- **Artifacts** are paperweights in one row on a counter: a dome over an enamel plate in the group's colour, tilted
+  back, with the title and the group. The `tablettes` block (gallery/Blocks.fs) builds the shelves, counters and
+  plinths for both.
+- **How the glass is drawn.** Glass comes last in the hall's pass. The pass ends, the colour drawn so far is copied
+  (`GlassWork.Capture`), and the pass resumes with load ops (`RasterUpscaler.ResumePass`). Each globe's front faces then
+  bend the view ray (Snell, ior 1.5 for a dome, 1.4 for a ball), carry it through the glass and read the copy where it
+  lands. Schlick's Fresnel mixes in a reflection of the hall and the key light's highlight; a light tint thickens with the
+  path through the glass.
+- How far the bent ray travels was tuned by eye: 1.6 times the radius for a dome turned the plate into a smear, 0.5
+  keeps the title readable; 0.6 for a ball.
+- **Three ways.**
+  - With DLSS SR on, the copy is taken from the upscaler's colour image.
+  - Under path tracing the glass reads the tracer's picture, but the globes' contents are not traced yet, so the
+    globes show the hall behind them and are empty.
+  - Without either, the glass is a blended veil with its highlight.
+- Measured in a hidden 3840x2054 run with `--view 8 --dlss`: the log reads `SCENE glass: 18 globes, bent through a copy
+  of the hall`, with no Streamline evaluation skipped. The peeks show the cards and the domes' titles readable through
+  the glass. Frame time was not measured: the GPU was shared with the live window, Whisper and Ollama.
+
+*To verify*: the cost of the copy at 4K on a quiet GPU, and tracing the globes' contents so path tracing does not show
+them empty.
+
+### What each glass shows (2026-11-16)
+
+The author asked: "Les boules a eau devraient montrer la scène (exemple: démo, artifact) si possible".
+
+- **Inside a water globe**, the demo's picture stands at the back, curved like a diorama's backdrop: 110° of a cylinder
+  0.7 r round, 4:3. Glitter hangs in front of it. **Under a paperweight's dome**, the artifact's picture is set in the
+  enamel plate. In both, the title moves to an ivory label on the plinth's front. A demo or an artifact without a
+  picture keeps its title inside, as before.
+- **Where the pictures come from.**
+  - `GalleryPictures` loads 512 x 512 PNGs from `%LOCALAPPDATA%\delta\gallery\pictures` into one array image, read
+    once at start. Each file is named by the first 16 hex digits of the SHA-1 of its URL as the gallery reads it
+    (`Uri.AbsoluteUri`, so `château` is keyed as `ch%C3%A2teau`).
+  - The Low shader draws them as `Material.Pictured` (17), lit as satin paper plus half its colour from within, since
+    they are screens. Flat lighting and the path tracer draw each picture's mean colour.
+  - The pictures never enter the repository, because the artifacts are private.
+- **Demos.** `tools/gallery-pictures/pictures.ps1` screenshots each page in a throwaway headless Chromium, through CDP
+  on a local port. The browser is muted, refuses every permission, has its own profile, and is stopped afterwards.
+  Documentation pages are cropped to their video, image or canvas.
+- **Artifacts.** claude.ai answers a headless browser with a bot check, which is not to be got round. Each artifact's
+  files were therefore read with the Artifact tool and rendered locally: a page saved to disk, or a small local server
+  for the multi-file Atlas, and the Slides deck's cover. They were shot, then saved with `-From … -Url …`.
+- Measured in hidden 3840x2054 runs (`--view 8 --dlss`): the log reads `SCENE gallery pictures: 18`. All 11 globes and
+  the paperweights show their pages.
+
+### Optical effects for metal, wood and glass (2026-11-16)
+
+The author asked: "Tu regarderas si on ne peut ajouter d'autres effets optiques intéressants (pour métal, bois, et
+autres matériaux)". These were added to the Low shader, analytic and with no texture.
+
+- **Oak** (`Material.Oak`, 18). Lego has no wood surface, so the gallery's plain boxes in Blocks.fs's oak and dark oak
+  colours (`HallGallery.Oaken`) and the lectern's desk are drawn as boards.
+  - Flat-sawn grain runs along each face's longer side. The rings wander and the late wood is darker; pores show as
+    fine dark streaks, and each board has its own tone.
+  - The figure's sheen slides as the eye moves (chatoyance).
+  - Each line fades to its tone where it would fall under a pixel.
+- **A clear coat over wood** (oak boards and turned oak, `Material.Wood`). A second, sharp highlight and the hall's
+  reflection come off the face's smooth normal, not the grain's, weighed by a dielectric's Fresnel.
+- **Brushed metal.** Highlights stretch along the brush, which is a box face's first axis (an Ashikhmin–Shirley lobe
+  with its energy kept): aluminium 0.85, steel 0.6, brass 0.2.
+- **Worn metal** (steel and brass). The polish varies over centimetres and over millimetres, duller and darker where
+  hands have been. The fine wear fades at a distance.
+- **Glass dispersion** (GlassWork). Red, green and blue are bent with indices 0.018 apart, so a globe's edges and the
+  glitter seen through it fringe as through a prism.
+- The path tracer draws oak in its colour, oiled; Flat draws it in its colour.
+- Checked by eye in hidden 4K close-ups of the demos' counter: the grain reads as oak, not as stripes, after one round
+  (the first rings were too even), and the flakes fringe.
+
+*To verify*: the shader's cost on a quiet GPU. Steel's brushing reads best under a grazing light, and the counter's
+front faces away from the key light.
+
+## The hall under path tracing: shell and gallery traced (2026-11-17)
+
+The author's screenshot, with Max out (path tracing on), showed the globes and the lectern's book floating over a grey
+void: « des choses s'affichent mal ». Under path tracing, the composite covers everything the tracer did not see, and
+the tracer sees only what was drawn with `Draw` the frame before (RayScene). The hall's shell (walls, ceiling, windows,
+bulbs) and the whole gallery were drawn with `DrawUntraced`, so they vanished; only the glass and the book, drawn after
+the composite, were left.
+
+- The gallery is drawn with `Draw` now, so it is traced.
+- The shell is drawn with `DrawLetThrough`: it is traced with instance mask 0x02, while shadow rays and the path
+  tracer's bounces trace with mask 0x01 (`RayScene.ShadowMask`). The eye sees the walls, while the key light and the sky
+  still come in through them as they did when the shell was not traced. The Low shader's ambient occlusion still uses
+  0xFF, so the walls darken the corners.
+- The path tracer's `beam()` had only the pool around the robot, which fades out by 6 m; the gallery, at x ≈ -6, was
+  left in near-black. It now has the Low shader's pools as well: the pendant lamps, the knots' floor, the gallery and
+  the catalogue.
+- A gallery picture (Material.Pictured) glows from within under path tracing as under Low.
+- Checked in hidden 4K `--view 8 --path-tracing --dlss` renders: walls, shelves, globes and courses shown and lit;
+  path tracing GPU 9.1 ms p50 at 1920x1027 through Ray Reconstruction.
+
+The RTX panel's « offered, unused » rows (ray-traced shadows replaced by path tracing, SER, opacity micromaps, present
+wait, MSAA) are information, not errors.
+
+*To verify*: the globes under path tracing show each picture's mean colour, because the path tracer does not read the
+picture maps yet.
+
+## The office: a question mark over a waiting robot, rings turned by hand (2026-11-17)
+
+The author asked for two things:
+
+- « quand une session claude pose une question je veux voir un symbole "?" au dessus du robot dans la scene et pouvoir
+  repondre a la question »;
+- « je veux pourvoir faire tourner la roue des plateaux des robots a la souris ».
+
+**The question mark.** While wmux says a session's pane is blocked (OfficeActivity.Waiting), a red glass disc with a
+« ? » on each face floats over its robot. It rocks 35° either side and bobs; the robot's red beacon lights as before.
+
+- The disc is the Ask widget's own mesh, so the pose's glow lights it. The marks are child Glyph widgets, left pale:
+  a pose's glow lights only its instance's own mesh.
+- Hidden otherwise.
+- Not drawn in the flat view, whose row lamp already blinks.
+- At 48 stations the tree holds 1916 instances, within the scene's 2048.
+
+**Turning by hand.** A left press on a robot no longer clicks at once.
+
+- Moving the mouse sideways turns that robot's ring, half a turn across the window's width.
+- Letting go within 6 px of the press is the click as before: it selects, and a second click shows the pane.
+- The host sums each session's turns, and passes them and the session held in OfficeState: `Turns` and `Turning`,
+  init properties, so that older images keep their constructor.
+- The module adds a ring's turns to its own slow spin, and holds the ring while one of its robots is held.
+- The flat view, whose rows do not turn, clicks on press as before.
+- A window that loses focus, the tool wheel or the shelf opening let the robot go.
+
+*Not done*: answering from the scene. The host knows that a pane is blocked, not what it asks. Showing the question
+needs its session's transcript, and answering means typing into another session's pane through wmux. That is to be
+agreed with the author before it is built; the click that shows the pane stays the way to answer.
+
+**Checked:**
+
+- Widget tests: the « ? » shown over the waiting session's robot alone, lit; a ring turned by 0.5 rad moves its robot
+  0.32 m and stands still while held; 48 stations within the budget.
+- The scene's selftest.
+- Hidden `--demo --view 2` renders with the module at v0.4.0: the « ? » legible from the front and three-quarters.
+
+*To verify*:
+
+- the drag by hand in the live window;
+- a real blocked session's « ? ».
+
+## The demos' videos inside their water globes (2026-11-17)
+
+The author asked: « certaines demos sont des videos, peut on jouer les videos dans les boules de verre ? ». They then
+pointed at https://spareilleux.github.io/learn/demos/. On that page, two GeoTiles entries are videos:
+
+- a drone flight over Ottawa;
+- above the Château Frontenac in Québec.
+
+**The files.** `tools/gallery-pictures/videos.ps1` fetches each video and cuts it as its picture is cut.
+
+- It finds, for each demo of gallery.json, the first `<video><source src="….mp4">` after its anchor and before the next
+  heading.
+- FFmpeg cuts 4:3 from the middle, scales to 512 × 512, keeps 24 images a second, drops the sound and encodes H.264.
+- The result goes to `%LOCALAPPDATA%\delta\gallery\videos\<key>.mp4`, under the picture's key. Ottawa is 6 MB and
+  Québec 8 MB.
+- Like the pictures, the videos stay on this machine and never enter the repo.
+
+**The scene (GalleryVideo).** A video plays only in a globe whose picture is also held. Its frames replace that
+picture's layer in the gallery's array, so the shader, the meshes and the glass are unchanged.
+
+- Within 4.5 m of the eye (the gallery's view, key 8, stands 3.6 m off), an FFmpeg process decodes the video in a loop
+  at its own pace (`-stream_loop -1 -re`) into raw RGBA on stdout.
+- A thread reads one whole image at a time and makes its mips on the CPU into a flat chain (`MaterialTextures.Chain`,
+  the same averaging as the stills). It swaps that chain into a triple buffer.
+- At the start of the next frame, outside any render pass, the latest image is copied into that frame's staging and
+  then into the layer (`ArrayImage.Replace`).
+- Past 5 m the decoder is stopped and the still picture is put back.
+- At most four videos play at once, the nearest.
+- Without ffmpeg on PATH, or with `--no-videos`, the globes keep their pictures. The log says which applies.
+- `--videos DIR` reads the videos from another folder.
+
+**The barrier.** The first barriers waited on all commands, and the GPU's p95 rose to 26 ms a frame, against 6 without
+videos. The layer's only reader is the Low fragment shader, so the barriers now wait on fragment shading alone.
+
+**Checked** (hidden runs on port 8899, `--view 8`, 1600 × 900, on a loaded machine):
+
+- Both globes play, about 590 images each before the hall's tour leads the eye away. Three peeks 4 s apart show both
+  pictures changing.
+- GPU per frame, p95, over four alternating runs: 11.2 and 11.1 ms with the videos, 11.3 and 10.4 ms without.
+- Each FFmpeg process takes about 3 % of one core and 50 MB.
+- No ffmpeg.exe is left after the scene exits.
+- The selftest checks two things: a flat chain equals Chain's levels end to end, and which globes play (nearest first,
+  at most so many, Near and Far).
+
+*To verify*: the live window, walking up to the counter.
+
+**Later the same evening.** The author added three requests.
+
+**Colossus.** « the colossus est une video et ne joue pas presentement dans la scene ». Its gallery URL is a page
+without an anchor (observatory/brutal/), and videos.ps1 looked only after an anchor. A page without one now gives its
+first video: colossus.mp4, 1280 × 536, cut 4:3 from the middle like its picture, 6.6 MB.
+
+**On the wall.** « je veux pouvoir projetter les videos sur le mur ».
+
+- The nearest video playing is projected on the left wall over the demos, as a projector's light: 4:3, 1.8 m wide.
+- Its foot is 0.45 m over the water globes' tops, centred on them along the wall (GalleryVideo.Place). It sits at
+  z 2.28, y 2.54 with today's gallery.
+- It fades in and out over 0.8 s.
+- The Low shader adds it on what faces the room within 6 cm of the wall: the wall's own colour times the picture,
+  three times over. The plaster's texture and stains show through.
+- The Frame uniform grows by a vec4, the screen. The layer and strength go in Options' two free floats.
+- Not under path tracing.
+
+**Inertia.** « je veux un peu d'inertie quand on fait tourner les robots ». A ring let go coasts on (OfficeSpin).
+
+- Its speed while held is smoothed over 60 ms. A ring held still before it is let go does not coast.
+- It then slows by e every 0.7 s and stops under 0.02 rad/s; at 3 rad/s it coasts about 2.1 rad.
+- The speed is capped at 8 rad/s.
+- Taking the ring again stops it.
+- The distance is exact under exponential slowing, so a slow frame turns it as far as several quick ones.
+
+**Checked:**
+
+- The selftest covers OfficeSpin's coast, the still release, the frame independence and taking a ring, and the
+  projection's placement.
+- In a hidden run at view 8, the projection shows Québec's video on the wall over the demos, and three videos play.
+- GPU p95 7.7 ms.
+
+*To verify*: the coast by hand in the live window.
+
+## Answering a waiting session from the scene (2026-11-17)
+
+The author agreed to the design (« Tu as mon accord »): read the question from the session's transcript and answer
+it in its pane through wmux.
+
+**Opening it.** A click on a robot under its « ? » opens the shelf on that session's question (SessionQuestion). Its
+pane is known to wmux; other clicks select and show the pane as before.
+
+**The question.** It is read from `~/.claude/projects/*/<session>.jsonl`, the last 512 KB only, never written.
+
+- The question is the last tool call with no result yet.
+- An AskUserQuestion with one single-choice question shows its text and options. Option n sends the key n.
+- Several questions, or several answers at once, are left to the pane, and the shelf says so.
+- Any other tool is a permission: the tool, then what it would do (its command, file, address or description).
+  - Yes sends `1`; No sends Escape.
+  - The pane's « don't ask again » is not offered: it widens a permission.
+- Words that look like secrets are masked: `name=value` and `name: value` for token, key, secret, password and pwd,
+  `Bearer …`, and known token shapes.
+
+**The answer.** It goes through wmux.
+
+- When the agent gave wmux its own choices (`report-agent --choices`), they are offered instead and sent with
+  `answer-agent`.
+- Otherwise the key goes to the pane with `send-key <key> --surface <id>`. The surface is always named, never the
+  scene's own.
+- « Go to this session » shows the pane.
+- Answering closes the shelf. The « ? » goes when wmux sees the pane working again.
+
+**Checked:**
+
+- The selftest covers the pending call, a resolved transcript, the numbered options, Yes/No, masking, several
+  questions and wrapping.
+- `scene --question <session> <surface>` prints what the shelf would show, and sends nothing. On a live transcript
+  (this session) it gave « Permission: PowerShell », the command, then Yes (key 1) and No (key esc).
+
+*To verify*: a real answer by hand. That Claude Code takes the number key in a permission prompt and in
+AskUserQuestion is from the wmux skill's own choices (`key: "1"`), not yet seen here.
+
+## The office: a cubicle per wmux workspace (2026-11-17)
+
+The author asked: « peut on rajouter des cubicules aux petits robots (1 par workspace wmux) ».
+
+- Each wmux workspace's run of slots on a ring (its sign, then its stations) now stands in a cubicle.
+  - A fabric partition runs behind the stools, along the ring.
+  - A partition stands on each side, halfway to the neighbouring slot.
+  - Each partition is 0.46 m high at full scale, with an aluminium rail on top. The front stays open toward the view.
+- The fabric is one of six muted colours, chosen from the workspace's ID by FNV-1a. So a refresh, a restart or a
+  renamed workspace keeps the colour.
+- Two cubicles side by side each keep their own side partition, 12 mm in from the halfway line, so the two do not
+  flicker into one.
+- A workspace alone on its ring gets one partition all round and no sides.
+- The sessions outside wmux get no cubicle.
+- **One widget per ring.** Each ring's cubicles are a single `cubicles@1` widget (`cub-<ring>`), whose `runs` text
+  lists each run's first and last angle and its colour, and a pose turns it with its ring.
+  - So the instance budget does not grow with the workspaces: 48 stations still fit within the 2048.
+  - Its triangles are about a hundred per workspace.
+
+**Checked** (widget-tests):
+
+- One widget on the ring of the enclosures check, with nothing in front of the session outside wmux.
+- A partition above 0.3 m between the first workspace's last station and the second one's sign.
+- The cubicles' pose is the ring's turn.
+- Every earlier check still passes, the 48-station budget included.
+
+*To verify*: the look in the live window. Hidden GPU runs are paused since the crashes of 2026-11-17, so no peek was
+taken.
+
+## The roll-up door onto the streets of Ottawa (2026-11-17)
+
+The author asked: « Quand je clique sur le garage, puis-je me promener dans les rues d'Ottawa (voir
+https://spareilleux.github.io/learn/demos/#geotiles-a-drone-flight-over-ottawa) ». Asked what the garage is: « Il y a
+une porte en métal qui peut s'ouvrir ». Asked how to walk there: in the Delta scene itself, OpenStreetMap by default,
+Google's photorealistic tiles on choice. This is the first slice, OpenStreetMap only.
+
+**The door** (`StreetDoor.cs`).
+
+- The front wall now has an opening, and its curtain of 36 steel slats is drawn on its own.
+- A click on the door rolls the curtain up into its box over 3.2 s, gathered toward its top. A second click rolls it
+  down again.
+- Open past 80 %, the camera may go through the doorway (`FreeCamera.Confine`). The hall, the doorway and the streets
+  are three boxes; a move stays inside a box that holds both its ends.
+- Once outside, the door can be clicked again from the street. Closing it leaves you outside until you walk back in.
+
+**The streets** (`OttawaStreets.cs`).
+
+- **The data.** The first opening sends one Overpass request: the buildings and the streets within 450 m of Parliament
+  Hill. The answer is kept in `%LOCALAPPDATA%\delta\ottawa\overpass.json` (ODbL allows it, with attribution).
+  `scene --streets` fetches or reads it without a window and prints the counts.
+- **The buildings.** They are extruded from their `height`, `building:levels` or 8 m, after GeoTiles'
+  `OsmBuildings.cs`.
+- **The streets.** They are ribbons on a kilometre of pavement, their width by kind.
+- **The scale.** Everything is at the hall's scale, whose eye stands 1.1 high: one metre is 0.647 (`FreeCamera.Scale`).
+- **Where the hall stands.** The door is placed from the data: the point of Wellington Street nearest the Centre Block,
+  14 m further from it, the door facing the Centre Block. Wellington runs from the south-west to the north-east there,
+  so the hall stands where Metcalfe meets it, the Peace Tower straight ahead, north-north-west.
+- **What is left out.** Buildings and street segments reaching the hall's footprint are left out.
+- **The first fetch, on 2026-11-17.** 553 buildings and 598 streets, 17,446 triangles. The door stands at
+  (207, −42) m from Parliament Hill's point.
+
+**Drawing.** While the door is open or the eye is out, the far plane goes from 40 to 350 and the haze thins to
+0.12 of its density. The city was first drawn untraced; it is now traced for its shadows (below).
+
+**Checked.**
+
+- The selftest covers the door's roll, a click on it, and placement from a made-up answer: the Centre Block straight
+  ahead, east on the right, a building where the hall stands left out, heights, outward walls, winding and an L-shaped
+  roof.
+- `--streets` ran on the real answer.
+
+**Seen, hidden, at 1600 × 900.** The author lifted the pause on hidden runs for this. `--door inside|street|back` opens
+the door at once and sets the camera.
+
+- The first render showed the buildings almost black. The Low shader dims what lies outside the hall's pools of light
+  to a tenth, and what stands high. Beyond the front wall (z past 6) the streets are now in daylight at every height.
+- Then all three views were seen:
+  - from inside, the Centre Block and the Peace Tower straight ahead through the door;
+  - from the street, the same, larger;
+  - from the street looking back, the hall's concrete box with its door open and its inside lit.
+- 55 fps, p95 17 ms, as without the streets.
+- The sky is the haze's colour, a dusk blue.
+
+*To verify*: walking out by hand.
+
+**Later the same evening, the author away.**
+
+- **Attribution.** A dark plaque on the hall's front wall, right of the door, facing the street, reads « Ottawa:
+  © OpenStreetMap contributors » and « openstreetmap.org/copyright (ODbL) ». It is drawn with the streets, so it shows
+  whenever they do. It was seen in a hidden `--door back` render.
+- **Collisions.** Out in the streets, the walking body stays `Radius` off every building that stands on the ground, and
+  one found inside is put back out by the nearest wall. A building beginning higher than 2 m is walked under. Flying
+  passes over and through as before. The selftest walks out through the door and not through the wall beside it, and
+  stops against a wall from outside and from within.
+
+**More real (same night).** The author: « Les rues n'ont pas l'air très réaliste, des idées? ». Proposed: shadows, a
+day sky, windows; then the ground; then Google's tiles. « Ok » for the first three.
+
+- **Parts, not outlines.** OpenStreetMap draws a complex building twice: its outline, with the tallest height, and its
+  `building:part`s. Drawing both turned the Peace Tower into a 92 m block over the whole Centre Block. An outline with a
+  part's centroid inside it is now left out, as the Simple 3D Buildings rule says; the parts carry the shape.
+- **Roofs and colours.** A `roof:shape` other than flat is a pyramid to the ring's centroid, `roof:height` high or 3 m
+  (at most 0.8 of the building). A roof is `roof:colour`, else verdigris for `roof:material=copper`, else grey. Walls are
+  `building:colour`, else by `building:material` (limestone, brick, glass, concrete), else the stone as before.
+- **Windows** (`Material.Facade`, 19). The Low shader draws a window every 2.2 m along a wall and on every 3 m floor, the
+  ground floor's taller, with a sill; each pane its own shade of dark glass, mirroring the sky. Below a few pixels a
+  window fades into the wall, so nothing shimmers far away. The path tracer and Flat draw the wall's colour (the path
+  tracer's photographed-material branch now stops at 16, or 19 would have read as a brick scan).
+- **Daylight.** Out in the streets, the key light is an afternoon sun from the south-west (+z is north there), the fill
+  is the sky's blue from the whole dome (a wall sees half of it, so the shaded side is not black), and what a surface
+  mirrors is the sky and the paving, not the hall. The clear colour and the haze are a day's blue whenever the streets
+  are in view. Inside, nothing changed.
+- **Which fragments are outside.** Past the front wall (z > 6), and the whole city wherever it stands: the city's draw
+  carries a glow of alpha −1, no light, which the shader reads as `city()`. Without it, the buildings south of the hall
+  were lit as its inside, dark.
+- **Shadows.** The city is now in the ray-traced structure, with its own instance mask (`RayScene.CityMask`, 0x04).
+  A street fragment's key-light rays trace 0x05 up to 160 (a 60 m tower's shadow, 45 of the hall's units, with room);
+  a fragment of the hall's inside still traces 0x01 up to 40, so no building outside shades the hall's floor through
+  the open door.
+
+Seen hidden at 1920 × 1080, `--door street|inside|back|air|lawn`: the Centre Block in sandstone under copper roofs, the
+Peace Tower with its four pinnacles, shadow between the wings and the tower; the buildings behind the hall in daylight.
+54 fps, p95 17 ms, as before. `--selftest` passes. The Library of Parliament's roof is grey: its data has no copper tag.
+
+**Google's 3D tiles, on choice (2026-11-18).** The author asked whether Google's tiles could be cached, then whether
+Ottawa could be imported into Blender (Blosm), then: « je veux pas etre illegal », « regarde ce qui serait vraiment
+photo realiste », « ok on va essayer avec google ».
+
+- **What the terms say** (read on 2026-11-18, non-EEA version). Google Maps Platform Terms 3.2.3: no pre-fetching,
+  storing or bulk download of tiles; no caching but as the Service Specific Terms allow (they have no Map Tiles section,
+  so the Map Tiles policy's HTTP-header caching is all); « Customer will not create content based on Google Maps
+  Content », 3D building models among its examples; not « with or near a non-Google Map ». The Map Tiles policy allows
+  third-party renderers, own 3D objects over the tiles if not derived from them, and asks for « Google Maps » (or the
+  logo) and every tile's providers along the bottom. So no Blender import: Blosm keeps the tiles on disk and makes a
+  model of them.
+- **What the scene does** (`GoogleStreets.cs`, `GeoTiles/`). G chooses Google's tiles, or OpenStreetMap again
+  (`--google-tiles` from the start). Once the door's place is known (from OpenStreetMap's answer), one fetch a run:
+  the root, then the tiles around a point 150 m out of the door, 330 m round, judged from a walker's eye at the door,
+  at most 160 meshes and 450 requests (`Capped`), in memory only. Each image is stretched to a 512 × 512 layer of one
+  array (binding 7, at most 320), the triangles `Material.Aerial`, which the Low shader draws as photographed, unlit,
+  in the day's haze. What stands where the hall does is left out; the ground at the door becomes the floor's level.
+  While they are drawn nothing of OpenStreetMap is, the buildings do not stop the walker (no collision is derived
+  from Google's tiles), and a « Google Maps » card with the providers sits bottom right, HUD or not.
+- **The selection, changed from GeoTiles'.** GeoTiles walks the tree depth first and stops at the cap: the first run
+  (305 requests) fetched 160 tiles and none at the door (its ground fell back to 36 m). It now refines best first, the
+  open tile with the largest error on screen first, and all or nothing: a tile is replaced only once all its children
+  are fetched down to meshes, else it stays. The selftest holds both.
+- **Seen, hidden, `--door street --google-tiles --tour-after 9999`.** Three runs: 305, 429 and 430 requests, the key
+  in no log line. The last: 159 tiles, 412,783 triangles, 222 images, loaded in about 55 s; the ground at the door
+  45.3 m over the ellipsoid; 48 fps, p95 17.0 ms, one 478 ms frame for the upload. The Centre Block, the Peace Tower
+  and the renovation's two cranes are photographed; what is near the eye is coarse, the cap spent first on the
+  hill (270 of the requests are nested tilesets).
+- *To verify*: G by hand live; the cost the console reports for those runs; whether the providers' line ever names
+  more than « Google » here.
+
+**Still to do:** the ground of OpenStreetMap's streets (lawns, sidewalks, trees, lamps); finer tiles near the eye
+(more requests a run, the author's call).
+
+### Less haze, a racing scooter and a drone (2026-11-18)
+
+- **Haze.** « je veux moins de brouillard »: the streets' haze is 0.04 of the hall's (half the light through at
+  290 m), not 0.12 (96 m); the Parliament's copper roofs read from the door.
+- **The rides** (`Rides.cs`), « je veux pouvoir me balader en scooter ou en drone comme dans l'observatoire - je veux
+  un scooter de course tres rapide, meme chose pour le drone ». After the Observatory's segway.gd and drone.gd, but
+  driven by hand. V: a racing scooter, 120 km/h, 220 with Shift, 0 to 100 km/h in about 3 s, tyres holding 1.3 g so a
+  bend at speed is wide, leaning into it; the mouse steers once it rolls. X: a drone, 150 km/h, 300 with Shift, 3 g of
+  thrust, tilting along it, up to 150 m (the streets' ceiling, for F's flight too). O: behind it or on it; Esc or its
+  key again ends it (the scooter leaves you where it stood, the drone gives the view back where you stood). The field
+  widens up to 22° with the speed (not under `--reduced-motion`). OpenStreetMap's buildings stop the scooter (a wall
+  taken over 8 m/s takes 70 % of the speed), Google's tiles do not; the drone passes through buildings. A dial at the
+  foot of the picture gives the speed (and the drone's height), made again at most five times a second since an
+  upload waits for the GPU. `--ride scooter|drone [--ride-view]` starts one a second after the splash, throttle held,
+  for captures.
+- **Seen, hidden.** `--door street --ride scooter`: 120 km/h at 4 s on Wellington, from the seat (the front lowered
+  so that the windscreen sits under the horizon) and from behind; `--ride drone`: 148 km/h at 58 m over the Centre
+  Block, 52 fps. *To verify*: by hand, the mouse's steering and a crash into a building.
+
+### A projection screen for the gallery's video (2026-11-18)
+
+« je veux un vrai ecran de projection avec un fonds blanc », and « il y a des moires bizarre »: the nearest globe's
+video was projected on the left wall's concrete, its colour times the scan's, and the video's fine lines beat against
+the scan's into moiré. A pull-down screen now hangs where `GalleryVideo.Place` puts the picture: white cloth
+(`Material.Screen`), a black border, its roller's case above and the weighted bar below. The video falls on the cloth
+alone, in the projector's light (1.15 times its colour), and the room's light on the cloth is dimmed by 70 % where the
+picture falls, so that its darks stay dark. Seen hidden with `--view 8`: the Québec flyover sharp on the screen.
+
+### A gymnasium: the Brickyard building made bigger (2026-11-18)
+
+« je pense qu'on va avoir besoin d'un batiment beaucoup plus grand, peut etre un gymnase », then « le gymnase je
+parlais pour etendre le batiment brickyard », and « Attaque […] l'extension gymnase ». `Gymnasium` adds a wing on the
+hall's right, 34 m by 24 m and 9 m high inside, its front flush with the hall's on the street. A door 2.3 m wide and
+4 m high opens in the hall's right wall, just past the knots' floor's stair (z 4.3 to 5.8).
+
+- **Inside.** A maple floor of butted 12 cm strips, a FIBA court of 28 m by 15 m painted on it with its keys stained
+  blue, and two hoops at 3.05 m on wall-mounted backstops. Blue pads on the end walls, four rows of bleachers along
+  the front wall, seven Warren trusses with 21 high-bay lamps under them, five clerestories front and back, two on the
+  right wall, and a scoreboard.
+- **Lighting.** The Low shader lights the whole wing as one pool, with a sharp edge so that the hall's face of the
+  shared wall stays the hall's. Walls, roof, windows, trusses and lamps let the key light through, as the hall's shell
+  does. Traced, the trusses and the lamps had striped the floor with dark, grainy shadows. The floor, the court, the
+  hoops and the bleachers are traced. The haze in the wing is 0.3 times the hall's, and the far plane indoors went
+  from 40 to 60 so that the wing's far end shows from the hall.
+- **Outside.** The building's outer walls and roofs, beyond its inner faces by more than a wall's thickness, are now
+  in daylight; before, the hall's were dark from the street. The windows have outer faces too.
+- **Walking.** `FreeCamera.Confine` gained two spaces that are always open, the door and the wing. The bleachers are
+  an obstacle. The streets leave the building's whole footprint out: OpenStreetMap's buildings and roads in
+  `OttawaStreets`, Google's triangles through `Gymnasium.Covers`.
+- **Two fixes found by eye.**
+  - Far off, each board's rounded edge was a pixel catching the light, so the floor's rows made moiré. Oak's edge now
+    fades where it would fall under a pixel.
+  - The front wall's inner face sat exactly at the shader's « outdoors » line (z 6.0), so the streets' sun lit some
+    of its pixels at random. The line is now halfway through the wall, at 6.08.
+- **Checks.**
+  - SelfTest covers the wing's sizes, the room round the court, the rims' height and the open door. It also walks the
+    body in through the door, back out, and into the bleachers, and checks that the wall beside the door stops it.
+  - Seen hidden with `--gym court|door|stands`, and from the air with `--door wing`, at about 50 fps hidden.
+  - Not yet seen: the wing under path tracing, a ride through the door, and the live window.
+
+### Real rope on the knots' floor, and frosted windows onto the gymnasium (2026-11-18)
+
+The user: « arrange moi mes noeuds marins pour avoir de la vraie corde » (with a Blender rope tutorial), then « je veux
+que la fenêtre sur le gymnase ne soit pas transparente ».
+
+- **The rope.** Each strand has 10 sides instead of 7, so that a close look shows no facets. The shader (Material.Rope)
+  draws five round yarns per strand between narrow grooves, warm in their shadow rather than grey, with fibres along
+  each yarn, a tone that wanders along the rope, and loose hairs that catch the light at grazing angles.
+- **Whipped ends.** Each open rope ends in a band of dark tarred twine, 3 radii long, wound round the three strands
+  and carried 0.45 radii past their slanting cuts (KnotFloor.Whip). The shader draws its turns as rings: a negative
+  Edge.z gives it the twine's pitch instead of a strand's radius.
+- **The windows.** The right wall's two windows now give onto the gymnasium. Their panes are frosted, lit like the wall
+  and no longer glowing with daylight (HallShell).
+- **Checks.**
+  - SelfTest: the strands stay within the rope's radius, and both ends are whipped, the twine within 1.15 radii of
+    the path.
+  - Seen hidden with the new `--knots table|near|close|wall` views.
+  - Rope vertices went from 1.18 to 1.69 million. Hidden, with the live window running beside it, the knots in view
+    took the frame rate from 48 to 44 fps.
+
+### The gymnasium in painted block, lit when traced; Google's tiles by default, the city's edge (2026-11-18)
+
+The user: « le rendu du gymnase est pas terrible … peut être fait du comfyui / blender ? », « les lumière en ray trace
+ne sont pas réalistes », « je veux pouvoir me balader en scooter dans la ville », « Je veux Google 3d tiles, pas
+OpenStreetMap ».
+
+- **Walls.** The wing's own walls are painted concrete block (Material.Block, drawn by the Low shader). The blocks are
+  40 by 20 cm in running bond, with recessed darker joints, a porous face under satin paint, and a blue band at
+  2.3 m, inside only. The hall's wall is lined with it on the gymnasium's side, round the door.
+  - The roof's underside is a grey deck.
+  - The floor's strips vary less in tone.
+  - No ComfyUI or Blender: the cast-concrete scan, stretched over 30 m walls, made the stains. A wall drawn by the
+    shader has no tiling and no download.
+- **Traced light.** The path tracer's light pools (PathTracer `beam`) had no gymnasium, so the wing stayed at a tenth
+  of the light. They now have the wing and the building's outside in daylight, as the Low shader does. The block's
+  joints and band are the Low shader's alone: traced, the walls are their colour.
+- **Google by default.** With a key, the streets are Google's 3D tiles from the start; G or `--osm` goes back to
+  OpenStreetMap. OpenStreetMap is still fetched for the door's place.
+  - It shows while the tiles load, about 25 s after the door opens, then gives way to them.
+- **The city's edge.** The streets' space was ±400 by 400 units (±620 m by 620 m), beyond what the tiles cover. The
+  scooter rode out into an empty plain.
+  - It is now the square inside the tiles' circle (Reach round a point Ahead of the door): ±150 units across, and
+    out to 244 units from the door.
+  - The rides' tests run on a wider field (`StreetsOverride`). A new check holds the turbo for 20 s and stops at the
+    edge.
+- **Seen hidden.**
+  - `--gym door|court`, and `--gym court --path-tracing`.
+  - `--door inside --ride scooter`: OpenStreetMap at first, Google's tiles after 25 s, 430 requests.
+
+## The scene's improvement tree, slice 1: observe and judge (2026-11-18)
+
+The user: « peut on rajouter un systeme d'arbre de boucles agentiques (Decomposition recursive) qui regarde la scene et
+fait des ameliorations toute seule (En delegant des travaux en CI/CD dans des agents IA, et ensuite font les
+verifications toutes seules) ».
+
+Their three answers:
+- the agents run on this PC;
+- « aussi autonome que possible »: as autonomous as the standing rules allow, which means local commits only, with no
+  push and no live without their word;
+- the budget is the plan's tokens, not an API key.
+
+`tools/sceneloop` (Go), slice 1, changes nothing:
+
+- `observe` renders each reference view hidden:
+  - port 8899, never 8805;
+  - `--osm`, so that no request goes to Google;
+  - 1600x900.
+
+  It keeps each view's last picture and its frame rate in `shots.json`. The views are the hall, the office, the
+  gallery, the knots, the rope up close, the gymnasium and its door, the street and the wing from the air.
+- `critique` hands each picture to a judge.
+  - The judge is `claude -p` with a JSON schema, Read as its only tool, no MCP server and no session kept.
+  - Its environment has no ANTHROPIC_API_KEY, so the plan pays.
+  - Findings are ranked by severity times confidence into `findings.json` and `report.md`.
+- `run` does both, into a dated folder.
+- `go test` checks:
+  - that a hidden picture stays off 8805 and off Google;
+  - that the judge reads only and runs on the plan;
+  - the frame-rate line and the judge's envelope.
+
+The judge's first answer, on the gymnasium in 16 s (about 0.16 USD of the plan's tokens), was right that the lamps
+light nothing of their own and that the bleachers have no risers. It was also wrong in places: it wanted MSAA, which
+DLSS replaces, and it took the block for brick. The judge is the weak link, and slice 2's checks must not trust it
+alone.
+
+**Next slices.**
+- **Slice 2:** one finding goes to a worker, `claude -p` in a worktree on a `loop/…` branch with only the file tools.
+  `sceneloop` itself then:
+  - builds and runs the selftest;
+  - renders the finding's view before and after, and the other views against regressions;
+  - has a second judge compare before and after blind, in random order;
+  - holds a frame-rate floor.
+
+  It commits only what passes, retries once with the reasons, then gives up and writes them down.
+- **Slice 3:** a planner splits a large finding into smaller ones, up to depth 3. A parent passes only when its
+  children do.
+- Each pass is capped in agents. Its branch waits for the user's word to go live.
+
+**Slice 2, written (2026-11-18), not yet run end to end.** `sceneloop fix -repo <checkout> -findings <run>/findings.json
+-n <rank> -exe <base scene.exe> -out <dir>`:
+- It makes a worktree beside the checkout, on a new `loop/<date>-<view>-<title>` branch from HEAD, so the work in
+  progress in the checkout stays out of it.
+- The worker is `claude -p` (opus by default) in that worktree. It has Read, Edit, Write, Glob and Grep only, the run's
+  folder readable, no MCP server and no session kept. It runs on the plan.
+- sceneloop then checks the change:
+  - only scene/ and gallery/, never the lock file, the project file, Google's tiles or GeoTiles, at most 400 lines;
+  - the build and `SELFTEST ok`;
+  - every view rendered before (the base) and after;
+  - a blind judge on the finding's view (a.png and b.png in a random order, the order kept in `order.txt`);
+  - a blind judge on each other view whose picture moved by more than 4/255;
+  - each view at 85% of its frame rate or more.
+- A change that passes is committed on the loop branch. One that fails goes back once with the reasons, from the base;
+  then the pass gives up and writes the reasons in `outcome.json`. The worktree stays for a look either way.
+
+## The gallery's screen without a lamp through it, and formwork on the concrete (2026-11-18)
+
+The user: « les murs manquent de relief et on a des lampes plantees sur l'ecran de projection ».
+
+- **The lamp.** The demos' picture light (`lampe-demos`, 2.45 m up, its arms 0.75 m out) crossed the projection
+  screen hung over the globes (`GalleryVideo.Place`). `HallGallery` now leaves that light's boxes out. The Low
+  shader's wash on the wall is unchanged.
+- **The relief.** The cast concrete's walls (`Material.ConcreteCast`, vertical faces, Low shader) now show their
+  formwork, as architectural concrete does:
+  - 1.8 by 0.9 m plywood panels, their edges eased, their joints a dark 3 mm line;
+  - six conical tie holes a panel, 3 cm across;
+  - each panel its own tone of the pour;
+  - the scan's normals twice as deep.
+
+  The formwork fades where a panel's joint would be under a pixel. The path tracer does not draw it.
+- **Seen hidden.** `--view 8`: the screen is clear and the panels and holes read on the wall, 53 fps at 1600x900.
+
+## Gaia's planet turned by hand, and two screens facing each small robot (2026-11-18)
+
+The user: « je veux pouvoir faire tourner gaia (Avec un peu d'inertie comme les petits robots) », then « corrige
+l'orientation des ecrans de petits robots et donne leur 2 ecrans chacun ».
+
+- **Gaia.** The host now splits a module's triangles painted with an image (the planet) from its labels and boxes
+  (`SceneModuleGeometry.Split`, `ModuleSurface`) and draws them turned about their centre.
+  - A press on the planet and a sideways drag turn it, as if the hand held the point of its surface facing the eye
+    (`GaiaTurn`).
+  - Let go, it coasts on and slows as the office's rings do (`OfficeSpin`). A press that hardly moves is still a click.
+  - The module (1.3) is unchanged. The ring stays still.
+- **The small robots' desks.** The one monitor stood side on, its screen to the camera. Each desk now has two monitors
+  side by side, square to the desk, their screens facing the robot.
+  - Each screen is lit by the session's glow, as the old one was.
+  - Turned toward the robot, each monitor would have been a widget of its own: 48 stations then passed the scene's 2048
+    instances (widget-tests). Square to the desk, they cost one instance more a station.
+- **Checked.**
+  - `SELFTEST ok`, with GaiaTurn's checks: the hit, the hand leading from the front and from behind, the turn about
+    the centre.
+  - `check-widgets.ps1` passes.
+  - Hidden `--view 2` with the office module, and `--view 1` with Gaia 1.3 in an isolated `--module-dir`: the screens
+    face the robots, and the planet is drawn in its place.
+  - Not checked: a drag by hand in the live window.
+
+## Google's tiles nearer the eye: spikes laid flat, a smaller place, refined along the ride (2026-11-18)
+
+The user, on a street-level picture full of blades and blobs: « comment ameliorer la vue d'ottawa et des google 3d
+tiles ?? », then « Fait tout ca » to four proposals, the paid one among them. Google bills each request that returns a
+3D tile: 1,000 free a month, then 6 USD a thousand (SKU "Photorealistic 3D Tiles", read on 2026-11-18).
+
+- **Spikes laid flat (A).**
+  - The ground of each 8 m cell is its lowest vertex.
+  - In a tile coarser than 3 m, a vertex less than 8 m over that ground comes down to 15 cm over it, with its
+    photograph. The melted cars, trees and people then lie on the street instead of standing up.
+  - Walls and roofs over 8 m and the fine tiles keep their heights. The mesh stays whole, with no hole.
+  - The geometric error rides on GeoTiles' `Batch.Error`.
+- **A smaller place, nearer the door (B).** Ahead 110 m and Reach 260 m (150 and 330 before). The error is judged on a
+  1440-pixel screen. The city's edge for the walker and the rides shrinks with it.
+- **A balcony (C).** `--door balcony`, 12 m up over the door. The drone (X) also rises over the street.
+- **Refined along the ride (D).**
+  - Past 70 m from every place refined for, the tiles are chosen again with the eye's places as the selection's
+    `Path`, at most 220 meshes.
+  - What was fetched comes from this run's memory (`Fetched`, never the disk), the root among them, so the session
+    and the URLs stay the same and only new tiles are asked for.
+  - The run stops at 450 + 300 requests in all.
+- **Measured hidden** (two runs, 1,023 requests):
+  - `--door inside --ride scooter`: the opening took 430 requests, 159 tiles, 130,213 vertices laid flat. One
+    refinement for the ride took 163 new requests (593 in the run), 220 tiles; the trees near the rider were sharper.
+    The automatic ride stopped under a structure, a poor view.
+  - `--door street`: the Centre Block is sharp, fewer small blades. Coarse posts taller than 8 m (the gates) and a
+    coarse blob at the eye remain.
+  - 52 fps.
+- **To do:** `--door balcony` is not yet seen.
+- **More requests an opening.** The opening stopped at its cap (270 nested tilesets, 159 meshes). Asked whether to
+  raise it to about 700 requests (about 4 USD an opening once the free 1,000 a month are spent), the user answered
+  « 2 oui ». Now:
+  - an opening has 700 requests and 250 meshes, its nested tilesets capped at what is left;
+  - a ride has up to 320 meshes, within 700 + 300 requests a run;
+  - 448 image layers, 600 MB on the GPU.
+  Live from the next opening of the door; not yet measured.
+
+## Street View at street level (2026-11-18)
+
+The user, on the 3D tiles at a walker's height: « toujours pas terrible », then « y'a pas une API google street view ? »
+and « Oui » to checking its terms and a prototype. Google's photogrammetry is taken from the air and melts near the
+ground whatever the budget; Street View's panoramas are photographs taken in the street. `StreetPanorama.cs`.
+
+- **API** (Map Tiles API, Street View tiles, read on 2026-11-18): `createSession` with `mapType` streetview, then the
+  metadata of the panorama nearest a place within 50 m, then its tiles at zoom 3. The session and the metadata are not
+  billed; a tile is, 100,000 free a month, then 2 USD a thousand. A panorama at zoom 3 is 8 × 4 tiles (16384 × 8192 at
+  zoom 5), so 32 tiles; at most 60 panoramas a run.
+- **Terms followed:**
+  - the tiles live in memory for the run, never on disk; the panorama ID is not kept either;
+  - the attribution card shows "Google Maps", then « Street View », the panorama's copyright and date, and « Report a
+    problem with this image » / « Signaler un problème avec cette image »; a click on the card opens the panorama's
+    `reportProblemLink`, only on https at a google.com host;
+  - no 3D model is made from the imagery and no image is analysed: the picture is laid on a fixed sphere.
+- **Drawn:**
+  - a sphere of 30 m round where the panorama was taken, 2.5 m over the street; its directions below the horizon are
+    cut by the street, so the ground keeps some parallax as the eye moves;
+  - the image's centre at the panorama's heading;
+  - the tiles go in the aerial array after the 3D tiles' photographs (`Material.Aerial`, unlit, glow alpha −1);
+  - it is drawn in place of the 3D tiles while the eye is lower than 4 m and within 12 m of where it was taken, else the
+    3D tiles. Out in the streets, low, a new panorama is asked for 8 m from the one shown and 5 m from the last ask.
+- **Measured hidden** (`--door street`, Google): the opening's 3D tiles took 569 requests; one panorama 4.9 m from the
+  eye, 8 × 4 tiles (32 Street View tiles), taken 2023-09, heading 59°, « From the Owner, Photo by: Google ». Its upload
+  re-sends the whole array (326 + 32 layers) in 220 ms, one hitch per panorama. 52 fps. The Centre Block, the gates and
+  the street are sharp; a car parked by the camera is stretched over the street below the horizon.
+- **To do:** walking or riding between panoramas (a jump at each, and the hitch); the report link by hand; a per-layer
+  upload into reserved slots instead of the whole array.
+
+## Google's tiles never past the free share (2026-11-18)
+
+The user, on hearing the prices: « Je veux pas que ça coûte 100$ !! ». The runs of 2026-11-17 and 18 made about 4,600
+3D tile requests (hidden runs 2,752, the live window about 1,860, read in its scene.log), against 1,000 free a month:
+up to about 22 USD if Google bills each one.
+
+- `GoogleMonth.cs` counts each request before it is sent, across every run on this computer, in
+  `%LOCALAPPDATA%\delta\google-month.json` (the counts only), and refuses it past the month's free share: 1,000 3D tile
+  requests, 95,000 Street View tiles (100,000 free). An unreadable ledger counts as spent.
+- An opening (700 requests) or a ride's refinement (300) that the rest of the month cannot cover is not begun.
+- A panorama takes its 32 tiles from the share before any is fetched.
+- Street View no longer needs the 3D tiles: near a panorama it is drawn alone; elsewhere OpenStreetMap stays.
+- The ledger was seeded for 2026-11 with the 3D share spent (1,000) and the 32 Street View tiles of the hidden run.
+- Google's own quotas and a budget alert in the Cloud console are the only hard guarantee; that is the user's to set.
+
+## Street View, first live faults (2026-11-18)
+
+Live, the nearest panorama to the door was a member of the public's photosphere (« Photo by: David Carriere »,
+2022-02, 3 × 2 tiles at zoom 3, no heading): small, turned, and the user saw mostly sky. And with the door open the
+panorama was drawn from inside the hall, its street over the hall's floor (the user's pictures: « la scene est
+cassee »). Fixed:
+- only panoramas of Google's own cars (`Meta.Taken`: the copyright names Google, outdoors, at least 13312 × 6656). The
+  API has no filter for this, so the metadata (not billed) is asked at the eye and at eight places 15 m round it, and
+  the nearest such panorama within 25 m is taken; none: logged, OpenStreetMap stays;
+- the panorama is drawn only with the eye out of the hall (z past the front wall);
+- its street lies 5 cm under the hall's floor; the attribution card sits over the version's label;
+- the panorama already drawn is not fetched again.
+
+Later the same evening: Street View shown within 25 m of its panorama (12 m before: the one before the door, 13.5 m out,
+was never seen); F5 reloads the scene in full (`Reload.cs`).
+
+## 3D tiles on G only, at most 10 USD a month (2026-11-18)
+
+Asked why each start cost about 4 USD (700 requests at 6 USD a thousand, fetched again at each start since the tiles
+may only live in memory), the user chose the 3D tiles on demand with « 3 - 10$ max ».
+- The 3D tiles are no longer fetched at the door's first opening: the first G asks for them (`--google-tiles` for a
+  hidden run); then G goes between Google and OpenStreetMap as before. Street View stays automatic and free.
+- GoogleMonth's allowance is 1,000 free + 10 USD at 6 USD a thousand: 2,666 requests a month. Each request counts.
+- The ledger for 2026-11 holds 4,600, the estimated use of the 17th and 18th (up to about 22 USD if all are billed), so
+  November has no 3D tiles left; December starts at zero.
+- While no 3D tiles are drawn, OpenStreetMap's buildings stop the walker again.
+
+## The Caster button (2026-11-18)
+
+Delta - remote asked for a button in the window over its gateway's television routes (feat/remote-tv, ae38aca: POST
+127.0.0.1:8813/tv/find, start {"name"?}, stop, state, with X-Delta-Hook and X-Delta-Remote, 404 « the television is
+off » under -tv-port 0). The user, in this session: « 1 - oui ».
+- The window tells the brain {"tv":"start"|"stop"|"state"} and, for a choice, {"tv":"start","tv_name"}; the brain
+  (`brain/tv.go`) asks the gateway with the secret, which never leaves it, and sends back {"tv":{"on", "playing",
+  "ended", "chromecasts", "refused"}}, refused being off, none, many, gateway or error.
+- Start without a name finds the Chromecasts first: one is cast to, several are offered on the card, none says so.
+- The button (« Caster » / « Arrêter », a dot amber while starting, green once playing) sits left of « Inviter »; its
+  card opens under the buttons on news only; while cast the window asks the state every 5 s.
+- Tested: brain `TestTheCasterButtonAsksTheGateway` against a fake of the gateway's routes; the scene's selftest
+  parses the line; a hidden render shows the button. Not tested: a real Chromecast, the live brain (it needs a
+  release), Remote's gateway deployed with -tv-port.
 
 ## Known problems
 
@@ -2089,6 +3005,7 @@ and tags, at most `--dlss-g-frames` (1 by default, twice the frames; up to 3 on 
 - A live English session with a human voice: the wake word, "Delter", and the latency.
 - English for the local window and shelf commands, the triage and the compaction sentence.
 - The gateway end to end with IX's: a sentence from a phone, the chime, and Delta's voice on the phone.
+- The hands with a real camera: each pose, a swipe each way, a wave and pointing down, and the thresholds by hand.
 - The caption of a sentence let pass, live: whether five seconds is enough to read it.
 - A call from the phone with brain 0.6.0, live: the phone's answers play on the phone only, and whether the phone's
   echo cancellation removes Delta's voice, before `/hush` is built.

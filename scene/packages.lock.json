@@ -71,6 +71,18 @@
           "Acornima": "1.7.0"
         }
       },
+      "Openize.Drako": {
+        "type": "Direct",
+        "requested": "[1.4.4, 1.4.4]",
+        "resolved": "1.4.4",
+        "contentHash": "EXPtXBM36W9y3QTZHxGBJTVUcn4cMK4w9teATVQnBpz95Q3YkUVP+SHENG+Z0I1LlF5laszPWGh5+Jq4ESyKGw=="
+      },
+      "StbImageSharp": {
+        "type": "Direct",
+        "requested": "[2.30.15, 2.30.15]",
+        "resolved": "2.30.15",
+        "contentHash": "7QqbupVhz2kcFUPTgMw4iHR9rYDHGundzzee19Mwmd1typ2Lnv8EVJcLJxlkeBM2+4ex0NwsMtdbGSJctp1XCQ=="
+      },
       "Acornima": {
         "type": "Transitive",
         "resolved": "1.7.0",
@@ -144,6 +156,11 @@
         "type": "Transitive",
         "resolved": "8.4.2",
         "contentHash": "2hmtrrU18x6NL3mbuAqwy0KpnoEEJOuK6sH5RKQfD/jHijn2pqvqBUC7WGy9dgNBL9BDA7eOC0kirsNPMp2f4Q=="
+      },
+      "FSharp.Core": {
+        "type": "Transitive",
+        "resolved": "10.0.115",
+        "contentHash": "KhHV8iLzxsYYSEaAG1Rpj+etxAwZIHVl1NTtpzg3iDU0WOtLst6aVoEAP6H7tniIW3k8JkTuylDGQQZHBxbKPg=="
       },
       "Microsoft.Extensions.Configuration": {
         "type": "Transitive",
@@ -262,6 +279,19 @@
       },
       "Delta.SceneModules.Contracts": {
         "type": "Project"
+      },
+      "gallery": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.0.115, 10.0.115]",
+          "Lego": "[1.0.0, )"
+        }
+      },
+      "lego": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.0.115, 10.0.115]"
+        }
       }
     },
     "net10.0/win-x64": {

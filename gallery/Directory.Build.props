@@ -1,0 +1,6 @@
+<Project>
+
+  <!-- The same exact FSharp.Core as Lego's (../lego/Directory.Build.props). -->
+  <Import Project="../lego/Directory.Build.props" />
+
+</Project>

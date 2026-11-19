@@ -1,0 +1,13 @@
+<Project>
+
+  <!-- FSharp.Core at one exact version for Lego, its tool and the hall's gallery, instead of the one the SDK bundles,
+       so that a locked restore (the pre-commit hook's) agrees whatever SDK feature band builds them (ORIGIN.md). -->
+  <PropertyGroup>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" Version="[10.0.115]" />
+  </ItemGroup>
+
+</Project>
