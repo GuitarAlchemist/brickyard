@@ -86,9 +86,18 @@ internal static class GoogleStreets
             return null;
         }
 
+        var riding = path is { Count: > 0 };
+        // Never past the month's free share (GoogleMonth): an opening or a ride that could not finish within it is not
+        // begun, so no request is spent on tiles that would not be drawn.
+        var left = GoogleMonth.Left(GoogleMonth.Kind.Tiles3D);
+        if (left < (riding ? RideRequests : MostRequests))
+        {
+            log($"not fetched: {left} of this month's free {GoogleMonth.Free3D} 3D tile requests left, {(riding ? RideRequests : MostRequests)} needed");
+            return null;
+        }
+
         var (lat, lon) = OttawaStreets.LatLon(placement.Door);
         var frame = new EnuFrame(lat, lon, 0);
-        var riding = path is { Count: > 0 };
         var options = new SelectionOptions
         {
             Camera = frame.ToEcef(new Vec3d(0, 0, EyeHeight)),
@@ -124,6 +133,8 @@ internal static class GoogleStreets
         public Task<byte[]> GetAsync(Uri uri, CancellationToken cancel = default) =>
             RunRequests >= most
                 ? throw new InvalidOperationException($"more than {most} requests this run: stopped")
+                : !GoogleMonth.Take(GoogleMonth.Kind.Tiles3D)
+                ? throw new InvalidOperationException($"this month's free {GoogleMonth.Free3D} 3D tile requests are spent: stopped")
                 : inner.GetAsync(uri, cancel);
     }
 

@@ -4142,7 +4142,7 @@ internal static unsafe class Stage
 
             // Street View: low in the street among Google's tiles, the panorama nearest the eye is asked for whenever the eye
             // is StreetPanorama.Again metres from the one shown, and has moved 5 m since the last ask.
-            if (googleChosen && aerial is not null && panoLoading is null && (camera.Outdoors || rides.Outdoors) && lastEye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } street)
+            if (googleChosen && panoLoading is null && (camera.Outdoors || rides.Outdoors) && lastEye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } street)
             {
                 var at = street.FromHall(lastEye);
                 var fromShown = pano is null ? double.PositiveInfinity : SN.Vector2.Distance(at, OttawaStreets.Local(pano.Lat, pano.Lon));
@@ -4181,7 +4181,7 @@ internal static unsafe class Stage
             officeView = splashing ? null : viewProj;
             gaiaEye = eye;
             lastEye = eye;
-            panoShown = pano is not null && panoMesh is not null && googleChosen && aerial is not null && eye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } panoPlace
+            panoShown = pano is not null && panoMesh is not null && googleChosen && eye.Y < 4f * FreeCamera.Scale && streetsPlacement is { } panoPlace
                 && SN.Vector2.Distance(panoPlace.FromHall(eye), OttawaStreets.Local(pano.Lat, pano.Lon)) < StreetPanorama.Near;
             if (moduleClickTest && !moduleTestClicked && linkNow >= 2.0 && gaiaPick is { } testTarget)
                 moduleTestClicked = TryModuleClick((testTarget.Left + testTarget.Right) / 2, (testTarget.Top + testTarget.Bottom) / 2, true);
@@ -4283,7 +4283,7 @@ internal static unsafe class Stage
                 }
 
                 var panoCard = panoShown && pano is not null ? pano.Id : "";
-                if (googleChosen && aerial is not null && !splashing && (aerialCardSize != (extent.Width, extent.Height) || panoCard != panoCardId))
+                if (googleChosen && (aerial is not null || panoShown) && !splashing && (aerialCardSize != (extent.Width, extent.Height) || panoCard != panoCardId))
                 {
                     aerialCardSize = (extent.Width, extent.Height);
                     panoCardId = panoCard;

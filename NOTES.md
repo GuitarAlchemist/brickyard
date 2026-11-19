@@ -2817,6 +2817,21 @@ ground whatever the budget; Street View's panoramas are photographs taken in the
 - **To do:** walking or riding between panoramas (a jump at each, and the hitch); the report link by hand; a per-layer
   upload into reserved slots instead of the whole array.
 
+## Google's tiles never past the free share (2026-11-18)
+
+The user, on hearing the prices: « Je veux pas que ça coûte 100$ !! ». The runs of 2026-11-17 and 18 made about 4,600
+3D tile requests (hidden runs 2,752, the live window about 1,860, read in its scene.log), against 1,000 free a month:
+up to about 22 USD if Google bills each one.
+
+- `GoogleMonth.cs` counts each request before it is sent, across every run on this computer, in
+  `%LOCALAPPDATA%\delta\google-month.json` (the counts only), and refuses it past the month's free share: 1,000 3D tile
+  requests, 95,000 Street View tiles (100,000 free). An unreadable ledger counts as spent.
+- An opening (700 requests) or a ride's refinement (300) that the rest of the month cannot cover is not begun.
+- A panorama takes its 32 tiles from the share before any is fetched.
+- Street View no longer needs the 3D tiles: near a panorama it is drawn alone; elsewhere OpenStreetMap stays.
+- The ledger was seeded for 2026-11 with the 3D share spent (1,000) and the 32 Street View tiles of the hidden run.
+- Google's own quotas and a budget alert in the Cloud console are the only hard guarantee; that is the user's to set.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

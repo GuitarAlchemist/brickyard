@@ -68,6 +68,11 @@ internal static class StreetPanorama
             var tile = (int)Number("tileWidth", 512);
             var (cols, rows, wide, high) = Grid(Number("imageWidth", 16384), Number("imageHeight", 8192), tile);
             if (cols * rows > MostTilesEach) throw new InvalidDataException($"{cols} × {rows} tiles, more than {MostTilesEach}");
+            if (!GoogleMonth.Take(GoogleMonth.Kind.StreetView, cols * rows))
+            {
+                log($"not fetched: this month's free {GoogleMonth.FreeStreetView} Street View tiles are spent");
+                return null;
+            }
 
             var layers = new byte[cols * rows][];
             await Parallel.ForEachAsync(Enumerable.Range(0, cols * rows), new ParallelOptions { MaxDegreeOfParallelism = 6, CancellationToken = cancel.Token }, async (n, token) =>
