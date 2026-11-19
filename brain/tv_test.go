@@ -107,6 +107,14 @@ func TestTheCasterButtonAsksTheGateway(t *testing.T) {
 			t.Errorf("%s with the television off = %+v", action, got)
 		}
 	}
+	// A gateway older than the /tv routes: its mux's own 404.
+	old := httptest.NewServer(http.NotFoundHandler())
+	defer old.Close()
+	for _, action := range []string{"start", "stop", "state"} {
+		if got := r.tv(old.URL+"/tv/", action, ""); got.Refused != "old" {
+			t.Errorf("%s on an old gateway = %+v", action, got)
+		}
+	}
 	if got := r.tv(base, "dance", ""); got.Refused != "error" {
 		t.Errorf("an unknown action = %+v", got)
 	}

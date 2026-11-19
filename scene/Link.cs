@@ -463,7 +463,7 @@ internal sealed class Link(Func<double> clock)
             Television? television = null;
             if (root.TryGetProperty("tv"u8, out var tvl) && (television = ParseTelevision(tvl)) is null)
             {
-                error = "tv is {\"on\", \"playing\", \"ended\", \"chromecasts\", \"refused\": off, none, many, gateway or error}";
+                error = "tv is {\"on\", \"playing\", \"ended\", \"chromecasts\", \"refused\": off, none, many, old, gateway or error}";
                 return null;
             }
 
@@ -631,7 +631,7 @@ internal sealed class Link(Func<double> clock)
         }
 
         return Text("on", 100) is { } on && Text("ended", 200) is { } ended && Text("refused", 10) is { } refused
-            && refused is "" or "off" or "none" or "many" or "gateway" or "error"
+            && refused is "" or "off" or "none" or "many" or "old" or "gateway" or "error"
             ? new Television(on, playing, ended, [.. names], refused)
             : null;
     }
@@ -815,7 +815,7 @@ internal sealed class Link(Func<double> clock)
         Check(link.Read(399.0) is { Invitation: null, InvitationId: 0 }, "no invitation until the button asks");
         Check(Parse("""{"tv":{"on":"Salon","playing":true}}""", out _) is { State: null, Tv: { On: "Salon", Playing: true, Refused: "" } }
             && Parse("""{"tv":{"refused":"many","chromecasts":["Salon","Chambre"]}}""", out _) is { Tv: { Refused: "many", Chromecasts.Length: 2 } }
-            && Parse("""{"tv":{"refused":"why"}}""", out _) is null && Parse("""{"tv":{"playing":"yes"}}""", out _) is null && Parse("""{"tv":"Salon"}""", out _) is null,
+            && Parse("""{"tv":{"refused":"old"}}""", out _) is { Tv.Refused: "old" } && Parse("""{"tv":{"refused":"why"}}""", out _) is null && Parse("""{"tv":{"playing":"yes"}}""", out _) is null && Parse("""{"tv":"Salon"}""", out _) is null,
             "the television's line: the Chromecast and whether it plays, a choice, or why not");
         link.Apply(new Change(null, [], "", null, null, Invitation: new Invite(DemoPairing, 3600, true)), 400.0);
         Check(link.Read(410.0) is { Invitation.Rows.Length: 29, InvitationId: 1 } invited && Math.Abs(invited.InvitationLeft - 3590f) < 1e-2 &&

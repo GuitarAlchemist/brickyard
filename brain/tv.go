@@ -16,8 +16,8 @@ import (
 const gatewayTV = "http://127.0.0.1:8813/tv/"
 
 // tvLine is what the window is told of the television: the Chromecast cast to and whether it plays, why the last cast
-// ended, the Chromecasts to choose from when several answer, or why nothing was cast (off, none, many, gateway or
-// error).
+// ended, the Chromecasts to choose from when several answer, or why nothing was cast: off, none, many, old (a gateway
+// without the /tv routes), gateway (none answers on this computer) or error.
 type tvLine struct {
 	On          string   `json:"on,omitempty"`
 	Playing     bool     `json:"playing,omitempty"`
@@ -51,6 +51,12 @@ func tvOff(status int, body []byte) bool {
 	return status == http.StatusNotFound && strings.Contains(string(body), "television is off")
 }
 
+// tvNone is whether an answer says no Chromecast answers (the gateway's errNoChromecast). Any other 404 comes from a
+// gateway older than its /tv routes, whose mux answers « 404 page not found » (Delta - remote, 2026-11-18).
+func tvNone(status int, body []byte) bool {
+	return status == http.StatusNotFound && strings.Contains(string(body), "no Chromecast")
+}
+
 // shortLine keeps the first line of a gateway's message, at most 200 characters, for the window's card.
 func shortLine(body []byte) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(string(body)), "\n")
@@ -64,8 +70,13 @@ func shortLine(body []byte) string {
 // them when several answer; "stop" ends the cast; "state" says how it stands.
 func (r *remote) tv(base, action, name string) tvLine {
 	refused := func(why string, status int, body []byte) tvLine {
-		if tvOff(status, body) {
+		switch {
+		case tvOff(status, body):
 			return tvLine{Refused: "off"}
+		case tvNone(status, body):
+			return tvLine{Refused: "none"}
+		case status == http.StatusNotFound:
+			return tvLine{Refused: "old"}
 		}
 		return tvLine{Refused: why, Ended: shortLine(body)}
 	}
@@ -107,8 +118,6 @@ func (r *remote) tv(base, action, name string) tvLine {
 		switch {
 		case err != nil:
 			return tvLine{Refused: "gateway"}
-		case status == http.StatusNotFound && !tvOff(status, body):
-			return tvLine{Refused: "none"}
 		case status != http.StatusOK:
 			return refused("error", status, body)
 		}
