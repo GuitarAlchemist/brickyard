@@ -174,9 +174,17 @@ func runMCP(c mcpConfig) {
 	var invite func()
 	var guestMic func(on bool)             // the window's guest badge, likewise
 	var pairNew func()                     // the window's pairing card, opened with no code alive, likewise
+	var tvAsk func(action, name string)    // the window's Caster button (tv.go), likewise
 	s.asked = func(event map[string]any) { // the window's language, microphone and Inviter buttons
 		if asked, ok := event["invite"].(bool); ok && asked && invite != nil {
 			go invite()
+			return
+		}
+		if action, ok := event["tv"].(string); ok {
+			name, _ := event["tv_name"].(string)
+			if tvAsk != nil && len(name) <= 100 {
+				go tvAsk(action, name)
+			}
 			return
 		}
 		if asked, ok := event["pair"].(bool); ok && asked && pairNew != nil {
@@ -305,6 +313,14 @@ func runMCP(c mcpConfig) {
 		}
 		logf("pairing: the window asked the phone gateway for a new code")
 		m.note("pairing", map[string]any{"asked": true})
+	}
+	tvAsk = func(action, name string) { // the window shows what comes back: the Chromecast cast to, a choice, or why not
+		line := rm.tv(gatewayTV, action, name)
+		s.send(map[string]any{"tv": line})
+		if action != "state" {
+			m.note("tv", map[string]any{"asked": action, "on": line.On, "refused": line.Refused})
+			logf("tv: %s: on %q, refused %q %s", action, line.On, line.Refused, line.Ended)
+		}
 	}
 	invite = func() { // the journal says that an invitation came and until when, never its link
 		link, until, err := rm.invite(gatewayInvite)

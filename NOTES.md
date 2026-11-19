@@ -2859,6 +2859,21 @@ may only live in memory), the user chose the 3D tiles on demand with « 3 - 10$ 
   November has no 3D tiles left; December starts at zero.
 - While no 3D tiles are drawn, OpenStreetMap's buildings stop the walker again.
 
+## The Caster button (2026-11-18)
+
+Delta - remote asked for a button in the window over its gateway's television routes (feat/remote-tv, ae38aca: POST
+127.0.0.1:8813/tv/find, start {"name"?}, stop, state, with X-Delta-Hook and X-Delta-Remote, 404 « the television is
+off » under -tv-port 0). The user, in this session: « 1 - oui ».
+- The window tells the brain {"tv":"start"|"stop"|"state"} and, for a choice, {"tv":"start","tv_name"}; the brain
+  (`brain/tv.go`) asks the gateway with the secret, which never leaves it, and sends back {"tv":{"on", "playing",
+  "ended", "chromecasts", "refused"}}, refused being off, none, many, gateway or error.
+- Start without a name finds the Chromecasts first: one is cast to, several are offered on the card, none says so.
+- The button (« Caster » / « Arrêter », a dot amber while starting, green once playing) sits left of « Inviter »; its
+  card opens under the buttons on news only; while cast the window asks the state every 5 s.
+- Tested: brain `TestTheCasterButtonAsksTheGateway` against a fake of the gateway's routes; the scene's selftest
+  parses the line; a hidden render shows the button. Not tested: a real Chromecast, the live brain (it needs a
+  release), Remote's gateway deployed with -tv-port.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

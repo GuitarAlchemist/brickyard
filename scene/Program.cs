@@ -2136,8 +2136,8 @@ internal static unsafe class Stage
         }, null);
         var descriptorPool = device.CreateDescriptorPool(new DescriptorPoolEx.CreateInfo
         {
-            MaxSets = 26, // the ride's dial (Rides), Google's attribution (GoogleStreets), the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
-            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 26 }], // one image each
+            MaxSets = 28, // the Caster button and its card, the ride's dial (Rides), Google's attribution (GoogleStreets), the path-traced picture, the RTX card, the logo, the notice, the shelf's card, the caption, the phone icon, its pairing card, the ring's card and its dot, the language and microphone buttons, the guest badge, the Inviter button and its card, the microphone's meter, the version and its release notes, the cinematic's title and its hint, the wheel, the keys' card, the thinking brain and the arcade's way out
+            PoolSizes = [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 28 }], // one image each
         }, null);
         var splashRange = new VkPushConstantRange { StageFlags = PushStages, Offset = ByteSize.Zero, Size = ByteSize.Of<SplashPush>() };
         var splashLayout = device.CreatePipelineLayout([setLayout], [splashRange], null);
@@ -2434,6 +2434,26 @@ internal static unsafe class Stage
         var invitationSeen = 0; // the last invitation that opened the card
         var invitationOpened = 0.0;
         (int X, int Y) InvitationAt() => invitationCard is null ? (0, 0) : ((extent.Width - invitationCard.Width) / 2, (extent.Height - invitationCard.Height) / 2);
+
+        // The Caster button left of the Inviter button (Panel.CastButton; the user, 2026-11-18, « 1 - oui »): a click
+        // asks the brain to cast Delta's window to a Chromecast, through the phone gateway (brain/tv.go), or to stop.
+        // What comes back opens the card under the buttons (Panel.CastCard): where it is cast, why not, or a choice of
+        // Chromecasts, a click on one casting there. While cast, the window asks how it stands every 5 s.
+        var castSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? castTexture = null;
+        Panel.Card? castButton = null;
+        var castDrawn = (Height: 0, Language: "", Casting: false, Playing: false);
+        (int X, int Y) CastAt() => (InviteAt().X - (castButton?.Width ?? 0) - Math.Max(6, extent.Height / 96), CardMargin());
+        var castCardSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
+        Texture? castCardTexture = null;
+        Panel.Card? castCard = null;
+        var castCardDrawn = (Id: -1, Height: 0, Language: "");
+        var castShown = false;
+        var castOpened = 0.0;
+        var castAsked = double.NegativeInfinity; // when the window last asked how the cast stands
+        var castSeen = 0; // the television's last line looked at
+        var castSaid = ""; // what it said, to open the card only for news
+        (int X, int Y) CastCardAt() => castCard is null ? (0, 0) : (extent.Width - castCard.Width - CardMargin(), CardMargin() + (castButton?.Height ?? 0) + Math.Max(6, extent.Height / 96));
 
         // The release notes a click on the version opens, or N (Panel.ReleaseNotes); a click on them or Esc closes them.
         var notesSet = device.AllocateDescriptorSet(descriptorPool, setLayout);
@@ -3574,6 +3594,22 @@ internal static unsafe class Stage
             {
                 link.Tell("""{"invite":true}""");
             }
+            else if (action == GlfwButtonAction.Press && castButton is not null && Over(w, CastAt(), castButton.Width, castButton.Height))
+            {
+                var casting = link.Read(clock.Elapsed.TotalSeconds).Tv is { On.Length: > 0 };
+                link.Tell(casting ? """{"tv":"stop"}""" : """{"tv":"start"}""");
+                Console.WriteLine($"SCENE television: {(casting ? "stop" : "cast")} asked");
+            }
+            else if (action == GlfwButtonAction.Press && castShown && castCard is not null && Over(w, CastCardAt(), castCard.Width, castCard.Height))
+            {
+                var y = (int)(w.CursorY * extent.Height / Math.Max(1, w.Height)) - CastCardAt().Y;
+                if (link.Read(clock.Elapsed.TotalSeconds).Tv is { } choosing && Panel.CastChoiceAt(choosing, extent.Height, y) is >= 0 and var row)
+                {
+                    link.Tell(System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { ["tv"] = "start", ["tv_name"] = choosing.Chromecasts[row] }));
+                }
+
+                castShown = false;
+            }
             else if (action == GlfwButtonAction.Press && languageButton is not null && Over(w, LanguageAt(), languageButton.Width, languageButton.Height))
             {
                 NextLanguage();
@@ -4434,6 +4470,47 @@ internal static unsafe class Stage
                     inviteTexture = Upload(inviteButton, inviteSet, inviteTexture);
                 }
 
+                var tvNow = moment.Tv;
+                var casting = tvNow is { On.Length: > 0 };
+                if (!splashing && castDrawn != (extent.Height, Words.Language, casting, tvNow?.Playing ?? false))
+                {
+                    castDrawn = (extent.Height, Words.Language, casting, tvNow?.Playing ?? false);
+                    castButton = Panel.CastButton(extent.Height, casting, tvNow?.Playing ?? false);
+                    castTexture = Upload(castButton, castSet, castTexture);
+                }
+
+                if (tvNow is not null && moment.TvId != castSeen)
+                {
+                    // The card opens when the television says something new: a refusal, a choice, a start, play, an end;
+                    // not for the 5 s answers that say the same.
+                    castSeen = moment.TvId;
+                    var tvSaid = $"{tvNow.On}|{tvNow.Playing}|{tvNow.Ended}|{tvNow.Refused}|{string.Join(",", tvNow.Chromecasts)}";
+                    if (tvSaid != castSaid || tvNow.Refused != "")
+                    {
+                        castSaid = tvSaid;
+                        castShown = true;
+                        castOpened = clock.Elapsed.TotalSeconds;
+                    }
+                }
+
+                if (castShown && clock.Elapsed.TotalSeconds - castOpened > (tvNow?.Refused == "many" ? 30.0 : 8.0))
+                {
+                    castShown = false;
+                }
+
+                if (tvNow is not null && !splashing && castCardDrawn != (moment.TvId, extent.Height, Words.Language))
+                {
+                    castCardDrawn = (moment.TvId, extent.Height, Words.Language);
+                    castCard = Panel.CastCard(tvNow, extent.Height);
+                    castCardTexture = Upload(castCard, castCardSet, castCardTexture);
+                }
+
+                if (casting && clock.Elapsed.TotalSeconds - castAsked > 5.0)
+                {
+                    castAsked = clock.Elapsed.TotalSeconds;
+                    link.Tell("""{"tv":"state"}""");
+                }
+
                 if (moment.InvitationId != invitationSeen) // an invitation came, or why none did
                 {
                     invitationSeen = moment.InvitationId;
@@ -4969,6 +5046,26 @@ internal static unsafe class Stage
                     cb.Draw(6, 1, 0, 0);
                 }
 
+                if (hud && castButton is not null && castTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (castX, castY) = CastAt();
+                    var push = new SplashPush(Rect(castX, castY, castButton.Width, castButton.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [castSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
+                if (hud && castShown && castCard is not null && castCardTexture is not null)
+                {
+                    cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
+                    var (castCardX, castCardY) = CastCardAt();
+                    var push = new SplashPush(Rect(castCardX, castCardY, castCard.Width, castCard.Height), SN.Vector4.One);
+                    cb.BindDescriptorSets(VkPipelineBindPoint.Graphics, splashLayout, 0, [castCardSet], []);
+                    cb.PushConstants(splashLayout, PushStages, offset: 0, new ReadOnlySpan<byte>(&push, sizeof(SplashPush)));
+                    cb.Draw(6, 1, 0, 0);
+                }
+
                 if (hud && pairingShown && pairingCard is not null && pairingTexture is not null)
                 {
                     cb.BindPipeline(VkPipelineBindPoint.Graphics, splashPipeline);
@@ -5441,6 +5538,8 @@ internal static unsafe class Stage
         guestTexture?.Dispose();
         pairingTexture?.Dispose();
         inviteTexture?.Dispose();
+        castTexture?.Dispose();
+        castCardTexture?.Dispose();
         invitationTexture?.Dispose();
         meterTexture?.Dispose();
         versionTexture?.Dispose();

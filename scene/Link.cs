@@ -70,6 +70,8 @@ internal sealed class Link(Func<double> clock)
     private bool guestsHear; // whether guests hear the room, as the gateway last said
     private string gaia = "offline"; // how the bridge to Gaia stands, as the brain last said
     private double micLevelAt = double.NegativeInfinity;
+    private Television? tv; // the television, as the brain last said
+    private int tvId; // counts its lines, so that the button and its card are drawn again for each
 
     // How long the microphone's meter holds a level without news: the brain sends one every 100 ms while it listens.
     internal const double MicLevelSeconds = 0.5;
@@ -93,8 +95,13 @@ internal sealed class Link(Func<double> clock)
     // link; or, with no rows, why the gateway gave none.
     internal sealed record Invite(string[]? Rows, double Seconds, bool Copied, string Refused = "");
 
+    // The television (brain/tv.go), as the Caster button last heard: the Chromecast cast to ("" for none) and whether it
+    // plays, why the last cast ended, the Chromecasts to choose from, or why nothing was cast (off, none, many, gateway,
+    // error; "" when something was).
+    internal sealed record Television(string On, bool Playing, string Ended, string[] Chromecasts, string Refused);
+
     // What one line changes; a null field is left as it was.
-    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null, bool? Mic = null, int? Guests = null, Invite? Invitation = null, float? MicLevel = null, int? Devices = null, string? Version = null, bool? GuestsHear = null, string? Gaia = null);
+    internal sealed record Change(string? State, float[] Envelope, string Cost, float? Context, bool? Compacting, string? Window = null, string? Mood = null, string? Shelf = null, string? Language = null, bool Hearts = false, string? Heard = null, string HeardTo = "", string[]? Pairing = null, double PairingSeconds = 0, double? Lease = null, bool? Mic = null, int? Guests = null, Invite? Invitation = null, float? MicLevel = null, int? Devices = null, string? Version = null, bool? GuestsHear = null, string? Gaia = null, Television? Tv = null);
 
     // Takes what the brain asks of the window, on the link's threads.
     public Action<string>? Window { get; set; }
@@ -115,7 +122,7 @@ internal sealed class Link(Func<double> clock)
     // and the last invitation, its rows only while it serves, the seconds it still serves and its number; and how loud
     // the microphone is (0 without news), how many devices listen, the brain's version ("" before it says), and whether
     // guests hear the room.
-    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f, bool MicOff = false, int Guests = 0, Invite? Invitation = null, float InvitationLeft = -1f, int InvitationId = 0, float MicLevel = 0f, int Devices = 0, string Version = "", bool GuestsHear = false, string Gaia = "offline");
+    internal readonly record struct Moment(string State, float Level, string Cost, float Context, bool Compacting, string Mood = "neutral", float Quiet = 0f, float Hearts = -1f, string Heard = "", string HeardTo = "", float HeardAge = -1f, int HeardId = 0, string[]? Pairing = null, float PairingLeft = -1f, int PairingId = 0, float Lease = 0f, float LeaseLength = 0f, bool MicOff = false, int Guests = 0, Invite? Invitation = null, float InvitationLeft = -1f, int InvitationId = 0, float MicLevel = 0f, int Devices = 0, string Version = "", bool GuestsHear = false, string Gaia = "offline", Television? Tv = null, int TvId = 0);
 
     // Starts listening on 127.0.0.1, or says why it cannot.
     public string? Listen(int port)
@@ -155,7 +162,7 @@ internal sealed class Link(Func<double> clock)
             var lease = (float)Math.Max(0, leaseUntil - now);
             var serves = invitationId == 0 ? -1f : (float)Math.Max(0, invitationUntil - now);
             var invite = serves > 0f || invitation?.Rows is null ? invitation : invitation with { Rows = null };
-            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f, micOff, now < guestsUntil ? guests : 0, invite, serves, invitationId, now - micLevelAt < MicLevelSeconds ? micLevel : 0f, devices, version, guestsHear, gaia);
+            return new Moment(state, level, cost, context, compacting, face, quiet, hearts, age >= 0f ? heardText : "", age >= 0f ? heardTo : "", age, heardId, left > 0f ? pairing : null, left, pairingId, lease, lease > 0f ? (float)leaseLength : 0f, micOff, now < guestsUntil ? guests : 0, invite, serves, invitationId, now - micLevelAt < MicLevelSeconds ? micLevel : 0f, devices, version, guestsHear, gaia, tv, tvId);
         }
     }
 
@@ -453,6 +460,13 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
+            Television? television = null;
+            if (root.TryGetProperty("tv"u8, out var tvl) && (television = ParseTelevision(tvl)) is null)
+            {
+                error = "tv is {\"on\", \"playing\", \"ended\", \"chromecasts\", \"refused\": off, none, many, gateway or error}";
+                return null;
+            }
+
             string? version = null;
             if (root.TryGetProperty("version"u8, out var vr))
             {
@@ -466,13 +480,13 @@ internal sealed class Link(Func<double> clock)
 
             if (!root.TryGetProperty("state"u8, out var s))
             {
-                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null && mic is null && guests is null && invitation is null && micLevel is null && devices is null && version is null && guestsHear is null && gaia is null)
+                if (context is null && compacting is null && window is null && mood is null && shelf is null && language is null && !hearts && heard is null && pairing is null && lease is null && mic is null && guests is null && invitation is null && micLevel is null && devices is null && version is null && guestsHear is null && gaia is null && television is null)
                 {
                     error = "no state";
                     return null;
                 }
 
-                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel, devices, version, guestsHear, gaia);
+                return new Change(null, [], "", context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel, devices, version, guestsHear, gaia, television);
             }
 
             if (s.ValueKind != JsonValueKind.String)
@@ -522,7 +536,7 @@ internal sealed class Link(Func<double> clock)
                 }
             }
 
-            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel, devices, version, guestsHear, gaia);
+            return new Change(state, envelope, cost, context, compacting, window, mood, shelf, language, hearts, heard, heardTo, pairing, pairingSeconds, lease, mic, guests, invitation, micLevel, devices, version, guestsHear, gaia, television);
         }
         catch (JsonException ex)
         {
@@ -581,6 +595,44 @@ internal sealed class Link(Func<double> clock)
 
         return ParsePairing(p, out var rows, out var seconds) && p.TryGetProperty("copied"u8, out var c) && c.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? new Invite(rows, seconds, c.GetBoolean())
+            : null;
+    }
+
+    // A television line: every field may be left out; names and messages are short text, the refusal one of five.
+    private static Television? ParseTelevision(JsonElement p)
+    {
+        if (p.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        string? Text(string name, int most)
+        {
+            if (!p.TryGetProperty(name, out var e)) return "";
+            return e.ValueKind == JsonValueKind.String && e.GetString() is { } s && s.Length <= most ? s : null;
+        }
+
+        var playing = false;
+        if (p.TryGetProperty("playing"u8, out var pl))
+        {
+            if (pl.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return null;
+            playing = pl.GetBoolean();
+        }
+
+        var names = new List<string>();
+        if (p.TryGetProperty("chromecasts"u8, out var cc))
+        {
+            if (cc.ValueKind != JsonValueKind.Array || cc.GetArrayLength() > 12) return null;
+            foreach (var c in cc.EnumerateArray())
+            {
+                if (c.ValueKind != JsonValueKind.String || c.GetString() is not { Length: > 0 and <= 100 } n) return null;
+                names.Add(n);
+            }
+        }
+
+        return Text("on", 100) is { } on && Text("ended", 200) is { } ended && Text("refused", 10) is { } refused
+            && refused is "" or "off" or "none" or "many" or "gateway" or "error"
+            ? new Television(on, playing, ended, [.. names], refused)
             : null;
     }
 
@@ -761,6 +813,10 @@ internal sealed class Link(Func<double> clock)
         Check(Parse("""{"invitation":{"refused":"watching"}}""", out _) is { Invitation: { Rows: null, Refused: "watching" } } && Parse("""{"invitation":{"refused":"why"}}""", out _) is null &&
             Parse("""{"invitation":"https://delta.example/#invite=0123"}""", out var noInvite) is null && !noInvite!.Contains("0123"), "a refusal says why, and a link alone is refused unrepeated");
         Check(link.Read(399.0) is { Invitation: null, InvitationId: 0 }, "no invitation until the button asks");
+        Check(Parse("""{"tv":{"on":"Salon","playing":true}}""", out _) is { State: null, Tv: { On: "Salon", Playing: true, Refused: "" } }
+            && Parse("""{"tv":{"refused":"many","chromecasts":["Salon","Chambre"]}}""", out _) is { Tv: { Refused: "many", Chromecasts.Length: 2 } }
+            && Parse("""{"tv":{"refused":"why"}}""", out _) is null && Parse("""{"tv":{"playing":"yes"}}""", out _) is null && Parse("""{"tv":"Salon"}""", out _) is null,
+            "the television's line: the Chromecast and whether it plays, a choice, or why not");
         link.Apply(new Change(null, [], "", null, null, Invitation: new Invite(DemoPairing, 3600, true)), 400.0);
         Check(link.Read(410.0) is { Invitation.Rows.Length: 29, InvitationId: 1 } invited && Math.Abs(invited.InvitationLeft - 3590f) < 1e-2 &&
             link.Read(4001.0) is { Invitation: { Rows: null, Refused: "" }, InvitationLeft: 0f }, "the invitation's code shows while it serves");
@@ -918,6 +974,12 @@ internal sealed class Link(Func<double> clock)
                 invitationId++;
             }
 
+            if (change.Tv is { } television)
+            {
+                tv = television;
+                tvId++;
+            }
+
             if (change.Heard is { } words)
             {
                 heardText = words;
@@ -991,6 +1053,11 @@ internal sealed class Link(Func<double> clock)
         if (change.Pairing is not null)
         {
             Console.WriteLine($"SCENE pairing code for {change.PairingSeconds:F0} s at {at:F2} s"); // never the code
+        }
+
+        if (change.Tv is { } cast && (cast.Refused != "" || cast.Chromecasts.Length > 0 || cast.On == "" && cast.Ended != ""))
+        {
+            Console.WriteLine($"SCENE television: {(cast.Refused != "" ? $"refused ({cast.Refused})" : cast.On != "" ? $"on {cast.On}" : "ended")}{(cast.Chromecasts.Length > 0 ? $", {cast.Chromecasts.Length} Chromecasts to choose from" : "")} at {at:F2} s");
         }
 
         if (change.Invitation is { } asked)

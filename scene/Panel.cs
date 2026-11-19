@@ -298,6 +298,82 @@ internal static class Panel
         return new Card(rgba, width, size, []);
     }
 
+    // The Caster button, left of the Inviter button: « Caster » / « Cast », or « Arrêter » / « Stop » while Delta's window
+    // is cast to a television, with a green dot once the Chromecast plays it.
+    public static Card CastButton(int windowHeight, bool casting, bool playing)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var label = casting ? Words.Say("Stop", "Arrêter") : Words.Say("Cast", "Caster");
+        var size = PhoneSize(windowHeight);
+        var wide = Splash.Text(label, Px(14), out var w, out _, true) is null ? 0 : w;
+        var width = Math.Max(size, wide + (2 * Px(10)) + (casting ? Px(10) : 0));
+        var rgba = new byte[width * size * 4];
+        Fill(rgba, width, 0, 0, width, size, casting ? (40, 22, 22) : (12, 14, 18), 205);
+        Text(rgba, width, size, label, Px(14), true, (width - wide - (casting ? Px(10) : 0)) / 2, (size - Px(18)) / 2, (214, 220, 226));
+        if (casting)
+        {
+            var dot = Px(6);
+            Fill(rgba, width, width - Px(8) - dot, (size - dot) / 2, dot, dot, playing ? (90, 220, 130) : (230, 180, 60), 255);
+        }
+
+        return new Card(rgba, width, size, []);
+    }
+
+    // The television's card, under the Caster button: where Delta is cast, why not, or the Chromecasts to choose from,
+    // one per row; Rows holds those names' rectangles' order (a click on row i casts to Chromecasts[i]).
+    public static Card CastCard(Link.Television tv, int windowHeight)
+    {
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var title = tv.Refused switch
+        {
+            "off" => Words.Say("The phone gateway casts to no television (-tv-port 0)", "La passerelle ne diffuse vers aucune télé (-tv-port 0)"),
+            "none" => Words.Say("No Chromecast answers on this network", "Aucun Chromecast ne répond sur ce réseau"),
+            "many" => Words.Say("Cast to which television?", "Diffuser sur quelle télé ?"),
+            "gateway" => Words.Say("The phone gateway does not answer", "La passerelle du téléphone ne répond pas"),
+            "error" => Words.Say("Casting failed", "La diffusion a échoué"),
+            _ when tv.On != "" => tv.Playing ? Words.Say($"On {tv.On}", $"Sur {tv.On}") : Words.Say($"Starting on {tv.On}…", $"Démarrage sur {tv.On}…"),
+            _ => Words.Say("Casting ended", "Diffusion terminée"),
+        };
+        var lines = new List<string> { title };
+        if (tv.Ended != "" && tv.Refused != "many") lines.Add(tv.Ended);
+        var choices = tv.Refused == "many" ? tv.Chromecasts : Array.Empty<string>();
+        int Wide(string text, bool bold) => Splash.Text(text, Px(13), out var w, out _, bold) is null ? 0 : w;
+        var width = Math.Min(Px(520), lines.Concat(choices).Select((t, i) => Wide(t, i == 0)).Max() + (2 * Px(12)));
+        var row = Px(22);
+        var height = Px(10) + (lines.Count * Px(18)) + (choices.Length * row) + Px(10);
+        var rgba = new byte[width * height * 4];
+        Fill(rgba, width, 0, 0, width, height, (12, 14, 18), 215);
+        var y = Px(10);
+        for (var i = 0; i < lines.Count; i++)
+        {
+            Text(rgba, width, height, Fit(lines[i], Px(13), i == 0, width - (2 * Px(12))), Px(13), i == 0, Px(12), y, i == 0 ? (240, 236, 228) : (170, 178, 186));
+            y += Px(18);
+        }
+
+        foreach (var name in choices)
+        {
+            Fill(rgba, width, Px(8), y + Px(2), width - Px(16), row - Px(4), (30, 40, 52), 255);
+            Text(rgba, width, height, Fit(name, Px(13), false, width - (2 * Px(16))), Px(13), false, Px(16), y + Px(4), (120, 180, 255));
+            y += row;
+        }
+
+        return new Card(rgba, width, height, []);
+    }
+
+    // Which row of the Chromecasts' choice (Panel.CastCard) is at y within the card, or -1.
+    public static int CastChoiceAt(Link.Television tv, int windowHeight, int y)
+    {
+        if (tv.Refused != "many") return -1;
+        var scale = Math.Clamp(windowHeight / 720f, 0.8f, 2.2f);
+        int Px(float v) => (int)MathF.Round(v * scale);
+        var lines = 1; // the title alone, as CastCard draws for a choice
+        var top = Px(10) + (lines * Px(18));
+        var i = (y - top) / Px(22);
+        return y >= top && i < tv.Chromecasts.Length ? i : -1;
+    }
+
     // The brain's version in the bottom right corner, small and dim, such as « Delta dev-v0.6.0-40-gc31a28e · nouveautés »:
     // a click opens its release notes (ReleaseNotes).
     public static Card VersionLabel(string version, int windowHeight)
