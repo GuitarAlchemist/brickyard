@@ -1026,6 +1026,50 @@ without it.
 Still to verify live: a device connected, so that ffmpeg captures, then the gateway stopped with `Stop-Process -Force`,
 and no ffmpeg left behind.
 
+## Delta on the television, through a Chromecast (2026-11-18)
+
+The user wants to cast Delta from Delta's window on the PC, with nothing paid: no Cast application registered with
+Google. The Chromecast's default media receiver needs no registration, but it plays HLS, not WebRTC. So the
+television shows Delta two to four seconds late, without Delta's voice: the stream's audio track is silent.
+
+How it works (`tv.go`, `castv2.go`, `mdns.go`):
+- **Trigger.** The brain asks the gateway on the window's entry, `127.0.0.1:8813`, with its secret, as for invitations:
+  - `POST /tv/find` lists the Chromecasts that answer;
+  - `POST /tv/start`, with `{"name": …}` or nothing when only one answers, starts a cast;
+  - `POST /tv/stop` ends it;
+  - `POST /tv/state` says whether a cast is running and plays, or why the last one ended.
+- **Finding the Chromecasts.** The gateway sends one mDNS query for `_googlecast._tcp.local` from a port of its own, so
+  each Chromecast answers it directly.
+- **The stream.** A second ffmpeg captures Delta's window as the first does and writes an HLS stream: a keyframe for
+  each one-second segment, the last six kept, in a temporary folder.
+- **Serving it.** The gateway serves that folder on this network over plain HTTP, `-tv-port 8815`, because a Chromecast
+  trusts no certificate of the gateway's. The path holds a 32-hex token, and only the playlist and its segments are
+  served.
+- **Playing it.** The gateway speaks the Cast protocol on TCP 8009 over TLS: it launches the default receiver
+  `CC1AD845`, loads the stream as LIVE, answers the heartbeat, and closes the receiver at the stop.
+- **The end.** The cast ends at `/tv/stop`, when the television stops it, or when its ffmpeg ends.
+- **Ports.** The window's entry now runs without `-guest-host` too. `-tv-port 0` turns the casting off.
+- **Firewall.** The gateway's firewall rule already allows any TCP and UDP port for its program.
+
+The tests:
+- **The Cast protocol, against a fake Chromecast over TLS:** the LAUNCH, the heartbeat, the LOAD of the URL in the
+  session, the STOP. The cast also ends when the receiver closes, when the stream fails, or when the LOAD is refused.
+- **Discovery:** the mDNS answers are read, sorted, and a Chromecast without an address is left out.
+- **The stream server:** only the token, the playlist and its segments are served, with CORS.
+- **The cast itself:** it goes to the only Chromecast or to the one named, and its stop ends play and ffmpeg and
+  removes the folder. It also ends with its ffmpeg.
+- **The routes:** only the brain's secret opens them.
+- **The real ffmpeg:** on `testsrc2`, it makes one-second segments from `hlsArgs`.
+- **Mutations:** fourteen, each turning one test red.
+
+Not verified, since nothing has run on the user's network or Chromecast yet:
+- that the Chromecast answers the legacy-unicast query;
+- that the default receiver plays this HLS (TS, H.264 main, silent AAC) from plain HTTP;
+- the real delay;
+- that a second `gfxcapture` runs beside the first on the same window.
+
+The button in Delta's window and its call to `/tv/start` belong to the brain and the scene, which Delta Live writes.
+
 ## The louder copy goes (2026-10-23)
 
 The six live pairs (pid 117856, utterances 17/18 to 38/39) came 0.16 to 0.48 s apart, from the headset and the

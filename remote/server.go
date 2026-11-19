@@ -63,6 +63,7 @@ type server struct {
 	heard     bool                            // under mu: the microphone's capture runs
 	micOn     bool                            // under mu: the user lets guests hear the microphone; off at each start
 	toldMic   bool                            // under mu: the microphone's state announce was last given
+	tv        *tv                             // casts Delta's window to a Chromecast (tv.go); nil: off
 
 	brain *brain // nil: no voice and no QR
 

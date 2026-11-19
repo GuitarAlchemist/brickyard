@@ -3,6 +3,7 @@
 //	delta-remote [-ip <address>] [-port 8810] [-udp 8811] [-cert <file> -key <file> -name <host>] [-forget-devices]
 //	             [-guest-host <name> [-guest-port 8812] [-local-port 8813] [-turn <file>] [-mic <device>]
 //	              [-owner-host <name> -access-team <team> -access-aud <tag> -access-email <email> [-owner-port 8814]]]
+//	             [-tv-port 8815] [-local-port 8813]
 //	delta-remote -resume <the folder deploy.ps1 deploys to>
 //
 // Each start prints a link, https://<host>:<port>/#code=<code>, that pairs one device within 100 s. Then a new code
@@ -21,6 +22,9 @@
 // guests also hear that microphone and Delta's voice, while any of them watches; they cannot speak. With -owner-host,
 // the owner away from home gets the paired device's page through the tunnel, behind Cloudflare Access, which lets in
 // -access-email only (access.go).
+//
+// Delta's window can also cast itself to a Chromecast on this network, through the window's entry: the Chromecast's
+// default media receiver plays an HLS stream the gateway serves on -tv-port, a few seconds late (tv.go).
 package main
 
 import (
@@ -56,6 +60,7 @@ type options struct {
 	guestPort, localPort        int
 	ownerHost, team, aud, email string
 	ownerPort                   int
+	tvPort                      int
 }
 
 func main() {
@@ -84,6 +89,7 @@ func main() {
 	flag.StringVar(&o.mic, "mic", "", `the microphone guests hear, by its DirectShow name ("ffmpeg -list_devices true -f dshow -i dummy"); default: none`)
 	flag.StringVar(&o.turnFile, "turn", filepath.Join(os.Getenv("LOCALAPPDATA"), "delta-remote", "turn.json"),
 		`Cloudflare's TURN key for the guests' video, as {"id": "…", "token": "…"}`)
+	flag.IntVar(&o.tvPort, "tv-port", 8815, "the port a Chromecast fetches Delta's stream from, on this network (tv.go); 0: no casting")
 	resume := flag.String("resume", "", "start the build deploy.ps1 last put in this folder, with its arguments, once the network is up (resume_windows.go)")
 	flag.Parse()
 
@@ -179,9 +185,6 @@ func run(o options) error {
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		go func() { logf("the guests' entry: %v", guests.ListenAndServe()) }()
-		s.localHost = net.JoinHostPort("127.0.0.1", strconv.Itoa(o.localPort))
-		local := &http.Server{Addr: s.localHost, Handler: s.localHandler(), ReadHeaderTimeout: 5 * time.Second}
-		go func() { logf("the window's entry: %v", local.ListenAndServe()) }()
 		if o.ownerHost != "" {
 			if o.team == "" || o.aud == "" || o.email == "" {
 				return errors.New("-owner-host needs -access-team, -access-aud and -access-email")
@@ -196,6 +199,20 @@ func run(o options) error {
 			fmt.Printf("The owner, away, opens https://%s, behind Cloudflare Access for %s\n", o.ownerHost, o.email)
 		}
 		fmt.Printf("Guests invited from a paired device watch at https://%s, through a tunnel to %s\n", o.guestHost, guests.Addr)
+	}
+	if o.tvPort != 0 {
+		s.tv = newTV(ip, o.tvPort, o.ffmpeg, func() (uintptr, error) { return findWindow(o.title, o.exe) })
+		streams := &http.Server{
+			Addr:              s.tv.host,
+			Handler:           s.tv.handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() { logf("the television's stream: %v", streams.ListenAndServe()) }()
+	}
+	if o.guestHost != "" || s.tv != nil {
+		s.localHost = net.JoinHostPort("127.0.0.1", strconv.Itoa(o.localPort))
+		local := &http.Server{Addr: s.localHost, Handler: s.localHandler(), ReadHeaderTimeout: 5 * time.Second}
+		go func() { logf("the window's entry: %v", local.ListenAndServe()) }()
 	}
 
 	s.linkFile = filepath.Join(home, "link.txt")
