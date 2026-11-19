@@ -81,7 +81,8 @@ is derived from them, nothing of OpenStreetMap is drawn beside them, and "Google
 shows at the bottom of the picture while they are drawn. `scene/GeoTiles/` is a copy of GeoTiles' core
 (`GeoTiles.Core` at fcef8b5: geodesy, tileset tree, selection, GLB; same authors), its selection changed to refine best
 first. It decodes the tiles' Draco geometry with Openize.Drako 1.4.4 (MIT) and their
-JPEG images with StbImageSharp 2.30.15 (public domain), both from NuGet, as GeoTiles does.
+JPEG images with StbImageSharp 2.30.15 (public domain), both from NuGet, as GeoTiles does. The gallery's and Lego's
+F# projects bring FSharp.Core (MIT). `LICENSES/` keeps the texts of the packages whose NuGet package has none.
 
 ## Ideas, not code
 
