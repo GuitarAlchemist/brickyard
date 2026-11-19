@@ -853,6 +853,8 @@ internal static unsafe class Stage
 
     public static int Run(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--reload-after") return Reload.Helper(args); // F5's helper (Reload)
+
         if (args.Contains("--selftest"))
         {
             return Link.SelfTest();
@@ -2946,6 +2948,10 @@ internal static unsafe class Stage
             {
                 rtxShown = !rtxShown;
             }
+            else if (key == GlfwKey.F5 && filmDir is null)
+            {
+                Reload.Asked = true; // the frame loop closes the window, then Reload brings it back
+            }
             else if (key == GlfwKey.G)
             {
                 // The streets of Ottawa from Google's 3D tiles, or from OpenStreetMap again (GoogleStreets).
@@ -3795,6 +3801,12 @@ internal static unsafe class Stage
             if (now >= limit)
             {
                 reason = "time limit";
+                return false;
+            }
+
+            if (Reload.Asked)
+            {
+                reason = "a full reload (F5)";
                 return false;
             }
 
@@ -5522,6 +5534,8 @@ internal static unsafe class Stage
         {
             Closed(port, true);
         }
+
+        if (Reload.Asked) Reload.Start(args, line => Console.WriteLine($"SCENE {line}"));
 
         if (wallTest) Console.WriteLine(wallTestStep == 3 && wallTestFailures == 0 ? "WALLTEST PASSED" : $"WALLTEST FAILED {wallTestFailures} of {wallTestStep} checks made, 3 expected");
         if (wallReal is not null) Console.WriteLine(wallTestStep == 2 && wallTestFailures == 0 ? "WALLREAL PASSED" : $"WALLREAL FAILED {wallTestFailures}, step {wallTestStep} of 2");
