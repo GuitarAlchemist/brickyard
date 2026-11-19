@@ -197,12 +197,24 @@ func (s *server) guestHandler() http.Handler {
 }
 
 // localHandler is Delta's window's own entry, on 127.0.0.1 only and never behind the tunnel: the brain asks it for an
-// invitation to show as a QR card, and to end the guests. Only the brain gets through, with its secret, and no page.
+// invitation to show as a QR card, to end the guests, and to cast to a television (tv.go). Only the brain gets
+// through, with its secret, and no page.
 func (s *server) localHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /invite", s.windowInvite)
 	mux.HandleFunc("POST /guests/end", s.endGuests)
 	mux.HandleFunc("POST /guests/mic", s.guestsMic)
+	for path, h := range map[string]http.HandlerFunc{
+		"POST /tv/find": s.tvFind, "POST /tv/start": s.tvStart, "POST /tv/stop": s.tvStop, "POST /tv/state": s.tvAsk,
+	} {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			if s.tv == nil {
+				http.Error(w, "the television is off: the gateway runs with -tv-port 0", http.StatusNotFound)
+				return
+			}
+			h(w, r)
+		})
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != s.localHost || r.Header.Get("Origin") != "" || r.Header.Get("X-Delta-Hook") != "1" ||
 			s.brain == nil || !s.brain.knows(r.Header.Get("X-Delta-Remote")) {
