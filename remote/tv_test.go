@@ -447,8 +447,50 @@ func TestFFmpegMakesTheStreamFromItsArguments(t *testing.T) {
 	if !waitFor(context.Background(), filepath.Join(dir, "s00002.ts"), 20*time.Second) {
 		t.Fatalf("no third segment within 20 s; ffmpeg said: %s", stderr.String())
 	}
-	playlist, _ := os.ReadFile(filepath.Join(dir, "index.m3u8"))
-	if !strings.Contains(string(playlist), "s00000.ts") || !strings.Contains(string(playlist), "#EXT-X-TARGETDURATION:1") {
-		t.Errorf("the playlist:\n%s\nwant one-second segments named s<5 digits>.ts", playlist)
+	written, _ := os.ReadFile(filepath.Join(dir, "index.m3u8"))
+	playlist := string(livePlaylist(written))
+	if !regexp.MustCompile(`\ns[0-9]{5}\.ts\n`).MatchString(playlist) || !strings.Contains(playlist, "#EXTINF:0.5") ||
+		!strings.Contains(playlist, "#EXT-X-TARGETDURATION:1\n") || !strings.Contains(playlist, "HOLD-BACK=1.5") {
+		t.Errorf("the playlist served:\n%s\nwant half-second segments named s<5 digits>.ts, a target duration of 1 and a hold-back of 1.5 s", playlist)
+	}
+}
+
+func TestThePlaylistAsksToPlayNearTheLiveEdge(t *testing.T) {
+	written := "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:0\n#EXT-X-MEDIA-SEQUENCE:8\n#EXT-X-INDEPENDENT-SEGMENTS\n" +
+		"#EXTINF:0.500000,\ns00008.ts\n#EXTINF:0.500000,\ns00009.ts\n"
+	want := "#EXTM3U\n#EXT-X-SERVER-CONTROL:HOLD-BACK=1.5\n#EXT-X-START:TIME-OFFSET=-1.5\n#EXT-X-VERSION:6\n" +
+		"#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:8\n#EXT-X-INDEPENDENT-SEGMENTS\n" +
+		"#EXTINF:0.500000,\ns00008.ts\n#EXTINF:0.500000,\ns00009.ts\n"
+	if got := string(livePlaylist([]byte(written))); got != want {
+		t.Errorf("served:\n%s\nwant:\n%s", got, want)
+	}
+	if got := string(livePlaylist([]byte("half a playlist"))); got != "half a playlist" {
+		t.Errorf("a file that is no playlist became %q", got)
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "index.m3u8"), []byte(written), 0o600)
+	tv := &tv{token: "0123456789abcdef0123456789abcdef", dir: dir}
+	ts := httptest.NewServer(tv.handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/tv/" + tv.token + "/index.m3u8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != want {
+		t.Errorf("the gateway served:\n%s\nwant:\n%s", body, want)
+	}
+}
+
+func TestThePlayersStateIsReadFromItsStatus(t *testing.T) {
+	for payload, want := range map[string]string{
+		`{"type":"MEDIA_STATUS","status":[{"playerState":"BUFFERING"}]}`: "BUFFERING",
+		`{"type":"MEDIA_STATUS","status":[{"playerState":"PLAYING"}]}`:   "PLAYING",
+		`{"type":"MEDIA_STATUS","status":[]}`:                            "",
+	} {
+		if got := mediaState(payload); got != want {
+			t.Errorf("%s: %q, want %q", payload, got, want)
+		}
 	}
 }

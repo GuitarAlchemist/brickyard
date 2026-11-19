@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,15 +20,16 @@ import (
 // Delta on a television, through a Chromecast and nothing registered with Google: Delta's window asks the gateway, on
 // its own entry (POST /tv/start), to cast. The gateway then
 //   - finds the Chromecasts on the network (mdns.go),
-//   - has a second ffmpeg make an HLS stream of Delta's window, in one-second segments, in a folder of its own,
+//   - has a second ffmpeg make an HLS stream of Delta's window, in half-second segments, in a folder of its own,
 //   - serves that folder on this network, over plain HTTP, under a path no one can guess, since a Chromecast trusts no
 //     certificate of the gateway's,
 //   - and has the Chromecast's default media receiver play it (castv2.go).
-// The default receiver plays HLS, not WebRTC: the television shows Delta two to four seconds late. The stream ends
+// The default receiver plays HLS, not WebRTC: the television shows Delta seconds late, as late as its player stays
+// behind the stream's live edge; livePlaylist asks it to stay 1.5 s behind instead of three segments. The stream ends
 // with POST /tv/stop, when the Chromecast stops it, or when its ffmpeg ends.
 
 // hlsArgs has ffmpeg capture source, a filter that makes frames (Delta's window, as captureArgs captures it), and write
-// a live HLS stream into dir: H.264 with a keyframe at each one-second segment, the last six kept, and a silent AAC
+// a live HLS stream into dir: H.264 with a keyframe at each half-second segment, the last six kept, and a silent AAC
 // track, which some Chromecast players want beside the picture.
 func hlsArgs(source, dir string) []string {
 	return []string{
@@ -36,10 +38,10 @@ func hlsArgs(source, dir string) []string {
 		"-filter_complex", source + ",fps=30,scale=-2:720,format=yuv420p[v]",
 		"-map", "[v]", "-map", "0:a",
 		"-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main", "-level:v", "4.0",
-		"-g", "30", "-keyint_min", "30", "-sc_threshold", "0", "-bf", "0",
+		"-g", "15", "-keyint_min", "15", "-sc_threshold", "0", "-bf", "0",
 		"-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "4000k",
 		"-c:a", "aac", "-b:a", "64k",
-		"-f", "hls", "-hls_time", "1", "-hls_list_size", "6",
+		"-f", "hls", "-hls_time", "0.5", "-hls_list_size", "6",
 		"-hls_flags", "delete_segments+independent_segments+omit_endlist",
 		"-hls_segment_filename", filepath.Join(dir, "s%05d.ts"),
 		filepath.Join(dir, "index.m3u8"),
@@ -111,9 +113,24 @@ func (t *tv) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if file == "index.m3u8" {
+		body = livePlaylist(body)
+	}
 	w.Header().Set("Content-Type", kind)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(body)
+}
+
+// livePlaylist is ffmpeg's playlist as the Chromecast's player reads it. ffmpeg writes a target duration of 0 for
+// half-second segments, which HLS forbids: it becomes 1. And a player starts and stays three target durations behind
+// the live edge unless the playlist says otherwise: HOLD-BACK and EXT-X-START say 1.5 s, three segments.
+func livePlaylist(playlist []byte) []byte {
+	s, found := strings.CutPrefix(string(playlist), "#EXTM3U\n")
+	if !found {
+		return playlist
+	}
+	s = strings.Replace(s, "#EXT-X-TARGETDURATION:0\n", "#EXT-X-TARGETDURATION:1\n", 1)
+	return []byte("#EXTM3U\n#EXT-X-SERVER-CONTROL:HOLD-BACK=1.5\n#EXT-X-START:TIME-OFFSET=-1.5\n" + s)
 }
 
 func (t *tv) handler() http.Handler {
