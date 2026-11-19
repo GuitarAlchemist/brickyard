@@ -2945,6 +2945,14 @@ whippings like brown plugs wider than the rope, carried past its end.
   28.0 after (the live window shares the GPU); 2.0 million vertices of rope (1.68 before) and 1.3 million of fibres.
 - Not done: the path tracer has no fibres (they are not in the traced structure) and its rope was not looked at; the
   knots' shapes (the heaving line knot's loose turns) are IX's, untouched.
+- **Levels of detail** (« On peut faire du LOD ? »): each knot is built at three levels (`KnotFloor.Details`: strands
+  of 12 sides and 9 rings a turn, 6 and 5, 4 and 3.5), its own meshes, chosen by the eye's distance to its box (level
+  0 within 1.5 m, with its fibres; 1 within 4 m; 2 beyond, `KnotFloor.DetailAt`), and a knot out of the picture is not
+  drawn. The shader's yarns and whipping hold their place by Edge, so they draw the same on each level. Rope built:
+  2.00 / 0.58 / 0.28 million vertices. Drawn the last frame (`SCENE rope drawn`), before every frame drew all 3.3
+  million with the fibres: `--knots table` 0.92 million (4 knots at level 0, 7 at 1), `near` 0.78, `close` 0.39.
+  `--rope-detail 0|1|2` holds every knot at one level. GPU times were not comparable this evening (three Ollama
+  servers, Whisper and the live window on the same GPU, 14.7 of its 16 GB in use); the count is the measure.
 
 ## Known problems
 

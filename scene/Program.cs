@@ -2014,23 +2014,26 @@ internal static unsafe class Stage
         // The knots' floor's gallery, as brain -ix-knots wrote it from IX's readings (--knots FILE), in each language.
         var knotsPath = KnotFloor.Path(Option(args, "--marins"));
         var marins = KnotFloor.Load(knotsPath);
-        var hairVertices = new List<Vertex>();
-        var (ropeVertices, cardsEn, cardsFr) = (KnotFloor.BuildKnots(marins, hairVertices), KnotFloor.BuildCards(marins, fr: false), KnotFloor.BuildCards(marins, fr: true));
-        var knotRopes = new Mesh(device, physical, ropeVertices, resident: true);
-        // The ropes' loose fibres, drawn only within KnotFloor.HairsWithin of the tables (KnotFloor.Fuzz).
-        var knotHairs = new Mesh(device, physical, [.. hairVertices], resident: true);
-        hairVertices.Clear();
-        hairVertices.TrimExcess();
+        var (leveled, cardsEn, cardsFr) = (KnotFloor.BuildLevels(marins), KnotFloor.BuildCards(marins, fr: false), KnotFloor.BuildCards(marins, fr: true));
+        // Each knot at its three levels of detail and its loose fibres (KnotFloor.DetailAt, KnotFloor.Fuzz), each drawn when
+        // the picture shows that knot; --rope-detail 0|1|2 holds every knot at one level, for hidden comparisons.
+        var knotMeshes = leveled.Select(k => (Levels: k.Levels.Select(v => new Mesh(device, physical, v, resident: true)).ToArray(),
+            Hairs: new Mesh(device, physical, k.Hairs, resident: true), k.Box)).ToArray();
+        var ropeDetail = Option(args, "--rope-detail") is { } heldDetail && int.TryParse(heldDetail, out var held) ? Math.Clamp(held, 0, KnotFloor.Details.Length - 1) : -1;
+        // The last frame's rope: vertices drawn (fibres included) and how many knots at each level; said at the close.
+        var ropeDrawn = (Vertices: 0, Levels: new int[KnotFloor.Details.Length]);
         // Where the ropes and the cards are, to draw them only when the picture shows some of it (KnotFloor.Seen).
-        var knotBox = KnotFloor.Box(ropeVertices, cardsEn, cardsFr);
+        var knotBox = KnotFloor.Box([.. leveled.SelectMany(k => new[] { k.Levels[0], k.Hairs }), cardsEn, cardsFr]);
         var knots = new Dictionary<bool, Mesh>
         {
             [false] = new Mesh(device, physical, cardsEn),
             [true] = new Mesh(device, physical, cardsFr),
         };
-        (ropeVertices, cardsEn, cardsFr) = ([], [], []);
+        var levelCounts = Enumerable.Range(0, KnotFloor.Details.Length).Select(l => leveled.Sum(k => k.Levels[l].Length)).ToArray();
+        var fibreCount = leveled.Sum(k => k.Hairs.Length) / 12;
+        (leveled, cardsEn, cardsFr) = ([], [], []);
         Console.WriteLine(marins.Knots.Length > 0
-            ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {knotRopes.Count} vertices of rope and {knotHairs.Count / 12} loose fibres{(knotRopes.Resident ? " in the GPU's memory" : " in the host's memory")}, the fuller table {KnotFloor.Fill:P0} full; "
+            ? $"SCENE knots: {marins.Knots.Length} sailors' knots from {knotsPath}, {marins.Knots.Count(k => k.Verified)} verified by IX, {string.Join(" / ", levelCounts)} vertices of rope by level of detail{(ropeDetail >= 0 ? $" (held at {ropeDetail})" : "")} and {fibreCount} loose fibres{(knotMeshes.Length > 0 && knotMeshes[0].Levels[0].Resident ? " in the GPU's memory" : " in the host's memory")}, the fuller table {KnotFloor.Fill:P0} full; "
               + $"each knot moved from IX's path at most, its clearance, tightest turn, steepest slope and plan crossings/writhe, IX's then as shown: {string.Join(", ", marins.Knots.Select(k => (k, m: KnotFloor.Measure(k))).Select(x => $"{x.k.Id} {x.m.Moved:F1} r, {x.m.Before:F2}>{x.m.After:F2} d, {x.m.Bent.Tightest:F2}>{x.m.Relaxed.Tightest:F2} r, {x.m.Bent.Slope:F2}>{x.m.Relaxed.Slope:F2}, {x.m.Bent.Crossings}/{x.m.Bent.Writhe}>{x.m.Relaxed.Crossings}/{x.m.Relaxed.Writhe}"))}"
             : $"SCENE knots: none ({marins.Why}, {knotsPath})");
         var clocks = new WallClockStage(vertices => new Mesh(device, physical, vertices));
@@ -4800,11 +4803,26 @@ internal static unsafe class Stage
                 // The knots' 1.2 million vertices of rope, and their cards, only when the picture shows the tables.
                 if (KnotFloor.Seen(viewProj, knotBox))
                 {
-                    Draw(cb, layout, knotRopes, new Push(SN.Matrix4x4.Identity, viewProj, default));
-                    if (KnotFloor.Near(eye, knotBox))
+                    var (drawnRope, drawnLevels) = (0, new int[KnotFloor.Details.Length]);
+                    foreach (var (levels, hairs, box) in knotMeshes)
                     {
-                        Draw(cb, layout, knotHairs, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                        if (!KnotFloor.Seen(viewProj, box))
+                        {
+                            continue;
+                        }
+
+                        var level = ropeDetail >= 0 ? ropeDetail : KnotFloor.DetailAt(eye, box);
+                        Draw(cb, layout, levels[level], new Push(SN.Matrix4x4.Identity, viewProj, default));
+                        drawnRope += levels[level].Count;
+                        drawnLevels[level]++;
+                        if (level == 0)
+                        {
+                            Draw(cb, layout, hairs, new Push(SN.Matrix4x4.Identity, viewProj, default));
+                            drawnRope += hairs.Count;
+                        }
                     }
+
+                    ropeDrawn = (drawnRope, drawnLevels);
 
                     Draw(cb, layout, knots[Words.Language == "fr"], new Push(SN.Matrix4x4.Identity, viewProj, default));
                 }
@@ -5546,8 +5564,16 @@ internal static unsafe class Stage
             presence.Dispose();
         }
         hall.Dispose();
-        knotRopes.Dispose();
-        knotHairs.Dispose();
+        Console.WriteLine($"SCENE rope drawn the last frame: {ropeDrawn.Vertices} vertices, knots at each level of detail {string.Join(" / ", ropeDrawn.Levels)}");
+        foreach (var (levels, hairs, _) in knotMeshes)
+        {
+            foreach (var level in levels)
+            {
+                level.Dispose();
+            }
+
+            hairs.Dispose();
+        }
         shell.Dispose();
         shellGlass.Dispose();
         doorCurtain.Dispose();

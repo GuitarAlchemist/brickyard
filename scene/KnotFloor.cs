@@ -853,47 +853,98 @@ internal static class KnotFloor
         return true;
     }
 
-    // Whether the eye is near enough the knots' box for their loose fibres to be drawn: farther, a fibre is under a
-    // pixel and would only sparkle.
-    internal const float HairsWithin = 1.6f;
+    // Whether the eye is near enough a knot's box for its loose fibres to be drawn: farther, a fibre is under a pixel and
+    // would only sparkle.
+    internal const float HairsWithin = 1.5f;
 
-    internal static bool Near(SN.Vector3 eye, (SN.Vector3 Min, SN.Vector3 Max) box) =>
-        SN.Vector3.Distance(eye, SN.Vector3.Clamp(eye, box.Min, box.Max)) <= HairsWithin;
+    internal static float To(SN.Vector3 eye, (SN.Vector3 Min, SN.Vector3 Max) box) =>
+        SN.Vector3.Distance(eye, SN.Vector3.Clamp(eye, box.Min, box.Max));
+
+    internal static bool Near(SN.Vector3 eye, (SN.Vector3 Min, SN.Vector3 Max) box) => To(eye, box) <= HairsWithin;
+
+    // Levels of detail (the user, 2026-11-18: « On peut faire du LOD ? »): each knot is built three times, its strands
+    // finer near the eye and coarser away from it, where a strand is a few pixels wide and its 12 sides and 9 rings a
+    // turn only cost (thin triangles, shaded four samples at a time). The shader's yarns, fibres and whipping draw the same
+    // on each, as they hold their place round and along the strand (Edge), not the mesh's. Level 0 within Within[0] m,
+    // with its loose fibres; level 1 within Within[1]; level 2 beyond.
+    internal readonly record struct Detail(int Sides, float Rings);
+
+    internal static readonly Detail[] Details = [new(StrandSides, 9f), new(6, 5f), new(4, 3.5f)];
+    internal static readonly float[] Within = [HairsWithin, 4f];
+
+    internal static int DetailAt(SN.Vector3 eye, (SN.Vector3 Min, SN.Vector3 Max) box) =>
+        To(eye, box) is var d && d <= Within[0] ? 0 : d <= Within[1] ? 1 : 2;
+
+    // A knot at each level, its loose fibres, and its box.
+    internal sealed record Leveled(Vertex[][] Levels, Vertex[] Hairs, (SN.Vector3 Min, SN.Vector3 Max) Box);
 
     // How full the fuller table is, of its length, after the last Layout: knots and the least gap between them.
     internal static float Fill { get; private set; }
 
-    // The knots as rope on the tables: each rope laid, each post or ring turned in wood. Language-free.
-    // With hairs, each rope's loose fibres are added to it (Fuzz), apart from the rope.
-    public static Vertex[] BuildKnots(Marins m, List<Vertex>? hairs = null)
+    // The knots as rope on the tables: each rope laid, each post or ring turned in wood, at a level of detail.
+    // Language-free. With hairs, each rope's loose fibres are added to it (Fuzz), apart from the rope.
+    public static Vertex[] BuildKnots(Marins m, List<Vertex>? hairs = null, int level = 0)
     {
-        var o = new List<Vertex>();
         if (m.Knots.Length == 0)
         {
             return [];
         }
 
-        // Each knot laid on its wood and relaxed (Choose) at once, the knots side by side: a few seconds one after another.
-        Parallel.ForEach(m.Knots, k => Measure(k));
-        var lays = Layout(m);
+        var lays = Prepare(m);
+        var o = new List<Vertex>();
         for (var i = 0; i < m.Knots.Length; i++)
         {
-            var (k, lay) = (m.Knots[i], lays[i]);
-            var shown = Show(k);
-            for (var r = 0; r < shown.Length; r++)
-            {
-                if (k.Posts.Contains(r))
-                {
-                    Turned(o, [.. shown[r].Points.Select(lay.World)], shown[r].Closed, RadiusOf(k, r) * lay.Scale, shown[r].Closed ? 0f : 3 * k.Radius * lay.Scale, (i * 8) + r);
-                }
-                else
-                {
-                    Laid(o, [.. shown[r].Points.Select(lay.World)], k.Radius * lay.Scale, (i * 8) + r, shown[r].Closed, hairs);
-                }
-            }
+            BuildKnot(o, m.Knots[i], lays[i], i, Details[level], hairs);
         }
 
         return [.. o];
+    }
+
+    // Each knot at every level and its fibres, the knots built side by side.
+    public static Leveled[] BuildLevels(Marins m)
+    {
+        if (m.Knots.Length == 0)
+        {
+            return [];
+        }
+
+        var lays = Prepare(m);
+        var knots = new Leveled[m.Knots.Length];
+        Parallel.For(0, m.Knots.Length, i =>
+        {
+            var hairs = new List<Vertex>();
+            var levels = Details.Select((d, level) =>
+            {
+                var o = new List<Vertex>();
+                BuildKnot(o, m.Knots[i], lays[i], i, d, level == 0 ? hairs : null);
+                return o.ToArray();
+            }).ToArray();
+            knots[i] = new(levels, [.. hairs], Box(levels[0], [.. hairs]));
+        });
+        return knots;
+    }
+
+    // Each knot laid on its wood and relaxed (Choose) at once, the knots side by side: a few seconds one after another.
+    private static Lay[] Prepare(Marins m)
+    {
+        Parallel.ForEach(m.Knots, k => Measure(k));
+        return Layout(m);
+    }
+
+    private static void BuildKnot(List<Vertex> o, Knot k, Lay lay, int i, Detail detail, List<Vertex>? hairs)
+    {
+        var shown = Show(k);
+        for (var r = 0; r < shown.Length; r++)
+        {
+            if (k.Posts.Contains(r))
+            {
+                Turned(o, [.. shown[r].Points.Select(lay.World)], shown[r].Closed, RadiusOf(k, r) * lay.Scale, shown[r].Closed ? 0f : 3 * k.Radius * lay.Scale, (i * 8) + r, detail.Sides + 6);
+            }
+            else
+            {
+                Laid(o, [.. shown[r].Points.Select(lay.World)], k.Radius * lay.Scale, (i * 8) + r, shown[r].Closed, hairs, detail);
+            }
+        }
     }
 
     // The cards along the tables' ledges, each knot's name and what IX found, and the sign on the back wall, in the
@@ -1025,9 +1076,10 @@ internal static class KnotFloor
     // near the tables, where they are more than a pixel's sparkle.
     private const float HairsPerMetre = 1600f, TuftPerEnd = 40f;
 
-    internal static void Laid(List<Vertex> o, SN.Vector3[] path, float r, int seed, bool closed = false, List<Vertex>? hairs = null)
+    internal static void Laid(List<Vertex> o, SN.Vector3[] path, float r, int seed, bool closed = false, List<Vertex>? hairs = null, Detail? detail = null)
     {
-        var axis = Resample(Smooth(path), r * LayPitch / 9f);
+        var (sides, rings) = detail ?? Details[0];
+        var axis = Resample(Smooth(path), r * LayPitch / rings);
         if (axis.Length < 2)
         {
             return;
@@ -1065,7 +1117,7 @@ internal static class KnotFloor
 
             var rs = StrandRadius * r;
             var shade = tone * (k switch { 0 => 1f, 1 => 0.94f, _ => 1.05f });
-            Sweep(o, centres, closed: false, StrandSides, _ => rs, (j, angle, normal) =>
+            Sweep(o, centres, closed: false, sides, _ => rs, (j, angle, normal) =>
             {
                 // Darker only in the narrow lay between two strands, where they press together; the shader's
                 // occlusion does the yarns' own grooves.
@@ -1091,15 +1143,15 @@ internal static class KnotFloor
 
         if (whipped)
         {
-            Whip(o, axis, run, r, seed, atEnd: false);
-            Whip(o, axis, run, r, seed, atEnd: true);
+            Whip(o, axis, run, r, seed, atEnd: false, sides + 4);
+            Whip(o, axis, run, r, seed, atEnd: true, sides + 4);
         }
     }
 
     // A whipping near one end of a rope: a tube of twine round the axis, WhipLength radii of it ending Stub radii short of
     // the rope's end, so that the cut strands show past it as on a sailor's rope; its turns are the shader's ridges
     // (Material.Rope with a radius such that a yarn's pitch is a turn of twine), and its two ends the twine's faces.
-    private static void Whip(List<Vertex> o, SN.Vector3[] axis, float[] run, float r, int seed, bool atEnd)
+    private static void Whip(List<Vertex> o, SN.Vector3[] axis, float[] run, float r, int seed, bool atEnd, int sides)
     {
         var length = run[^1];
         var (from, to) = atEnd ? (length - ((Stub + WhipLength) * r), length - (Stub * r)) : (Stub * r, (Stub + WhipLength) * r);
@@ -1114,7 +1166,7 @@ internal static class KnotFloor
         var rw = WhipRadius * r;
         // A negative radius tells the shader the pitch of a ring of twine instead of a strand's radius.
         var turns = new SN.Vector4(0f, 0f, -TwineTurn * r, (seed * 3) + 7);
-        Sweep(o, band, closed: false, 16, j =>
+        Sweep(o, band, closed: false, sides, j =>
         {
             // Rounded where the twine starts and ends, pulled into the strands.
             var d = MathF.Min(places[j] - places[0], places[^1] - places[j]) / r;
@@ -1205,7 +1257,7 @@ internal static class KnotFloor
     }
 
     // A post or ring in turned oak: a spar straight through its points, carried past its ends; a ring round its own.
-    internal static void Turned(List<Vertex> o, SN.Vector3[] path, bool closed, float r, float beyond, int seed)
+    internal static void Turned(List<Vertex> o, SN.Vector3[] path, bool closed, float r, float beyond, int seed, int sides = 18)
     {
         var points = path;
         if (!closed && path.Length >= 2 && beyond > 0f)
@@ -1227,7 +1279,7 @@ internal static class KnotFloor
         }
 
         var shade = 0.92f + (0.08f * MathF.Sin(seed * 1.7f));
-        Sweep(o, axis, closed, 18, _ => r, (j, angle, _) => (Oak * shade, Material.Wood, new SN.Vector4(along[j], angle, r, seed)));
+        Sweep(o, axis, closed, sides, _ => r, (j, angle, _) => (Oak * shade, Material.Wood, new SN.Vector4(along[j], angle, r, seed)));
         if (!closed)
         {
             Cap(o, axis, r, Oak * 1.15f, atEnd: false);
@@ -1519,6 +1571,17 @@ internal static class KnotFloor
             Check(hairs.Count > 12 * 150 && hairs.All(v => v.Edge.Z == 0f && v.Pos.Y >= TableTop && float.IsFinite(v.Pos.X + v.Pos.Y + v.Pos.Z))
                 && hairOff <= RopeRadius * 3.2f && hairs.Count(v => SN.Vector3.Distance(v.Pos, tail) < 1.6f * RopeRadius) > 60,
                 $"a rope's loose fibres ({hairs.Count / 12} of them) stand within {hairOff / RopeRadius:F2} radii of it, a tuft at its end");
+            // Its levels of detail: level 0 the rope above with its fibres, each next lighter, still within the rope's radius.
+            var leveled = BuildLevels(one)[0];
+            var counts = leveled.Levels.Select(l => l.Length).ToArray();
+            var coarse = leveled.Levels[2].Where((v, i) => i % 13 == 0 && v.Material == Material.Rope && v.Edge.Z > 0f && Inside(v.Pos)).Max(v => Off(v.Pos));
+            var (b0, b1) = (leveled.Box.Min, leveled.Box.Max);
+            var at = new SN.Vector3((b0.X + b1.X) / 2, b1.Y, b1.Z);
+            Check(counts[0] == BuildKnots(one).Length && leveled.Hairs.Length == hairs.Count && counts[1] < counts[0] * 0.5f && counts[2] < counts[1]
+                && coarse <= RopeRadius * 1.05f
+                && DetailAt(at + new SN.Vector3(0f, 0f, 1f), leveled.Box) == 0 && DetailAt(at + new SN.Vector3(0f, 0f, 3f), leveled.Box) == 1
+                && DetailAt(at + new SN.Vector3(0f, 0f, 6f), leveled.Box) == 2,
+                $"a knot's levels of detail are {string.Join(", ", counts)} vertices, the coarsest within {coarse / RopeRadius:F2} radii of its path, chosen by the eye's distance");
             // Its two ends whipped: twine round 3 radii near each end, hardly beyond the rope's radius.
             var whipped = twine.Select(v => MathF.Min(SN.Vector3.Distance(v.Pos, head), SN.Vector3.Distance(v.Pos, tail))).ToArray();
             var twineOff = twine.Where((_, i) => i % 13 == 0).Max(v => Off(v.Pos));
