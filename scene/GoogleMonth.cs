@@ -20,7 +20,7 @@ internal static class GoogleMonth
 
     internal static int Used(Kind kind)
     {
-        Ledger.WaitOne();
+        Hold();
         try
         {
             var c = Read(DateTime.Now);
@@ -38,7 +38,34 @@ internal static class GoogleMonth
         StreetView,
     }
 
-    private static readonly Mutex Ledger = new(false, @"Local\delta-google-month");
+    // The selftest swaps in its own, as it does the Path: it must not abandon the live window's.
+    private static Mutex Ledger = new(false, @"Local\delta-google-month");
+
+    // Takes the ledger's mutex. One left by a scene that was killed comes as an AbandonedMutexException, yet this thread
+    // then holds it, and the finally that follows lets it go. Thrown outside the try, it was never released, and the next
+    // request froze the window (Brutal's review of 0.8.0).
+    private static void Hold()
+    {
+        try
+        {
+            Ledger.WaitOne();
+        }
+        catch (AbandonedMutexException)
+        {
+        }
+    }
+
+    // An inner handler for the selftest: counts the sends that reach it and answers 200.
+    private sealed class Counting : HttpMessageHandler
+    {
+        internal int Sent;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Sent);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+    }
 
     internal static string Path { get; set; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "delta", "google-month.json");
@@ -52,7 +79,7 @@ internal static class GoogleMonth
 
     internal static bool Take(Kind kind, int n, DateTime now)
     {
-        Ledger.WaitOne();
+        Hold();
         try
         {
             var c = Read(now);
@@ -72,7 +99,7 @@ internal static class GoogleMonth
 
     internal static int Left(Kind kind, DateTime now)
     {
-        Ledger.WaitOne();
+        Hold();
         try
         {
             var c = Read(now);
@@ -111,8 +138,10 @@ internal static class GoogleMonth
     internal static void SelfTest(Action<bool, string> check)
     {
         var real = Path;
+        var realLedger = Ledger;
         var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"delta-google-month-{Environment.ProcessId}");
         Path = System.IO.Path.Combine(dir, "google-month.json");
+        Ledger = new Mutex(false, $@"Local\delta-google-month-selftest-{Environment.ProcessId}");
         try
         {
             var november = new DateTime(2026, 11, 18);
@@ -121,12 +150,50 @@ internal static class GoogleMonth
             check(!Take(Kind.Tiles3D, 11, november) && Left(Kind.Tiles3D, november) == 10, "a request past the allowance is refused, and nothing is taken");
             check(Take(Kind.StreetView, 32, november) && Left(Kind.Tiles3D, november) == 10, "Street View counts apart");
             check(Left(Kind.Tiles3D, new DateTime(2026, 12, 1)) == Free3D, "a new month starts again from zero");
+            // A mutex abandoned by a thread that ended holding it: the ledger still answers, and lets it go after.
+            var holder = new Thread(() => Ledger.WaitOne());
+            holder.Start();
+            holder.Join();
+            check(Left(Kind.Tiles3D, november) == 10, "a mutex left by a scene that was killed is taken");
+            var other = new Thread(() => Left(Kind.Tiles3D, november));
+            other.Start();
+            check(other.Join(TimeSpan.FromSeconds(5)), "and let go: another thread reads the ledger after it");
+
+            // Each send of a 3D tile request is taken from this month's ledger, the retries too; other requests are not,
+            // and past the allowance the request is refused before it leaves.
+            File.Delete(Path);
+            var inner = new Counting();
+            using (var metered = new HttpMessageInvoker(new GoogleStreets.Metered(inner)))
+            {
+                bool Send(string url)
+                {
+                    try
+                    {
+                        metered.SendAsync(new HttpRequestMessage(HttpMethod.Get, url), CancellationToken.None).GetAwaiter().GetResult().Dispose();
+                        return true;
+                    }
+                    catch (HttpRequestException)
+                    {
+                        return false;
+                    }
+                }
+
+                const string tile = "https://tile.googleapis.com/v1/3dtiles/datasets/x/files/y.glb";
+                check(Send(tile) && Send(tile) && Send(tile) && Used(Kind.Tiles3D) == 3, "each try of a 3D tile is counted");
+                check(Send("https://tile.googleapis.com/v1/streetview/tiles/3/0/0") && Send("https://example.com/v1/3dtiles/root.json")
+                    && Used(Kind.Tiles3D) == 3 && Used(Kind.StreetView) == 0, "Street View tiles and other hosts are not metered here");
+                Take(Kind.Tiles3D, Free3D - 3);
+                check(!Send(tile) && inner.Sent == 5 && Used(Kind.Tiles3D) == Free3D, "past the allowance a 3D request is refused before it is sent");
+            }
+
             File.WriteAllText(Path, "{ broken");
             check(Left(Kind.Tiles3D, november) == 0 && !Take(Kind.StreetView, 1, november), "an unreadable ledger counts as spent");
         }
         finally
         {
             Path = real;
+            Ledger.Dispose();
+            Ledger = realLedger;
             try
             {
                 Directory.Delete(dir, recursive: true);

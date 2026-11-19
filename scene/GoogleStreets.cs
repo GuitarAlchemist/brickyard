@@ -54,7 +54,7 @@ internal static class GoogleStreets
         {
             if (http is null)
             {
-                var client = new HttpClient();
+                var client = new HttpClient(new Metered(new HttpClientHandler()));
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("delta-scene/1.0");
                 Interlocked.CompareExchange(ref http, client, null);
             }
@@ -133,9 +133,20 @@ internal static class GoogleStreets
         public Task<byte[]> GetAsync(Uri uri, CancellationToken cancel = default) =>
             RunRequests >= most
                 ? throw new InvalidOperationException($"more than {most} requests this run: stopped")
-                : !GoogleMonth.Take(GoogleMonth.Kind.Tiles3D)
-                ? throw new InvalidOperationException($"this month's {GoogleMonth.Free3D} 3D tile requests (1,000 free and {GoogleMonth.Dollars3D} USD) are spent: stopped")
-                : inner.GetAsync(uri, cancel);
+                : inner.GetAsync(uri, cancel); // the month's ledger takes each try as it is sent (Metered)
+    }
+
+    // Every request for a 3D tile, each retry among them (GoogleTileSource tries up to three times), is taken from the
+    // month's ledger as it is sent, and refused past it (Brutal's review of 0.8.0: the ledger took one per tile, not
+    // per try).
+    internal sealed class Metered(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        internal static bool Paid(Uri? uri) => uri is { Host: "tile.googleapis.com" } && uri.AbsolutePath.StartsWith("/v1/3dtiles/", StringComparison.Ordinal);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Paid(request.RequestUri) && !GoogleMonth.Take(GoogleMonth.Kind.Tiles3D)
+                ? throw new HttpRequestException($"this month's {GoogleMonth.Free3D} 3D tile requests (1,000 free and {GoogleMonth.Dollars3D} USD) are spent: stopped")
+                : base.SendAsync(request, cancellationToken);
     }
 
     // What was fetched already this run comes from memory, the root among them, so that the session and the tiles' URLs
