@@ -2845,6 +2845,20 @@ cassee »). Fixed:
 - its street lies 5 cm under the hall's floor; the attribution card sits over the version's label;
 - the panorama already drawn is not fetched again.
 
+Later the same evening: Street View shown within 25 m of its panorama (12 m before: the one before the door, 13.5 m out,
+was never seen); F5 reloads the scene in full (`Reload.cs`).
+
+## 3D tiles on G only, at most 10 USD a month (2026-11-18)
+
+Asked why each start cost about 4 USD (700 requests at 6 USD a thousand, fetched again at each start since the tiles
+may only live in memory), the user chose the 3D tiles on demand with « 3 - 10$ max ».
+- The 3D tiles are no longer fetched at the door's first opening: the first G asks for them (`--google-tiles` for a
+  hidden run); then G goes between Google and OpenStreetMap as before. Street View stays automatic and free.
+- GoogleMonth's allowance is 1,000 free + 10 USD at 6 USD a thousand: 2,666 requests a month. Each request counts.
+- The ledger for 2026-11 holds 4,600, the estimated use of the 17th and 18th (up to about 22 USD if all are billed), so
+  November has no 3D tiles left; December starts at zero.
+- While no 3D tiles are drawn, OpenStreetMap's buildings stop the walker again.
+
 ## Known problems
 
 - A guest whose network blocks all UDP has only relay candidates over TCP or TLS. The gateway leaves those out

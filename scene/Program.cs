@@ -1950,6 +1950,7 @@ internal static unsafe class Stage
         // not stop the walker. Without a key, OpenStreetMap stays.
         var googleChosen = GoogleStreets.Keyed && !args.Contains("--osm");
         var googleTried = false;
+        var tilesAsked = args.Contains("--google-tiles"); // the 3D tiles: only on G, or this option for a paid hidden run
         Task<GoogleStreets.Tiles?>? googleLoading = null;
         Mesh? aerial = null;
         IReadOnlyList<string> aerialProviders = [];
@@ -2954,13 +2955,26 @@ internal static unsafe class Stage
             }
             else if (key == GlfwKey.G)
             {
-                // The streets of Ottawa from Google's 3D tiles, or from OpenStreetMap again (GoogleStreets).
-                googleChosen = !googleChosen;
-                if (googleChosen && aerial is null && googleLoading is null) googleTried = false; // a failed fetch is tried once more
-                camera.Footprints = googleChosen ? [] : streetFootprints;
-                Console.WriteLine(googleChosen
-                    ? $"SCENE streets from Google's 3D tiles{(GoogleStreets.Keyed ? "" : ": no GOOGLE_MAPS_API_KEY, OpenStreetMap stays")}"
-                    : "SCENE streets from OpenStreetMap");
+                // Google's 3D tiles are paid past 1,000 a month, so they are fetched only on G (« 3 - 10$ max »,
+                // 2026-11-18), within GoogleMonth's allowance. The first G asks for them; after, G goes between Google
+                // (Street View, and the tiles when fetched) and OpenStreetMap alone.
+                if (googleChosen && !tilesAsked)
+                {
+                    tilesAsked = true;
+                    googleTried = false;
+                    var used = GoogleMonth.Used(GoogleMonth.Kind.Tiles3D);
+                    Console.WriteLine($"SCENE Google's 3D tiles asked for (G); this month {used} requests, about {GoogleMonth.Spent3D(used):F2} USD of {GoogleMonth.Dollars3D}");
+                }
+                else
+                {
+                    googleChosen = !googleChosen;
+                    if (googleChosen && aerial is null && googleLoading is null) googleTried = false; // a failed fetch is tried once more
+                    Console.WriteLine(googleChosen
+                        ? $"SCENE streets from Google{(GoogleStreets.Keyed ? "" : ": no GOOGLE_MAPS_API_KEY, OpenStreetMap stays")}"
+                        : "SCENE streets from OpenStreetMap");
+                }
+
+                camera.Footprints = googleChosen && aerial is not null ? [] : streetFootprints;
             }
             else if (key == GlfwKey.H)
             {
@@ -4090,7 +4104,7 @@ internal static unsafe class Stage
                     streets = new Mesh(device, physical, city.Vertices);
                     streetsPlacement = city.Placement;
                     streetFootprints = [.. city.Footprints.Select(FreeCamera.Footprint.Of)];
-                    camera.Footprints = googleChosen ? [] : streetFootprints;
+                    camera.Footprints = googleChosen && aerial is not null ? [] : streetFootprints;
                     Console.WriteLine($"DOOR streets of Ottawa: {city.Buildings} buildings, {city.Streets} streets, {city.Left} left out where the hall stands; {OttawaStreets.Attribution}");
                 }
                 else
@@ -4102,7 +4116,7 @@ internal static unsafe class Stage
 
             // Google's tiles, chosen once the door's place is known: fetched once a run (G again tries once more after a
             // failure), then drawn in place of OpenStreetMap's buildings.
-            if (googleChosen && aerial is null && googleLoading is null && !googleTried && streetsPlacement is { } placed)
+            if (googleChosen && tilesAsked && aerial is null && googleLoading is null && !googleTried && streetsPlacement is { } placed)
             {
                 googleTried = true;
                 Console.WriteLine($"GOOGLE fetching the 3D tiles around the door, at most {GoogleStreets.MostRequests} requests");
@@ -4131,6 +4145,7 @@ internal static unsafe class Stage
                     if (drawnBefore is not null) device.WaitIdle();
                     aerial = new Mesh(device, physical, tiles.Vertices, resident: true);
                     drawnBefore?.Dispose();
+                    if (googleChosen) camera.Footprints = []; // the tiles' buildings do not stop the walker
                     if (tiles.Layers.Length > 0)
                     {
                         aerialLayers = tiles.Layers;

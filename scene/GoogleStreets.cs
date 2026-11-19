@@ -92,7 +92,7 @@ internal static class GoogleStreets
         var left = GoogleMonth.Left(GoogleMonth.Kind.Tiles3D);
         if (left < (riding ? RideRequests : MostRequests))
         {
-            log($"not fetched: {left} of this month's free {GoogleMonth.Free3D} 3D tile requests left, {(riding ? RideRequests : MostRequests)} needed");
+            log($"not fetched: {left} of this month's {GoogleMonth.Free3D} 3D tile requests left (1,000 free and {GoogleMonth.Dollars3D} USD), {(riding ? RideRequests : MostRequests)} needed");
             return null;
         }
 
@@ -134,7 +134,7 @@ internal static class GoogleStreets
             RunRequests >= most
                 ? throw new InvalidOperationException($"more than {most} requests this run: stopped")
                 : !GoogleMonth.Take(GoogleMonth.Kind.Tiles3D)
-                ? throw new InvalidOperationException($"this month's free {GoogleMonth.Free3D} 3D tile requests are spent: stopped")
+                ? throw new InvalidOperationException($"this month's {GoogleMonth.Free3D} 3D tile requests (1,000 free and {GoogleMonth.Dollars3D} USD) are spent: stopped")
                 : inner.GetAsync(uri, cancel);
     }
 

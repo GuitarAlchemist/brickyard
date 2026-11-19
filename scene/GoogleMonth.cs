@@ -2,15 +2,35 @@ using System.Text.Json;
 
 // What Google's tiles have cost this calendar month, on this computer, across every run (the live window and hidden
 // runs alike): the user, 2026-11-18, « Je veux pas que ça coûte 100$ !! ». Each request is counted before it is sent,
-// and refused once the month's free share is spent, so the bill stays at zero:
-// - Photorealistic 3D Tiles: 1,000 free a month, then 6 USD a thousand. Every request counts here, the nested
-//   tilesets' too, though Google may bill only those that return a tile.
+// and refused once the month's allowance is spent:
+// - Photorealistic 3D Tiles: 1,000 free a month, then 6 USD a thousand; at most Dollars3D a month past them. Every
+//   request counts here, the nested tilesets' too, though Google may bill only those that return a tile.
 // - Street View tiles: 100,000 free a month, then 2 USD a thousand; stopped at 95,000 for a margin.
 // Only the counts are written (%LOCALAPPDATA%\delta\google-month.json), never a tile, a URL or the key. Google's own
 // quota in the Cloud console is the only hard guarantee: this ledger cannot see another program using the same key.
+// Since « 3 - 10$ max » (2026-11-18) the 3D tiles may cost up to Dollars3D a month past their free 1,000: Free3D is then
+// the month's whole allowance, 1,000 + 10 / 6 × 1,000 = 2,666 requests.
 internal static class GoogleMonth
 {
-    internal const int Free3D = 1000, FreeStreetView = 95_000;
+    internal const int Dollars3D = 10, Price3D = 6; // USD a month at most, and USD a thousand past the free 1,000
+    internal const int Free3D = 1000 + (Dollars3D * 1000 / Price3D), FreeStreetView = 95_000;
+
+    // What the month's 3D requests may have cost, in USD, counting every request as billed.
+    internal static double Spent3D(int used) => Math.Max(0, used - 1000) * Price3D / 1000.0;
+
+    internal static int Used(Kind kind)
+    {
+        Ledger.WaitOne();
+        try
+        {
+            var c = Read(DateTime.Now);
+            return kind == Kind.Tiles3D ? c.Tiles3D : c.StreetView;
+        }
+        finally
+        {
+            Ledger.ReleaseMutex();
+        }
+    }
 
     internal enum Kind
     {
@@ -96,8 +116,9 @@ internal static class GoogleMonth
         try
         {
             var november = new DateTime(2026, 11, 18);
-            check(Left(Kind.Tiles3D, november) == Free3D && Take(Kind.Tiles3D, 990, november), "a fresh month has the whole free share");
-            check(!Take(Kind.Tiles3D, 11, november) && Left(Kind.Tiles3D, november) == 10, "a request past the free 1,000 is refused, and nothing is taken");
+            check(Free3D == 2666 && Math.Abs(Spent3D(Free3D) - 9.996) < 1e-9, "the 3D allowance is the free 1,000 and 10 USD at 6 USD a thousand");
+            check(Left(Kind.Tiles3D, november) == Free3D && Take(Kind.Tiles3D, Free3D - 10, november), "a fresh month has the whole allowance");
+            check(!Take(Kind.Tiles3D, 11, november) && Left(Kind.Tiles3D, november) == 10, "a request past the allowance is refused, and nothing is taken");
             check(Take(Kind.StreetView, 32, november) && Left(Kind.Tiles3D, november) == 10, "Street View counts apart");
             check(Left(Kind.Tiles3D, new DateTime(2026, 12, 1)) == Free3D, "a new month starts again from zero");
             File.WriteAllText(Path, "{ broken");
